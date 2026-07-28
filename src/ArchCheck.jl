@@ -11,8 +11,6 @@ include("checks_reflect.jl")
 include("callgraph.jl")
 include("checks_file.jl")
 include("checks_interface.jl")
-include("checks_gate.jl")
-include("checks_drop.jl")
 include("registry.jl")
 include("gate.jl")
 
@@ -30,7 +28,6 @@ export CallGraph, build_call_graph
 export check_file_sinkable, check_file_backedges, check_extract_candidates
 export check_tuple_returns
 export scan_defs, scan_tree, parse_file, check_dead_code_static
-export check_multi_owner_gate, check_uncounted_drop
 export check_blanket_exports, check_stale_exports, check_reaches_internal
 
 end # module ArchCheck

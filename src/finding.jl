@@ -12,13 +12,11 @@ Finding(mod, kind, file, symbol, line::Int, detail) =
     Finding(mod, kind, file, symbol, line, detail, Pair{Symbol,String}[])
 Finding(mod, kind, file, symbol, detail) = Finding(mod, kind, file, symbol, 0, detail)
 
-const ENFORCE_KINDS = (:unparsed, :unranked_file, :back_edge, :cycle, :duplicate_owner, :contracts_logic,
-                       :multi_owner_gate)
+const ENFORCE_KINDS = (:unparsed, :unranked_file, :back_edge, :cycle, :duplicate_owner, :contracts_logic)
 
 # Kinds that name a violated architectural invariant rather than a placement or style preference: an
 # include order that is not a topological sort, a name nothing reaches.
-const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal,
-                         :uncounted_drop)
+const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal)
 
 # Tiers, worst first. Enforce halts the run; structure is a broken invariant; advice is a suggestion.
 const TIERS = (:enforce, :structure, :advice)
