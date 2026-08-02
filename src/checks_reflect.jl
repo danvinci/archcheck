@@ -85,6 +85,31 @@ function check_boxed_captures(mods; repo)
     findings
 end
 
+# The type dispatch actually lands on when a field is read: a container's element type, else the field's own.
+open_type(@nospecialize(T)) = T <: AbstractArray ? eltype(T) : T
+
+# abstract-field: a field whose type leaves dispatch open - abstract itself, or a container of an abstract
+# element. Every read of one dispatches at run time. A Union stays: lowering splits a small one into branches.
+function check_abstract_fields(mods, sites)
+    findings = Finding[]
+    for M in mods, n in names(M; all = true)
+        (n === nameof(M) || startswith(string(n), "#")) && continue
+        isdefined(M, n) || continue
+        T = getproperty(M, n)
+        T isa DataType || continue                      # a parametric struct is a UnionAll; its fields close on use
+        (isstructtype(T) && parentmodule(T) === M && isempty(T.parameters)) || continue
+        for (field, declared) in zip(fieldnames(T), fieldtypes(T))
+            reached = open_type(declared)
+            (reached isa Union || isconcretetype(reached)) && continue
+            file, line = site_of(sites, nameof(M), n, ("", 0))
+            push!(findings, Finding(nameof(M), :abstract_field, file, "$n.$field", line,
+                  "the field's type leaves dispatch open",
+                  [:declared => string(declared)]))
+        end
+    end
+    findings
+end
+
 # duplicate-owner: a name exported by >=2 modules bound to DIFFERENT objects (same object = shared generic, ok).
 function check_dup_owners(mods, rank)
     byname = Dict{Symbol,Vector{Module}}()

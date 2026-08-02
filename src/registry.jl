@@ -34,6 +34,7 @@ struct BlanketExports <: Check end
 struct StaleExports <: Check end
 struct ReachesInternal <: Check end
 struct BoxedCaptures <: Check end
+struct AbstractFields <: Check end
 
 run(::Corpus, ctx) = check_corpus(ctx.index)
 run(::ModuleBackEdges, ctx) = check_backedges(ctx.graph)
@@ -46,6 +47,7 @@ run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)
 run(::StaleExports, ctx) = check_stale_exports(ctx.mods)
 run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods; entry_dirs = ctx.entry_dirs)
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.mods; repo = ctx.index.repo)
+run(::AbstractFields, ctx) = check_abstract_fields(ctx.mods, ctx.sites)
 
 run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
 run(::FileSinkable, ctx) = collect_modules(cg -> check_file_sinkable(cg, ctx.sites), ctx)
@@ -80,6 +82,7 @@ const CHECKS = (
     StaleExports(),
     ReachesInternal(),
     BoxedCaptures(),
+    AbstractFields(),
 )
 
 function run_checks(ctx, checks = CHECKS)
