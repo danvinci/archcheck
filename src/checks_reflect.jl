@@ -33,6 +33,58 @@ function sig_modules!(out, @nospecialize(sig), proj)
     out
 end
 
+# A Core.Box reference anywhere under a lowered statement.
+function has_box(@nospecialize(stmt))
+    stmt isa GlobalRef && return stmt.mod === Core && stmt.name === :Box
+    stmt isa Expr && return any(has_box, stmt.args)
+    false
+end
+
+# Core.Box allocations in a method's lowered IR - lowering emits one per boxed capture.
+function count_boxes(m::Method)
+    lowered = try
+        Base.uncompressed_ast(m)
+    catch
+        return 0
+    end
+    lowered isa Core.CodeInfo || return 0
+    count(has_box, lowered.code)
+end
+
+# A keyword-argument body is its own generic named #f#N; the written name is the first segment.
+function written_name(n::Symbol)
+    text = string(n)
+    startswith(text, "#") || return text
+    parts = split(text, "#"; keepempty = false)
+    isempty(parts) ? text : String(first(parts))
+end
+
+# boxed-capture: a local a closure captures and something assigns in more than one place. Lowering boxes
+# it, which erases its type and the type of every value read from it.
+function check_boxed_captures(mods; repo)
+    findings = Finding[]
+    seen = Set{Tuple{String,Int}}()
+    for M in mods, n in names(M; all = true)
+        (n === nameof(M) || n in (:eval, :include)) && continue
+        isdefined(M, n) || continue
+        value = getproperty(M, n)
+        value isa Function || continue
+        for m in methods(value)
+            m.module === M || continue
+            boxes = count_boxes(m)
+            boxes == 0 && continue
+            file = relpath(string(m.file), repo)
+            key = (file, Int(m.line))
+            key in seen && continue
+            push!(seen, key)
+            push!(findings, Finding(nameof(M), :boxed_capture, file, written_name(n), Int(m.line),
+                  "a captured local is assigned in more than one place, so lowering boxes it",
+                  [:boxes => string(boxes)]))
+        end
+    end
+    findings
+end
+
 # duplicate-owner: a name exported by >=2 modules bound to DIFFERENT objects (same object = shared generic, ok).
 function check_dup_owners(mods, rank)
     byname = Dict{Symbol,Vector{Module}}()
