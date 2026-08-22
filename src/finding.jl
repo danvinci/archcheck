@@ -12,11 +12,15 @@ Finding(mod, kind, file, symbol, line::Int, detail) =
     Finding(mod, kind, file, symbol, line, detail, Pair{Symbol,String}[])
 Finding(mod, kind, file, symbol, detail) = Finding(mod, kind, file, symbol, 0, detail)
 
-const ENFORCE_KINDS = (:unparsed, :unranked_file, :back_edge, :cycle, :duplicate_owner, :contracts_logic)
+# rig_divergence/time_truncation are project-specific (wired via the `checks` keyword), enforce-tier
+# because a consumer only wires a project check in to make it blocking.
+const ENFORCE_KINDS = (:unparsed, :missing_include, :unranked_file, :back_edge, :cycle, :duplicate_owner,
+                       :contracts_logic, :rig_divergence, :time_truncation)
 
 # Kinds that name a violated architectural invariant rather than a placement or style preference: an
 # include order that is not a topological sort, a name nothing reaches.
-const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal)
+const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal,
+                         :uncounted_drop)   # project-specific, wired the same way
 
 # Tiers, worst first. Enforce halts the run; structure is a broken invariant; advice is a suggestion.
 const TIERS = (:enforce, :structure, :advice)

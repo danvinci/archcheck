@@ -25,6 +25,10 @@ function check_corpus(index)
     for (owner, path) in index.unparsed
         push!(findings, Finding(owner, :unparsed, path, "", 0, "could not be parsed"))
     end
+    for (owner, from, spec, line) in index.missing
+        push!(findings, Finding(owner, :missing_include, from, spec, line,
+                                "include names a file that is not on disk"))
+    end
     for f in index.files
         f.filerank == 0 || continue
         is_wrapper(f) && continue

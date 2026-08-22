@@ -49,10 +49,16 @@ ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
     # tiers rank a broken invariant above a placement suggestion, so the report leads with what matters
     @test tier(:back_edge) === :enforce
+    @test tier(:missing_include) === :enforce
     @test tier(:file_backedge) === :structure
     @test tier(:dead_code) === :structure
     @test tier(:sinkable) === :advice
     @test tier_rank(fs[1]) < tier_rank(fs[2])
+
+    # project-specific kinds a consumer wires in via `checks`: severity a project check is restored with
+    @test tier(:rig_divergence) === :enforce
+    @test tier(:time_truncation) === :enforce
+    @test tier(:uncounted_drop) === :structure
 
     # JSONL round-trips: each line parses, fields + blocking survive
     io = IOBuffer(); emit_jsonl(io, fs)
@@ -351,6 +357,26 @@ end
         @test isblocking(corpus[1])                 # a hole makes every other result untrustworthy
     end
 
+    # an include of a path that is not a file: the opposite hole from forgotten.jl
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"missing.jl\")")
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        corpus = check_corpus(index)
+        hole = only(f for f in corpus if f.kind === :missing_include)
+        @test hole.symbol == "missing.jl" && hole.line == 1 && isblocking(hole)
+        @test endswith(hole.file, "M.jl")
+    end
+
+    # the package spine is not a module-owned file, and its includes still have to resolve
+    mktempdir() do dir
+        write(joinpath(dir, "Pkg.jl"), "include(\"missing.jl\")\n")
+        index = build_source_index(dir, Dict{Symbol,Int}(), Dict{String,Symbol}())
+        hole = only(check_corpus(index))
+        @test hole.kind === :missing_include && hole.mod === :Pkg
+        @test hole.symbol == "missing.jl" && isblocking(hole)
+    end
+
     # a file reached through a nested include takes its position from the depth-first load order - the
     # order Julia itself runs them - rather than being held apart as an unranked class
     mktempdir() do dir
@@ -440,6 +466,31 @@ end
         @test length(corpus) == 1 && corpus[1].kind === :unparsed && corpus[1].mod === :Entry
         @test "shipped" in Set(f.symbol for f in check_dead_code_static(index))   # the false finding
         @test !isempty(filter(isblocking, corpus))   # which the corpus check makes loud
+    end
+end
+
+@testset "git-tracked corpus (untracked files excluded, not just unranked)" begin
+    # an untracked file never enters the index at all - absent, not reported as a hole
+    mktempdir() do dir
+        run(Cmd(`git init -q`; dir = dir))
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"known.jl\")")
+        write(joinpath(dir, "m", "known.jl"), "a() = 1")
+        write(joinpath(dir, "m", "scratch.jl"), "b() = 2")   # never `git add`ed
+        run(Cmd(`git add m/M.jl m/known.jl`; dir = dir))
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        @test Set(f.name for f in index.files) == Set(["M.jl", "known.jl"])
+        @test isempty(check_corpus(index))
+    end
+
+    # outside any git work tree, a synthetic corpus is not filtered at all
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"known.jl\")")
+        write(joinpath(dir, "m", "known.jl"), "a() = 1")
+        @test ArchCheck.tracked_files(dir) === nothing
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        @test length(index.files) == 2
     end
 end
 

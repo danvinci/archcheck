@@ -16,14 +16,16 @@ end
 
 # An entry file's include order - the rank source at both zooms: the package spine ranks modules,
 # <Domain>.jl ranks files.
-function include_paths(entry_path::AbstractString)
-    paths = String[]
-    for line in eachline(entry_path)
-        m = match(r"^\s*include\(\"([^\"]+)\"\)", line)
-        isnothing(m) || push!(paths, m.captures[1])
+function include_stmts(entry_path::AbstractString)
+    stmts = Tuple{String,Int}[]
+    for (line, text) in enumerate(eachline(entry_path))
+        m = match(r"^\s*include\(\"([^\"]+)\"\)", text)
+        isnothing(m) || push!(stmts, (m.captures[1], line))
     end
-    paths
+    stmts
 end
+
+include_paths(entry_path::AbstractString) = [spec for (spec, _) in include_stmts(entry_path)]
 
 # The package spine's include order is the declared module DAG; it gives both rank and dir->module.
 # The module name comes from the paired `using .Name`, not the filename, which need not match it.
@@ -159,14 +161,29 @@ struct SourceIndex
     refs::Vector{ModRef}                    # cross-module references, from the same parse
     external::Set{Symbol}                   # names referenced from the entry dirs (test/, scripts/)
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
+    missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
 end
 
 # The wrapper is the only file its own module never includes, so it is legitimately unranked.
 is_wrapper(f::FileNode) = f.iswrapper
 
+# Git-tracked members of `dir`, as absolute normalized paths - the shipped corpus. `nothing` when
+# `dir` sits outside any git work tree, so a synthetic test corpus skips filtering instead of losing every file.
+function tracked_files(dir::AbstractString)
+    cmd = Cmd(`git ls-files`; dir = dir)
+    buf = IOBuffer()
+    piped = pipeline(cmd; stdout = buf, stderr = devnull)
+    ok = success(piped)
+    ok || return nothing
+    text = String(take!(buf))
+    lines = split(text, '\n')
+    Set(normpath(joinpath(dir, line)) for line in lines if !isempty(line))
+end
+
 function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs = String[])
     src_root = abspath(src_root)
     repo = dirname(src_root)
+    tracked = tracked_files(src_root)
     known = Set(keys(rank))
     franks = Dict{Symbol,Dict{String,Int}}()
     wrappers = Dict{Symbol,String}()   # module -> its entry file, the one file the module never includes
@@ -183,12 +200,25 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
     nodes = FileNode[]
     refs = ModRef[]
     unparsed = Tuple{Symbol,String}[]
+    missing = Tuple{Symbol,String,String,Int}[]
+    function collect_missing!(owner, path, rel)
+        for (spec, line) in include_stmts(path)
+            target = normpath(joinpath(dirname(path), spec))
+            isfile(target) && continue
+            push!(missing, (owner, rel, spec, line))
+        end
+    end
     for (root, _, files) in walkdir(src_root), fn in files
         endswith(fn, ".jl") || continue
         path = joinpath(root, fn)
+        isnothing(tracked) || normpath(path) in tracked || continue   # untracked = not the shipped corpus
         mod = module_of(path, src_root, dir2mod)
-        isnothing(mod) && continue
         rel = relpath(path, repo)
+        if isnothing(mod)
+            collect_missing!(Symbol(first(splitext(fn))), path, rel)
+            continue
+        end
+        collect_missing!(mod, path, rel)
         tree = parse_file(read(path, String), rel)
         if tree === nothing
             push!(unparsed, (mod, rel))
@@ -218,7 +248,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
             end
         end
     end
-    SourceIndex(repo, rank, dir2mod, nodes, refs, external, unparsed)
+    SourceIndex(repo, rank, dir2mod, nodes, refs, external, unparsed, missing)
 end
 
 build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, index.refs)

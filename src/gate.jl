@@ -5,7 +5,8 @@ function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
               report_path = joinpath(pkgdir(pkg), "test", "out", "architecture.jsonl"),
-              io::IO = stdout)
+              io::IO = stdout,
+              checks = CHECKS)
     pkg_name = string(nameof(pkg))
     spine = joinpath(src, pkg_name * ".jl")
     rank, dir2mod = parse_spine_order(spine)
@@ -14,7 +15,7 @@ function gate(pkg::Module;
     mods = [getfield(pkg, m) for m in ordered]
 
     ctx = Context(index, mods; entry_dirs)
-    findings = run_checks(ctx)
+    findings = run_checks(ctx, checks)
 
     mkpath(dirname(report_path))
     previous = previous_fingerprints(report_path)
