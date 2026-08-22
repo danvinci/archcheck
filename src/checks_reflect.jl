@@ -85,22 +85,67 @@ function check_boxed_captures(mods; repo)
     findings
 end
 
-# The type dispatch actually lands on when a field is read: a container's element type, else the field's own.
-open_type(@nospecialize(T)) = T <: AbstractArray ? eltype(T) : T
+# TypeVars bound by a UnionAll struct (Foo{T} -> T). A field type's own parameters (Vector's eltype) are separate.
+function struct_typevars(@nospecialize(T))
+    vars = TypeVar[]
+    while T isa UnionAll
+        push!(vars, T.var)
+        T = T.body
+    end
+    vars
+end
 
-# abstract-field: a field whose type leaves dispatch open - abstract itself, or a container of an abstract
-# element. Every read of one dispatches at run time. A Union stays: lowering splits a small one into branches.
+function uses_struct_params(@nospecialize(F), vars)
+    F isa TypeVar && return F in vars
+    F isa Union && return uses_struct_params(F.a, vars) || uses_struct_params(F.b, vars)
+    F isa UnionAll && return uses_struct_params(F.body, vars)
+    F isa DataType && return any(p -> uses_struct_params(p, vars), F.parameters)
+    false
+end
+
+# Type{Float64} holds that one type object; Type{<:T} holds any subtype, so dispatch stays open.
+function is_closed_type_object(@nospecialize(T))
+    U = Base.unwrap_unionall(T)
+    U isa DataType || return false
+    U <: Type || return false
+    length(U.parameters) == 1 || return false
+    p = U.parameters[1]
+    p isa Type && isconcretetype(p)
+end
+
+# Open when the stored type, the container wrapper, or a Dict/Set payload is not concrete.
+# A Union stays: lowering splits a small one into branches. Dict eltype is Pair, so Dict{Int,Any} would look closed.
+function is_open_field(@nospecialize(declared))
+    declared isa TypeVar && return true
+    declared isa Union && return false
+    is_closed_type_object(declared) && return false
+    if declared <: AbstractDict || declared <: AbstractArray || declared <: AbstractSet
+        U = Base.unwrap_unionall(declared)
+        isconcretetype(U) || return true
+        if U <: AbstractDict && length(U.parameters) >= 2
+            return is_open_field(U.parameters[1]) || is_open_field(U.parameters[2])
+        end
+        return is_open_field(eltype(declared))
+    end
+    !isconcretetype(Base.unwrap_unionall(declared))
+end
+
+# abstract-field: a field whose type leaves dispatch open. A field naming a type parameter closes on use.
+# Vector / Real / an unparametrized UnionAll spec is open on every instantiation.
 function check_abstract_fields(mods, sites)
     findings = Finding[]
     for M in mods, n in names(M; all = true)
         (n === nameof(M) || startswith(string(n), "#")) && continue
         isdefined(M, n) || continue
         T = getproperty(M, n)
-        T isa DataType || continue                      # a parametric struct is a UnionAll; its fields close on use
-        (isstructtype(T) && parentmodule(T) === M && isempty(T.parameters)) || continue
-        for (field, declared) in zip(fieldnames(T), fieldtypes(T))
-            reached = open_type(declared)
-            (reached isa Union || isconcretetype(reached)) && continue
+        T isa Type || continue
+        vars = struct_typevars(T)
+        S = Base.unwrap_unionall(T)
+        S isa DataType || continue
+        (isstructtype(S) && parentmodule(S) === M) || continue
+        for (field, declared) in zip(fieldnames(S), fieldtypes(S))
+            uses_struct_params(declared, vars) && continue
+            is_open_field(declared) || continue
             file, line = site_of(sites, nameof(M), n, ("", 0))
             push!(findings, Finding(nameof(M), :abstract_field, file, "$n.$field", line,
                   "the field's type leaves dispatch open",

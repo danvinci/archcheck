@@ -29,5 +29,6 @@ export check_file_sinkable, check_file_backedges, check_extract_candidates
 export check_tuple_returns
 export scan_defs, scan_tree, parse_file, check_dead_code_static
 export check_blanket_exports, check_stale_exports, check_reaches_internal
+export check_abstract_fields, check_boxed_captures, is_open_field
 
 end # module ArchCheck

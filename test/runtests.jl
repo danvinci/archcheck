@@ -33,6 +33,33 @@ module FIface
     present() = 1
     hidden() = 2
 end
+# abstract-field corpus: closed storage vs every open-dispatch shape the check names
+module FAbs
+    abstract type Abs end
+    struct Closed
+        xs::Vector{Float64}
+        t::Type{Float64}
+        u::Union{Float64,Nothing}
+    end
+    struct Open
+        xs::Vector
+        any::Vector{Any}
+        absv::AbstractVector
+        absf::AbstractVector{Float64}
+        d::Dict
+        da::Dict{Int,Any}
+        s::Set
+        map::Type{<:Integer}
+        r::Real
+        spec::Abs
+    end
+    struct Param{T}
+        x::T
+        ys::Vector
+        zs::Vector{T}
+        r::Real
+    end
+end
 
 # evidence is a fixed key/value vocabulary per kind, so tests read it by key, never by prose
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
@@ -165,6 +192,29 @@ end
     dup = check_dup_owners([FDupA, FDupB], Dict(:FDupA => 1, :FDupB => 2))
     @test length(dup) == 1 && dup[1].kind === :duplicate_owner && dup[1].symbol == "dup"
     @test isempty(check_dup_owners([FDupA], Dict(:FDupA => 1)))
+end
+
+@testset "abstract-field" begin
+    found = check_abstract_fields([FAbs], NO_SITES)
+    @test all(f -> f.kind === :abstract_field, found)
+    @test all(f -> !isblocking(f), found)
+    syms = Set(f.symbol for f in found)
+
+    @test "Open.xs" in syms && ev(only(f for f in found if f.symbol == "Open.xs"), :declared) == "Vector"
+    @test "Open.any" in syms
+    @test "Open.absv" in syms
+    @test "Open.absf" in syms
+    @test "Open.d" in syms && "Open.s" in syms
+    @test "Open.da" in syms
+    @test "Open.map" in syms
+    @test "Open.r" in syms && "Open.spec" in syms
+
+    @test !("Closed.xs" in syms)
+    @test !("Closed.t" in syms)          # Type{Float64} holds that one type object
+    @test !("Closed.u" in syms)          # small Union, lowering splits it
+
+    @test !("Param.x" in syms) && !("Param.zs" in syms)   # names the parameter, closes on use
+    @test "Param.ys" in syms && "Param.r" in syms         # independent of T, open on every instantiation
 end
 
 @testset "intra-module call graph (static)" begin
