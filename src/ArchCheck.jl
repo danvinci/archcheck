@@ -12,6 +12,7 @@ include("callgraph.jl")
 include("checks_file.jl")
 include("checks_interface.jl")
 include("registry.jl")
+include("checks_opt.jl")
 include("gate.jl")
 
 export Finding, isblocking, emit_jsonl, summarize, report
@@ -30,5 +31,6 @@ export check_tuple_returns
 export scan_defs, scan_tree, parse_file, check_dead_code_static
 export check_blanket_exports, check_stale_exports, check_reaches_internal
 export check_abstract_fields, check_boxed_captures, is_open_field
+export OptEntry, OptAnalysis, check_opt_entries, jet_loaded
 
 end # module ArchCheck

@@ -60,6 +60,11 @@ module FAbs
         r::Real
     end
 end
+module FOpt
+    stable_trapz(xs::Vector{Float64}, ys::Vector{Float64}) =
+        sum((xs[k+1] - xs[k]) * (ys[k+1] + ys[k]) / 2 for k in 1:length(xs)-1)
+    any_kernel(xs::Vector{Any}) = xs[1] + 1
+end
 
 # evidence is a fixed key/value vocabulary per kind, so tests read it by key, never by prose
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
@@ -215,6 +220,27 @@ end
 
     @test !("Param.x" in syms) && !("Param.zs" in syms)   # names the parameter, closes on use
     @test "Param.ys" in syms && "Param.r" in syms         # independent of T, open on every instantiation
+end
+
+@testset "opt analysis (JET port)" begin
+    @test isempty(check_opt_entries(OptEntry[]; repo = ".", target_modules = Module[]))
+
+    if isnothing(Base.find_package("JET"))
+        @test_skip "JET not on LOAD_PATH"
+    else
+        @eval using JET
+        repo = @__DIR__
+        dirty = check_opt_entries([OptEntry(FOpt.any_kernel, Tuple{Vector{Any}})];
+                                  repo, target_modules = [FOpt])
+        @test length(dirty) == 1 && only(dirty).kind === :runtime_dispatch
+        @test occursin("any_kernel", only(dirty).symbol)
+        @test parse(Int, ev(only(dirty), :dispatches)) >= 1
+        @test !isblocking(only(dirty))
+
+        clean = check_opt_entries([OptEntry(FOpt.stable_trapz, Tuple{Vector{Float64},Vector{Float64}})];
+                                  repo, target_modules = [FOpt])
+        @test isempty(clean)
+    end
 end
 
 @testset "intra-module call graph (static)" begin
