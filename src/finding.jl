@@ -1,4 +1,22 @@
+# Tiers, worst first. Enforce halts the run; structure is a broken invariant; advice is a suggestion.
+const TIERS = (:enforce, :structure, :advice)
+
+const ENFORCE_KINDS = (:unparsed, :missing_include, :nonliteral_include, :unranked_file, :back_edge, :cycle,
+                       :duplicate_owner, :contracts_logic)
+
+# Kinds that name a violated architectural invariant rather than a placement or style preference: an
+# include order that is not a topological sort, a name nothing reaches.
+const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal)
+
+function kind_tier(kind::Symbol)
+    kind in ENFORCE_KINDS && return :enforce
+    kind in STRUCTURE_KINDS && return :structure
+    :advice
+end
+
 # One structural problem, owned by the module whose code carries it.
+# Severity is set by the emitting check. Engine kinds default from the tuples above; a consumer
+# kind has no seat there and must pass it or it is advice.
 struct Finding
     mod::Symbol      # module the offending code lives in
     kind::Symbol     # the check that produced it
@@ -7,30 +25,23 @@ struct Finding
     line::Int        # source line; 0 when file/module-level
     detail::String   # what was observed
     evidence::Vector{Pair{Symbol,String}}   # measurements the reader weighs; data, never a verdict
+    tier::Symbol     # :enforce | :structure | :advice
+    function Finding(mod, kind, file, symbol, line::Integer, detail,
+                     evidence::Vector{Pair{Symbol,String}}, tier::Symbol)
+        tier in TIERS || throw(ArgumentError("finding tier must be one of $TIERS, got $tier"))
+        new(mod, kind, file, symbol, Int(line), detail, evidence, tier)
+    end
 end
-Finding(mod, kind, file, symbol, line::Int, detail) =
-    Finding(mod, kind, file, symbol, line, detail, Pair{Symbol,String}[])
-Finding(mod, kind, file, symbol, detail) = Finding(mod, kind, file, symbol, 0, detail)
+Finding(mod, kind, file, symbol, line::Integer, detail, evidence::Vector{Pair{Symbol,String}};
+        tier::Symbol = kind_tier(kind)) =
+    Finding(mod, kind, file, symbol, line, detail, evidence, tier)
+Finding(mod, kind, file, symbol, line::Integer, detail; tier::Symbol = kind_tier(kind)) =
+    Finding(mod, kind, file, symbol, line, detail, Pair{Symbol,String}[]; tier)
+Finding(mod, kind, file, symbol, detail; tier::Symbol = kind_tier(kind)) =
+    Finding(mod, kind, file, symbol, 0, detail; tier)
 
-# rig_divergence/time_truncation are project-specific (wired via the `checks` keyword), enforce-tier
-# because a consumer only wires a project check in to make it blocking.
-const ENFORCE_KINDS = (:unparsed, :missing_include, :unranked_file, :back_edge, :cycle, :duplicate_owner,
-                       :contracts_logic, :rig_divergence, :time_truncation)
-
-# Kinds that name a violated architectural invariant rather than a placement or style preference: an
-# include order that is not a topological sort, a name nothing reaches.
-const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal,
-                         :uncounted_drop)   # project-specific, wired the same way
-
-# Tiers, worst first. Enforce halts the run; structure is a broken invariant; advice is a suggestion.
-const TIERS = (:enforce, :structure, :advice)
-
-function tier(kind::Symbol)
-    kind in ENFORCE_KINDS && return :enforce
-    kind in STRUCTURE_KINDS && return :structure
-    :advice
-end
-tier(f::Finding) = tier(f.kind)
+tier(kind::Symbol) = kind_tier(kind)
+tier(f::Finding) = f.tier
 tier_rank(f::Finding) = findfirst(==(tier(f)), TIERS)
 
 isblocking(f::Finding) = tier(f) === :enforce
@@ -57,7 +68,7 @@ fingerprint(f::Finding) = FindingKey(string(f.mod), string(f.kind), f.file, f.sy
 function emit_jsonl(io::IO, findings)
     for f in findings
         JSON.print(io, Dict("module" => string(f.mod), "kind" => string(f.kind),
-                            "blocking" => isblocking(f),
+                            "blocking" => isblocking(f), "tier" => string(f.tier),
                             "file" => f.file, "line" => f.line, "symbol" => f.symbol,
                             "detail" => f.detail,
                             "evidence" => Dict(string(k) => v for (k, v) in f.evidence)))
@@ -95,7 +106,7 @@ end
 location(f::Finding) = isempty(f.symbol) ? f.file :
                        f.line > 0 ? "$(f.file):$(f.line):$(f.symbol)" : "$(f.file):$(f.symbol)"
 
-function summarize(io::IO, findings)
+function print_findings(io::IO, findings)
     isempty(findings) && return println(io, "  no findings")
     by_mod = Dict{Symbol,Vector{Finding}}()
     for f in findings
@@ -112,11 +123,7 @@ function summarize(io::IO, findings)
 end
 
 # The delta in full, the standing set as per-kind counts. Rank order so consecutive runs diff cleanly.
-function report(io::IO, findings, new, fixed, rank)
-    kinds = Dict{Symbol,Int}()
-    for f in findings
-        kinds[f.kind] = get(kinds, f.kind, 0) + 1
-    end
+function print_architecture(io::IO, findings, new, fixed, rank)
     standing = length(findings) - length(new)
     println(io, "\narchitecture   $(length(findings)) findings   ",
             "new $(length(new))   fixed $fixed   standing $standing")
@@ -133,10 +140,13 @@ function report(io::IO, findings, new, fixed, rank)
     end
 
     for name in TIERS
-        held = filter(k -> tier(k) === name, collect(keys(kinds)))
+        held = Dict{Symbol,Int}()
+        for f in findings
+            tier(f) === name || continue
+            held[f.kind] = get(held, f.kind, 0) + 1
+        end
         isempty(held) && continue
-        sort!(held, by = string)
-        counted = join(("$k $(kinds[k])" for k in held), "  ")
+        counted = join(("$k $(held[k])" for k in sort!(collect(keys(held)), by = string)), "  ")
         println(io, "\n  standing $(rpad(name, 10)) ", counted)
     end
 end

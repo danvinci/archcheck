@@ -15,7 +15,7 @@ include("registry.jl")
 include("checks_opt.jl")
 include("gate.jl")
 
-export Finding, isblocking, emit_jsonl, summarize, report
+export Finding, isblocking, emit_jsonl, print_findings, print_architecture
 export ENFORCE_KINDS, STRUCTURE_KINDS, TIERS, tier, tier_rank, render_evidence
 export FindingKey, fingerprint, previous_fingerprints, new_findings
 export ModRef, ModuleGraph, build_module_graph, scan_modrefs

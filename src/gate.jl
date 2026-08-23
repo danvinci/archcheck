@@ -22,13 +22,13 @@ function gate(pkg::Module;
     current = Set(fingerprint(f) for f in findings)
     new = new_findings(findings, previous)
     fixed = previous === nothing ? 0 : length(setdiff(previous, current))
-    report(io, findings, new, fixed, index.rank)
+    print_architecture(io, findings, new, fixed, index.rank)
     open(handle -> emit_jsonl(handle, findings), report_path, "w")
 
     block = filter(isblocking, findings)
     if !isempty(block)
         println(io, "\n  BLOCKING")   # in full whether new or standing; the delta cannot hide these
-        summarize(io, block)
+        print_findings(io, block)
         error("architecture gate RED: $(length(block)) blocking finding(s)")
     end
     println(io, "== architecture clean ==")

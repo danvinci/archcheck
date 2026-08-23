@@ -74,31 +74,37 @@ ev(f, key) = only(v for (k, v) in f.evidence if k === key)
           Finding(:Geometry, :sinkable, "src/geometry/surface.jl", "basis_funs", "footprint Numerics; belongs there"),
           Finding(:Contracts, :contracts_logic, "src/contracts/types.jl", "helper", "function body in the spine")]
 
-    # enforce/report split derives from kind
+    # enforce/report split derives from the finding's tier, defaulted from engine kind tuples
     @test isblocking(fs[1])
     @test !isblocking(fs[2])
     @test count(isblocking, fs) == 2
+    @test tier(fs[1]) === :enforce && tier(fs[2]) === :advice
 
-    # tiers rank a broken invariant above a placement suggestion, so the report leads with what matters
+    # engine kinds still map without constructing a Finding
     @test tier(:back_edge) === :enforce
     @test tier(:missing_include) === :enforce
+    @test tier(:nonliteral_include) === :enforce
     @test tier(:file_backedge) === :structure
     @test tier(:dead_code) === :structure
     @test tier(:sinkable) === :advice
     @test tier_rank(fs[1]) < tier_rank(fs[2])
 
-    # project-specific kinds a consumer wires in via `checks`: severity a project check is restored with
-    @test tier(:rig_divergence) === :enforce
-    @test tier(:time_truncation) === :enforce
-    @test tier(:uncounted_drop) === :structure
+    # a consumer kind is advice unless the emitting check sets tier=
+    @test tier(:uncounted_drop) === :advice
+    @test tier(:time_truncation) === :advice
+    own = Finding(:M, :uncounted_drop, "a.jl", "g", "guard"; tier = :structure)
+    @test tier(own) === :structure && !isblocking(own)
+    block = Finding(:M, :time_truncation, "a.jl", "g", "clamp"; tier = :enforce)
+    @test isblocking(block) && tier(block) === :enforce
 
-    # JSONL round-trips: each line parses, fields + blocking survive
+    # JSONL round-trips: each line parses, fields + blocking + tier survive
     io = IOBuffer(); emit_jsonl(io, fs)
     lines = split(strip(String(take!(io))), '\n')
     @test length(lines) == 3
     recs = JSON.parse.(lines)
     @test recs[1]["module"] == "Geometry" && recs[1]["kind"] == "back_edge" && recs[1]["blocking"] == true
-    @test recs[2]["blocking"] == false && recs[2]["symbol"] == "basis_funs"
+    @test recs[1]["tier"] == "enforce"
+    @test recs[2]["blocking"] == false && recs[2]["symbol"] == "basis_funs" && recs[2]["tier"] == "advice"
 end
 
 @testset "module graph" begin
@@ -453,6 +459,27 @@ end
         @test hole.symbol == "missing.jl" && isblocking(hole)
     end
 
+    # include whose argument is not a string literal cannot be placed in the DAG
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(joinpath(@__DIR__, \"known.jl\"))\n")
+        write(joinpath(dir, "m", "known.jl"), "a() = 1")
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        hole = only(f for f in check_corpus(index) if f.kind === :nonliteral_include)
+        @test hole.line == 1 && isblocking(hole)
+        @test endswith(hole.file, "M.jl")
+    end
+
+    # a comment or string that looks like a dynamic include is not a call
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"),
+              "include(\"known.jl\")\n# include(joinpath(@__DIR__, \"x.jl\"))\ns = \"include(joinpath(x))\"\n")
+        write(joinpath(dir, "m", "known.jl"), "a() = 1")
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        @test isempty(filter(f -> f.kind === :nonliteral_include, check_corpus(index)))
+    end
+
     # a file reached through a nested include takes its position from the depth-first load order - the
     # order Julia itself runs them - rather than being held apart as an unranked class
     mktempdir() do dir
@@ -671,7 +698,7 @@ end
 
     # the report prints the delta in full and the standing set as counts
     io = IOBuffer()
-    report(io, [moved, fresh], [fresh], 1, Dict(:Aero => 1, :Geo => 2))
+    print_architecture(io, [moved, fresh], [fresh], 1, Dict(:Aero => 1, :Geo => 2))
     out = String(take!(io))
     @test occursin("new 1", out) && occursin("fixed 1", out) && occursin("standing 1", out)
     @test occursin("NEW", out) && occursin("solve.jl", out)   # new one named
@@ -700,9 +727,19 @@ end
               "include(\"a.jl\")\nfor n in names(@__MODULE__; all=true)\n    @eval export \$n\nend")
         write(joinpath(dir, "geo", "a.jl"), "f() = 1")
         index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
-        found = cd(() -> check_blanket_exports(index), dirname(dir))   # paths sit under the src root's parent
+        found = check_blanket_exports(index)
         @test length(found) == 1
         @test found[1].kind === :blanket_export
+    end
+
+    # a comment that quotes the blanket form is not a call
+    mktempdir() do dir
+        mkpath(joinpath(dir, "geo"))
+        write(joinpath(dir, "geo", "Geo.jl"),
+              "include(\"a.jl\")\n# names(@__MODULE__; all=true)\n")
+        write(joinpath(dir, "geo", "a.jl"), "f() = 1")
+        index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
+        @test isempty(check_blanket_exports(index))
     end
 
     # a wrapper with a real export list is clean
@@ -711,7 +748,7 @@ end
         write(joinpath(dir, "geo", "Geo.jl"), "include(\"a.jl\")")
         write(joinpath(dir, "geo", "a.jl"), "export f\nf() = 1")
         index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
-        @test isempty(cd(() -> check_blanket_exports(index), dirname(dir)))
+        @test isempty(check_blanket_exports(index))
     end
 
     # stale export: Julia accepts a name with no definition behind it
@@ -733,5 +770,17 @@ end
         @test length(found) == 1
         @test found[1].symbol == "FIface.hidden"
         @test found[1].kind === :reaches_internal
+    end
+
+    # comments and strings are not references
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")")
+        write(joinpath(dir, "m", "a.jl"), "g() = 1")
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        entry = mktempdir()
+        write(joinpath(entry, "probe.jl"),
+              "# FIface.hidden()\ns = \"FIface.hidden()\"\nx = 1  # FIface.hidden\n")
+        @test isempty(check_reaches_internal(index, [FIface]; entry_dirs = [entry]))
     end
 end

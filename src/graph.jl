@@ -27,6 +27,32 @@ end
 
 include_paths(entry_path::AbstractString) = [spec for (spec, _) in include_stmts(entry_path)]
 
+function static_string(n)
+    JS.kind(n) == K"string" || return nothing
+    kids = child_nodes(n)
+    kids === nothing && return nothing
+    parts = String[]
+    for c in kids
+        JS.kind(c) == K"String" || return nothing
+        push!(parts, string(c.val))
+    end
+    join(parts)
+end
+
+function walk_include_calls!(visit, n)
+    kids = child_nodes(n)
+    if JS.kind(n) == K"call" && kids !== nothing && !isempty(kids) && kids[1].val === :include
+        args = [c for c in kids[2:end] if JS.kind(c) != K"parameters"]
+        if !isempty(args)
+            visit(args[1], Int(JS.source_location(n)[1]))
+        end
+    end
+    kids === nothing && return
+    for c in kids
+        walk_include_calls!(visit, c)
+    end
+end
+
 # The package spine's include order is the declared module DAG; it gives both rank and dir->module.
 # The module name comes from the paired `using .Name`, not the filename, which need not match it.
 function parse_spine_order(spine_path::AbstractString)
@@ -162,6 +188,7 @@ struct SourceIndex
     external::Set{Symbol}                   # names referenced from the entry dirs (test/, scripts/)
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
     missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
+    nonliteral::Vector{Tuple{Symbol,String,Int}}      # include whose argument is not a string literal: owner, file, line
 end
 
 # The wrapper is the only file its own module never includes, so it is legitimately unranked.
@@ -201,11 +228,16 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
     refs = ModRef[]
     unparsed = Tuple{Symbol,String}[]
     missing = Tuple{Symbol,String,String,Int}[]
-    function collect_missing!(owner, path, rel)
-        for (spec, line) in include_stmts(path)
-            target = normpath(joinpath(dirname(path), spec))
-            isfile(target) && continue
-            push!(missing, (owner, rel, spec, line))
+    nonliteral = Tuple{Symbol,String,Int}[]
+    function collect_includes!(owner, path, rel, tree)
+        walk_include_calls!(tree) do arg, line
+            spec = static_string(arg)
+            if isnothing(spec)
+                push!(nonliteral, (owner, rel, line))
+            else
+                target = normpath(joinpath(dirname(path), spec))
+                isfile(target) || push!(missing, (owner, rel, spec, line))
+            end
         end
     end
     for (root, _, files) in walkdir(src_root), fn in files
@@ -215,15 +247,16 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
         mod = module_of(path, src_root, dir2mod)
         rel = relpath(path, repo)
         if isnothing(mod)
-            collect_missing!(Symbol(first(splitext(fn))), path, rel)
+            tree = parse_file(read(path, String), rel)
+            tree === nothing || collect_includes!(Symbol(first(splitext(fn))), path, rel, tree)
             continue
         end
-        collect_missing!(mod, path, rel)
         tree = parse_file(read(path, String), rel)
         if tree === nothing
             push!(unparsed, (mod, rel))
             continue
         end
+        collect_includes!(mod, path, rel, tree)
         walk_modrefs!(refs, mod, rel, known, tree)              # cross-module edges
         iswrapper = path == get(wrappers, mod, "")
         inmod = relpath(path, moddirs[mod])      # the key file ranks are held against
@@ -248,7 +281,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
             end
         end
     end
-    SourceIndex(repo, rank, dir2mod, nodes, refs, external, unparsed, missing)
+    SourceIndex(repo, rank, dir2mod, nodes, refs, external, unparsed, missing, nonliteral)
 end
 
 build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, index.refs)

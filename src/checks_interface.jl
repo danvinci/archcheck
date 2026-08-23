@@ -1,27 +1,59 @@
 # Interface checks: does a module declare what it publishes, and does anything reach past that declaration.
 # A module that exports its whole namespace has no interface to hold, so nothing behind it can move.
 
-const BLANKET_EXPORT = "names(@__MODULE__; all=true)"
-
 # The module's own wrapper path, for a finding that has no single source line.
 function module_file(M)
     name = string(nameof(M))
     "src/" * lowercase(name) * "/" * name * ".jl"
 end
 
-# blanket-export: the wrapper re-exports every name the module defines, internals included.
+function resolve_scan_path(index::SourceIndex, path)
+    isabspath(path) ? path : joinpath(index.repo, path)
+end
+
+function is_blanket_names_call(n)
+    JS.kind(n) == K"call" || return false
+    kids = child_nodes(n)
+    (kids === nothing || isempty(kids)) && return false
+    kids[1].val === :names || return false
+    for c in kids
+        JS.kind(c) == K"parameters" || continue
+        params = child_nodes(c)
+        params === nothing && continue
+        for p in params
+            JS.kind(p) == K"=" || continue
+            pk = child_nodes(p)
+            (pk === nothing || length(pk) < 2) && continue
+            pk[1].val === :all && pk[2].val === true && return true
+        end
+    end
+    false
+end
+
+function find_blanket_names(n)
+    is_blanket_names_call(n) && return n
+    kids = child_nodes(n)
+    kids === nothing && return nothing
+    for c in kids
+        found = find_blanket_names(c)
+        found === nothing || return found
+    end
+    nothing
+end
+
 function check_blanket_exports(index::SourceIndex)
     findings = Finding[]
     for f in index.files
         is_wrapper(f) || continue
-        isfile(f.path) || continue
-        for (i, line) in enumerate(eachline(f.path))
-            occursin(BLANKET_EXPORT, line) || continue
-            detail = "module exports its whole namespace, so it declares no interface"
-            found = Finding(f.mod, :blanket_export, f.path, "", i, detail)
-            push!(findings, found)
-            break
-        end
+        path = resolve_scan_path(index, f.path)
+        isfile(path) || continue
+        tree = parse_file(read(path, String), f.path)
+        tree === nothing && continue
+        hit = find_blanket_names(tree)
+        isnothing(hit) && continue
+        line = Int(JS.source_location(hit)[1])
+        detail = "module exports its whole namespace, so it declares no interface"
+        push!(findings, Finding(f.mod, :blanket_export, f.path, "", line, detail))
     end
     findings
 end
@@ -43,10 +75,29 @@ function check_stale_exports(mods)
     findings
 end
 
-# reaches-internal: a qualified reference to a name its owning module does not export. Lexical by nature -
-# the question is whether the source names a binding the owner kept private, not how it is dispatched.
-# The owning module is the LAST qualifier before the member: A.B.name belongs to B, not A.
-const QUALIFIED_REF = r"\b(?:[A-Z][A-Za-z0-9_]*\.)*([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_!]*)"
+# A.B.name belongs to B: the qualifier immediately before the member.
+function rightmost_ident(n)
+    n.val isa Symbol && return n.val
+    JS.kind(n) == K"." || return nothing
+    kids = child_nodes(n)
+    (kids === nothing || isempty(kids)) && return nothing
+    rightmost_ident(last(kids))
+end
+
+function walk_qualified!(visit, n)
+    kids = child_nodes(n)
+    if JS.kind(n) == K"." && kids !== nothing && length(kids) == 2
+        owner = rightmost_ident(kids[1])
+        member = kids[2].val
+        if owner isa Symbol && member isa Symbol
+            visit(owner, member, Int(JS.source_location(n)[1]))
+        end
+    end
+    kids === nothing && return
+    for c in kids
+        walk_qualified!(visit, c)
+    end
+end
 
 function scanned_paths(index::SourceIndex, entry_dirs)
     paths = String[f.path for f in index.files]
@@ -68,19 +119,18 @@ function check_reaches_internal(index::SourceIndex, mods; entry_dirs)
     end
     findings = Finding[]
     for path in scanned_paths(index, entry_dirs)
-        isfile(path) || continue
-        for (i, line) in enumerate(eachline(path))
-            startswith(lstrip(line), "#") && continue
-            for m in eachmatch(QUALIFIED_REF, line)
-                mod_name = m.captures[1]
-                member = m.captures[2]
-                haskey(published, mod_name) || continue
-                member in published[mod_name] && continue
-                isdefined(owner[mod_name], Symbol(member)) || continue
-                detail = "reference to a name its module does not export"
-                found = Finding(Symbol(mod_name), :reaches_internal, path, "$mod_name.$member", i, detail)
-                push!(findings, found)
-            end
+        abs = resolve_scan_path(index, path)
+        isfile(abs) || continue
+        tree = parse_file(read(abs, String), path)
+        tree === nothing && continue
+        walk_qualified!(tree) do mod_name, member, line
+            key = string(mod_name)
+            haskey(published, key) || return
+            string(member) in published[key] && return
+            isdefined(owner[key], member) || return
+            detail = "reference to a name its module does not export"
+            found = Finding(mod_name, :reaches_internal, path, "$mod_name.$member", line, detail)
+            push!(findings, found)
         end
     end
     findings

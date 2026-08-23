@@ -29,6 +29,10 @@ function check_corpus(index)
         push!(findings, Finding(owner, :missing_include, from, spec, line,
                                 "include names a file that is not on disk"))
     end
+    for (owner, from, line) in index.nonliteral
+        push!(findings, Finding(owner, :nonliteral_include, from, "", line,
+                                "include argument is not a string literal"))
+    end
     for f in index.files
         f.filerank == 0 || continue
         is_wrapper(f) && continue
