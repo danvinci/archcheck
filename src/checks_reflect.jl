@@ -1,14 +1,21 @@
 # Reflection checks (duplicate-owner, sinkable): the method table is dispatch-aware, so these
 # read the loaded modules, not source text.
 
-# Names M defines itself (function/type whose parentmodule is M), skipping imports and internals.
-function owned_defs(M::Module)
+# Names M defines itself (function/type owned by M), skipping non-owned names and internals.
+function owned_defs(mod::Module)
     out = Symbol[]
-    for n in names(M; all = true)
-        (n === nameof(M) || n in (:eval, :include) || startswith(string(n), "#")) && continue
-        isdefined(M, n) || continue
-        v = getproperty(M, n)
-        (v isa Function || v isa Type) && parentmodule(v) === M && push!(out, n)
+    for name in names(mod; all = true)
+        is_module = name === nameof(mod)
+        is_builtin = name in (:eval, :include)
+        is_internal = startswith(string(name), "#")
+        (is_module || is_builtin || is_internal) && continue
+        isdefined(mod, name) || continue
+        value = getproperty(mod, name)
+        if value isa Function
+            parentmodule(value) === mod && push!(out, name)
+        elseif value isa Type
+            type_module(value) === mod && push!(out, name)
+        end
     end
     out
 end

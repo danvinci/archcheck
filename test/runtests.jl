@@ -25,6 +25,16 @@ module FakeHi
     calls_helper() = helper_low(LowType())
     spans_two(a::LowType, b::MidType) = (a, b)
 end
+module FOwnedDefs
+    using ..FakeLo: LowType
+    struct Concrete end
+    abstract type Abstract end
+    struct Parametric{T} end
+    owned_function() = nothing
+    const ImportedAlias = LowType
+    const UnionAlias = Union{Concrete,LowType}
+    const BottomAlias = Union{}
+end
 module FDupA; export dup; dup() = :a; end
 module FDupB; export dup; dup() = :b; end
 # `vanished` outlived its definition; `hidden` is defined but kept off the interface
@@ -172,6 +182,9 @@ end
 end
 
 @testset "reflection checks (duplicate-owner, sinkable)" begin
+    @test Set(ArchCheck.owned_defs(FOwnedDefs)) ==
+          Set([:Concrete, :Abstract, :Parametric, :owned_function])
+
     # sinkable on the synthetic hierarchy: a def whose whole footprint is one lower module is the
     # candidate. Callers place a def, so one its own module calls stays; a Base-only def names no
     # module at all, so it carries no evidence either way.
