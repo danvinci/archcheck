@@ -76,6 +76,39 @@ function sig_argnames(sig)
     names
 end
 
+# Direct `=` names in this method body. Nested functions, loops, and let keep their own locals;
+# subtracting those here would drop a same-named global the method really calls.
+function method_locals(body)
+    names = Symbol[]
+    stmts = JS.kind(body) == K"block" ? child_nodes(body) : (body,)
+    stmts === nothing && return names
+    for stmt in stmts
+        JS.kind(stmt) == K"=" || continue
+        lhs = child_nodes(stmt)
+        (lhs === nothing || isempty(lhs)) && continue
+        _argname!(names, lhs[1])
+    end
+    names
+end
+
+# Args and direct assignments, minus names this method (including nested callbacks) declares `global`.
+function method_bound(sig, body)
+    names = Symbol[]
+    append!(names, sig_argnames(sig))
+    append!(names, method_locals(body))
+    globals = Symbol[]
+    walk_with_enclosing(body) do n, _
+        JS.kind(n) == K"global" || return
+        kids = child_nodes(n)
+        kids === nothing && return
+        for c in kids
+            _argname!(globals, c)
+        end
+    end
+    setdiff!(names, globals)
+    names
+end
+
 # the type names in each `x::T` field decl (const-wrapped included). Inner-constructor bodies are not
 # fields, so they are left to the walk, which records them as module refs.
 function field_types!(r, block)
@@ -139,8 +172,19 @@ function walk_defs!(fs, n, depth, current)
             slots = length(kids) >= 2 ? tuple_tail_slots(kids[2]) : 0
             slots > 0 && (fs.tupletail[nm] = slots)
         end
-        length(kids) >= 2 && walk_defs!(fs, kids[2], depth + 1, top ? nm : current)
-        top && setdiff!(fs.refs[nm], sig_argnames(kids[1]))
+        if length(kids) >= 2
+            if top
+                owned = fs.refs[nm]
+                method_refs = Set{Symbol}()
+                fs.refs[nm] = method_refs
+                walk_defs!(fs, kids[2], depth + 1, nm)
+                setdiff!(method_refs, method_bound(kids[1], kids[2]))
+                fs.refs[nm] = owned
+                union!(owned, method_refs)
+            else
+                walk_defs!(fs, kids[2], depth + 1, current)
+            end
+        end
     elseif k == K"->"
         for c in kids; walk_defs!(fs, c, depth + 1, current); end
     elseif k == K"call" || k == K"parameters"

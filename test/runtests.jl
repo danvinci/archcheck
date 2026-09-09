@@ -112,9 +112,9 @@ ev(f, key) = only(v for (k, v) in f.evidence if k === key)
     lines = split(strip(String(take!(io))), '\n')
     @test length(lines) == 3
     recs = JSON.parse.(lines)
-    @test recs[1]["module"] == "Geometry" && recs[1]["kind"] == "back_edge" && recs[1]["blocking"] == true
+    @test recs[1]["module"] == "Geometry" && recs[1]["kind"] == "back_edge" && recs[1]["blocking"]
     @test recs[1]["tier"] == "enforce"
-    @test recs[2]["blocking"] == false && recs[2]["symbol"] == "basis_funs" && recs[2]["tier"] == "advice"
+    @test !recs[2]["blocking"] && recs[2]["symbol"] == "basis_funs" && recs[2]["tier"] == "advice"
 end
 
 @testset "module graph" begin
@@ -278,6 +278,49 @@ end
         @test endswith(cg.files[:f], "a.jl")
         @test :g in cg.refs[:f]        # raw refs kept alongside the intra-module edges
     end
+
+    # a method-local assignment is not a call, and filtering it must not drop a real call
+    # of the same name from a different overload
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")\ninclude(\"b.jl\")")
+        write(joinpath(dir, "m", "a.jl"), """
+            struct Holder
+                xs::Int
+            end
+            function Holder()
+                helper()
+            end
+            function Holder(faces)
+                items = Int[]
+                helper = length(items)
+                helper
+            end
+            """)
+        write(joinpath(dir, "m", "b.jl"), "items() = 1\nhelper() = 1\n")
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        cg = build_call_graph(index, :M)
+        @test :helper in cg.calls[:Holder]
+        @test !(:items in cg.calls[:Holder])
+    end
+
+    @test :helper in scan_defs("""
+        function owner()
+            global helper
+            helper = identity(helper)
+            helper()
+        end
+        """).refs[:owner]
+    @test :helper in scan_defs("""
+        function owner()
+            helper = 1
+            callback = () -> begin
+                global helper
+                helper()
+            end
+            callback()
+        end
+        """).refs[:owner]
 end
 
 @testset "struct-field coupling (static)" begin
