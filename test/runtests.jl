@@ -321,6 +321,13 @@ end
             callback()
         end
         """).refs[:owner]
+
+    # named-tuple field labels are not references; the RHS still is, including in a comprehension
+    labeled = scan_defs("labeled() = (items = helper(),)\nnested() = [(items = helper(),) for _ in xs]")
+    @test :helper in labeled.refs[:labeled] && !(:items in labeled.refs[:labeled])
+    @test :helper in labeled.refs[:nested] && !(:items in labeled.refs[:nested])
+    called = scan_defs("called() = (items = items(),)")
+    @test :items in called.refs[:called]
 end
 
 @testset "struct-field coupling (static)" begin

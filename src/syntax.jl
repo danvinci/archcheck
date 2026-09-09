@@ -187,9 +187,9 @@ function walk_defs!(fs, n, depth, current)
         end
     elseif k == K"->"
         for c in kids; walk_defs!(fs, c, depth + 1, current); end
-    elseif k == K"call" || k == K"parameters"
-        # `f(name = value)`: the keyword's name is not a reference, so only its value is walked. Counting it
-        # makes every keyword that shares a function's name look like a call to it.
+    elseif k == K"call" || k == K"parameters" || k == K"tuple"
+        # `f(name = value)` and `(name = value,)`: the keyword / named-tuple field is a label, so only its
+        # value is walked. Counting the label makes every field that shares a function's name look like a call.
         for c in kids
             ckids = child_nodes(c)
             if JS.kind(c) == K"=" && ckids !== nothing && length(ckids) == 2
