@@ -7,6 +7,17 @@ child_nodes(n) = JS.children(n)
 
 is_sig(n) = JS.kind(n) in (K"call", K"where", K"::")   # `::` = return-type-annotated signature
 
+# A struct body allows inner constructors only: a `function` form, or a short-form method (`S(x) = ...`).
+# A typed field default (`x::T = v`) is a signature-shaped assignment but not a constructor.
+function is_inner_constructor(n)
+    k = JS.kind(n)
+    k == K"function" && return true
+    k == K"=" || return false
+    kids = child_nodes(n)
+    (kids === nothing || isempty(kids) || !is_sig(kids[1])) && return false
+    sig_name(kids[1]) !== nothing
+end
+
 # The name a signature defines. A dotted head (`Base.getindex`) is a method on a foreign module's generic:
 # the dispatch that reaches it is that module's, so it is not a name this module owns.
 function sig_name(sig)
@@ -16,15 +27,16 @@ function sig_name(sig)
     (kd == K"where" || kd == K"::") && return sig_name(kids[1])
     kd == K"call" || return nothing
     head = kids[1]
-    head.val isa Symbol ? head.val : nothing
+    head.val isa Symbol && return head.val
+    JS.kind(head) == K"curly" ? type_name(head) : nothing   # S{T}(x) names S
 end
 
 # One file's top-level defs and, per def, the names its body references - closures included.
 struct FileScan
     funcs::Vector{Symbol}
     types::Vector{Symbol}
-    refs::Dict{Symbol,Set{Symbol}}   # def (function or struct) -> names it references (a struct: its field + supertype types)
-    modrefs::Set{Symbol}             # names referenced outside any function (module-level code, struct bodies)
+    refs::Dict{Symbol,Set{Symbol}}   # def (function or struct) -> names it references (a struct: field types, supertype, inner-ctor bodies)
+    modrefs::Set{Symbol}             # names referenced outside any function (module-level code, field names)
     line::Dict{Symbol,Int}           # def-name -> source line
     argtypes::Dict{Symbol,Vector{Union{Symbol,Nothing}}}   # function -> positional arg declared-types (last method wins)
     tupletail::Dict{Symbol,Int}      # function -> slot count when its body ends in a bare tuple; absent otherwise
@@ -110,7 +122,7 @@ function method_bound(sig, body)
 end
 
 # the type names in each `x::T` field decl (const-wrapped included). Inner-constructor bodies are not
-# fields, so they are left to the walk, which records them as module refs.
+# fields: the struct walk attaches them to this type's refs, same owner as the field types.
 function field_types!(r, block)
     kb = child_nodes(block); kb === nothing && return
     for stmt in kb
@@ -144,6 +156,17 @@ function tuple_tail_slots(body)
     length(slots)
 end
 
+# One method's body refs, minus names that method binds.
+function absorb_method!(fs, target, sig, body, depth)
+    owned = get!(fs.refs, target, Set{Symbol}())
+    method_refs = Set{Symbol}()
+    fs.refs[target] = method_refs
+    walk_defs!(fs, body, depth, target)
+    setdiff!(method_refs, method_bound(sig, body))
+    fs.refs[target] = owned
+    union!(owned, method_refs)
+end
+
 # depth counts function-def nesting; only defs at depth 0 are top-level (a local closure's def is not).
 function walk_defs!(fs, n, depth, current)
     n.val isa Symbol && push!(current === nothing ? fs.modrefs : fs.refs[current], n.val)
@@ -162,7 +185,18 @@ function walk_defs!(fs, n, depth, current)
             JS.kind(first(kids)) == K"<:" && all_symbols!(r, child_nodes(first(kids))[2])    # supertype
             k == K"struct" && field_types!(r, last(kids))                              # field types
         end
-        for c in kids; walk_defs!(fs, c, depth + 1, current); end   # inner ctors/fields are not top-level
+        for c in kids
+            if JS.kind(c) == K"block" && depth == 0 && nm !== nothing
+                stmts = child_nodes(c)
+                stmts === nothing && continue
+                for stmt in stmts
+                    owner = is_inner_constructor(stmt) ? nm : current
+                    walk_defs!(fs, stmt, depth + 1, owner)
+                end
+            else
+                walk_defs!(fs, c, depth + 1, current)
+            end
+        end
     elseif k == K"function" || (k == K"=" && !isempty(kids) && is_sig(kids[1]))
         nm = sig_name(kids[1]); top = depth == 0 && nm !== nothing
         if top
@@ -174,13 +208,9 @@ function walk_defs!(fs, n, depth, current)
         end
         if length(kids) >= 2
             if top
-                owned = fs.refs[nm]
-                method_refs = Set{Symbol}()
-                fs.refs[nm] = method_refs
-                walk_defs!(fs, kids[2], depth + 1, nm)
-                setdiff!(method_refs, method_bound(kids[1], kids[2]))
-                fs.refs[nm] = owned
-                union!(owned, method_refs)
+                absorb_method!(fs, nm, kids[1], kids[2], depth + 1)
+            elseif current !== nothing && current in fs.types
+                absorb_method!(fs, current, kids[1], kids[2], depth + 1)
             else
                 walk_defs!(fs, kids[2], depth + 1, current)
             end

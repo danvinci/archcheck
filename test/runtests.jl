@@ -373,6 +373,41 @@ end
     cg2 = CallGraph(:M, [:h, :a, :b], Dict(:h => "x.jl", :a => "y.jl", :b => "z.jl"), spread, spread,
                     Dict("y.jl" => 1, "z.jl" => 2, "x.jl" => 3))
     @test isempty(check_file_sinkable(cg2, NO_SITES))
+
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"low.jl\")\ninclude(\"high.jl\")")
+        write(joinpath(dir, "m", "low.jl"), "leaf(x) = x\n")
+        write(joinpath(dir, "m", "high.jl"), """
+            helper(x) = leaf(x)
+            struct Long
+                value::Int   # stored test value
+                function Long(x)
+                    new(helper(x))
+                end
+            end
+            struct Short
+                value::Int   # stored test value
+                Short(x) = new(helper(x))
+            end
+            struct Parametric{T}
+                value::T   # stored test value
+                Parametric{T}(x) where {T} = new{T}(helper(x))
+            end
+            struct Shadow
+                value::Int   # stored test value
+                Shadow(helper) = new(helper(1))
+            end
+            """)
+        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        cg = build_call_graph(index, :M)
+        for owner in (:Long, :Short, :Parametric)
+            @test :helper in cg.calls[owner]
+            @test !(owner in cg.funcs)
+        end
+        @test !(:helper in cg.calls[:Shadow])
+        @test isempty(check_file_sinkable(cg, def_sites(index)))
+    end
 end
 
 @testset "extract-candidate (sinkable density)" begin
