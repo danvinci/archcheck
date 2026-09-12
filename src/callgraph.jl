@@ -22,29 +22,30 @@ CallGraph(mod, funcs, files, calls, refs, rank) =
 # another file's type is an edge; only functions relocate, so funcs excludes them.
 function build_call_graph(index, mod::Symbol)
     files = Dict{Symbol,String}()
-    refs = Dict{Symbol,Set{Symbol}}()
     types = Set{Symbol}()
     rank = Dict{String,Int}()
     # A name's home is its LOWEST-ranked defining file: methods of one function can live in several files,
     # and a reference is satisfiable by the earliest of them.
     home!(name, f) = (!haskey(files, name) || f.filerank < rank[files[name]]) && (files[name] = f.path)
-    site_refs = Dict{Tuple{Symbol,String},Set{Symbol}}()
-    for f in files_of(index, mod)
+    members = files_of(index, mod)
+    for f in members
         rank[f.path] = f.filerank
         for name in f.scan.funcs
             home!(name, f)
-            union!(get!(refs, name, Set{Symbol}()), f.scan.refs[name])
-            union!(get!(site_refs, (name, f.path), Set{Symbol}()), f.scan.refs[name])
         end
         for name in f.scan.types
             home!(name, f)
             push!(types, name)
-            haskey(f.scan.refs, name) || continue
-            union!(get!(refs, name, Set{Symbol}()), f.scan.refs[name])
-            union!(get!(site_refs, (name, f.path), Set{Symbol}()), f.scan.refs[name])
         end
     end
     known = Set(keys(files))
+    refs = Dict(name => Set{Symbol}() for name in known)
+    site_refs = Dict{Tuple{Symbol,String},Set{Symbol}}()
+    for f in members, (name, used) in f.scan.refs
+        name in known || continue
+        union!(refs[name], used)
+        union!(get!(site_refs, (name, f.path), Set{Symbol}()), used)
+    end
     calls = Dict(n => Set(c for c in refs[n] if c in known && c != n) for n in keys(refs))
     funcs = [n for n in keys(refs) if !(n in types)]
     CallGraph(mod, funcs, files, calls, refs, rank, site_refs)

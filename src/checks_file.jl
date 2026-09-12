@@ -60,11 +60,12 @@ function check_file_sinkable(cg::CallGraph, sites)
     for (_, tos) in adj, to in tos
         reach[to] = get(reach, to, 0) + 1
     end
-    callers = Dict{Symbol,Set{Symbol}}()
-    for (caller, callees) in cg.calls, callee in callees
-        push!(get!(callers, callee, Set{Symbol}()), caller)
+    callers = Dict{Tuple{Symbol,String},Int}()
+    for ((caller, file), callees) in cg.site_refs, callee in callees
+        caller == callee && continue
+        site = (callee, file)
+        callers[site] = get(callers, site, 0) + 1
     end
-
     findings = Finding[]
     for f in cg.funcs
         callees = cg.calls[f]
@@ -76,7 +77,7 @@ function check_file_sinkable(cg::CallGraph, sites)
         target == home && continue
         is_downrank(cg.rank, home, target) || continue
         _, line = site_of(sites, cg.mod, f, (home, 0))
-        athome = count(c -> get(cg.files, c, "") == home, get(callers, f, Set{Symbol}()))
+        athome = get(callers, (f, home), 0)
         athome > 0 && continue          # callers at home place it: what it calls does not move it
         evidence = [:callees_in => basename(target),
                     :files_using_it => "$(get(reach, target, 0))/$nfiles",

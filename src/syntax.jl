@@ -31,6 +31,20 @@ function sig_name(sig)
     JS.kind(head) == K"curly" ? type_name(head) : nothing   # S{T}(x) names S
 end
 
+# Receiver type of `(x::T)(...)` and `(::T)(...)`.
+function callable_receiver(sig)
+    kd = JS.kind(sig)
+    (kd == K"where" || kd == K"::") && return callable_receiver(child_nodes(sig)[1])
+    kd == K"call" || return nothing
+    kids = child_nodes(sig)
+    (kids === nothing || isempty(kids)) && return nothing
+    head = kids[1]
+    JS.kind(head) == K"::" || return nothing
+    hk = child_nodes(head)
+    (hk === nothing || isempty(hk)) && return nothing
+    type_name(last(hk))
+end
+
 # One file's top-level defs and, per def, the names its body references - closures included.
 struct FileScan
     funcs::Vector{Symbol}
@@ -109,7 +123,10 @@ function sig_argnames(sig)
         kd = JS.kind(sig)
     end
     kd == K"call" || return names
-    for a in child_nodes(sig)[2:end]; _argname!(names, a); end
+    kids = child_nodes(sig)
+    kids === nothing && return names
+    JS.kind(kids[1]) == K"::" && _argname!(names, kids[1])
+    for a in kids[2:end]; _argname!(names, a); end
     names
 end
 
@@ -192,7 +209,10 @@ function absorb_defaults!(fs, target, sig, depth)
         kd = JS.kind(sig)
     end
     kd == K"call" || return
-    for a in child_nodes(sig)[2:end]
+    kids = child_nodes(sig)
+    kids === nothing && return
+    JS.kind(kids[1]) == K"::" && _argname!(prefix, kids[1])
+    for a in kids[2:end]
         args = JS.kind(a) == K"parameters" ? child_nodes(a) : (a,)
         args === nothing && continue
         for arg in args
@@ -265,8 +285,11 @@ function walk_defs!(fs, n, depth, current)
             slots > 0 && (fs.tupletail[nm] = slots)
         end
         if length(kids) >= 2
+            receiver = callable_receiver(kids[1])
             if top
                 absorb_method!(fs, nm, kids[1], kids[2], depth + 1)
+            elseif receiver !== nothing
+                absorb_method!(fs, receiver, kids[1], kids[2], depth + 1)
             elseif current !== nothing && current in fs.types
                 absorb_method!(fs, current, kids[1], kids[2], depth + 1)
             else

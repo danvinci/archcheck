@@ -355,6 +355,26 @@ end
     @test !(:T in whered.refs[:f])
     bounded = scan_defs("f(x::T, y = zero(T)) where {T<:Integer} = y")
     @test !(:T in bounded.refs[:f])
+
+    named = scan_defs("struct Law end\nhelper() = leaf()\n(law::Law)(x) = helper()")
+    @test :helper in named.refs[:Law]
+    @test !(:Law in named.funcs)
+    @test !(:helper in named.modrefs)
+    early = scan_defs("(law::Law)(x) = helper()\nstruct Law end\nhelper() = 1")
+    @test :helper in early.refs[:Law]
+    @test :Law in early.types && !(:Law in early.funcs)
+    extension = scan_defs("(law::Law)(x) = helper()\nhelper() = 1")
+    @test :helper in extension.refs[:Law]
+    @test !(:Law in extension.types) && !(:Law in extension.funcs)
+    anon_call = scan_defs("(::Law)(x) = helper()")
+    @test :helper in anon_call.refs[:Law]
+    where_call = scan_defs("function (law::Law{T})(x = helper()) where {T}\n    law\nend")
+    @test :helper in where_call.refs[:Law]
+    @test !(:law in where_call.refs[:Law]) && !(:T in where_call.refs[:Law])
+    foreign = scan_defs("function Base.getindex(a::Law, i)\n    helper()\nend\nhelper() = 1")
+    @test :helper in foreign.modrefs
+    @test !(:getindex in foreign.funcs)
+    @test !haskey(foreign.refs, :Law) || !(:helper in foreign.refs[:Law])
 end
 
 @testset "struct-field coupling (static)" begin
@@ -434,6 +454,30 @@ end
         end
         @test !(:helper in cg.calls[:Shadow])
         @test isempty(check_file_sinkable(cg, def_sites(index)))
+    end
+
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"low.jl\")\ninclude(\"high.jl\")")
+        write(joinpath(dir, "m", "low.jl"), "struct Law end\nleaf(x) = x\n")
+        write(joinpath(dir, "m", "high.jl"), """
+            helper(x) = leaf(x)
+            (law::Law)(x) = helper(x)
+            stray(x) = leaf(x)
+            """)
+        rank = Dict(:M => 1)
+        dir2mod = Dict("m" => :M)
+        index = build_source_index(dir, rank, dir2mod)
+        cg = build_call_graph(index, :M)
+        @test :helper in cg.calls[:Law]
+        @test !(:Law in cg.funcs)
+        high = only(f.path for f in index.files if f.name == "high.jl")
+        @test :helper in cg.site_refs[(:Law, high)]
+        found = check_file_sinkable(cg, def_sites(index))
+        @test !any(f -> f.symbol == "helper", found)
+        stray = only(f for f in found if f.symbol == "stray")
+        @test ev(stray, :callees_in) == "low.jl"
+        @test ev(stray, :callers_in_own_file) == "0"
     end
 end
 
