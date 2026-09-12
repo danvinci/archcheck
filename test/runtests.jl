@@ -375,6 +375,47 @@ end
     @test :helper in foreign.modrefs
     @test !(:getindex in foreign.funcs)
     @test !haskey(foreign.refs, :Law) || !(:helper in foreign.refs[:Law])
+
+    branched = scan_defs("function owner()\n    if true\n        helper = 1\n    end\n    helper\nend")
+    @test !(:helper in branched.refs[:owner])
+    trapped = scan_defs("function owner()\n    try\n        helper = 1\n        helper\n    catch\n    end\nend")
+    @test !(:helper in trapped.refs[:owner])
+    lambda = scan_defs("owner() = map(x -> helper(x), xs)")
+    @test :helper in lambda.refs[:owner] && !(:x in lambda.refs[:owner])
+    letted = scan_defs("function owner()\n    let helper = 1\n        helper\n    end\n    helper()\nend")
+    @test :helper in letted.refs[:owner]
+    nested_g = scan_defs("function owner()\n    helper = 1\n    callback = () -> begin\n        global helper\n        1\n    end\n    helper\n    callback()\nend")
+    @test !(:helper in nested_g.refs[:owner])
+    gen = scan_defs("owner() = [helper(x) for x in xs]")
+    @test :helper in gen.refs[:owner] && !(:x in gen.refs[:owner])
+    ordered = scan_defs("f(xs) = [leaf(j) for i in xs for j in produce(i)]")
+    @test :leaf in ordered.refs[:f] && :produce in ordered.refs[:f]
+    @test !(:i in ordered.refs[:f])
+    @test !(:j in ordered.refs[:f])
+    @test !(:xs in ordered.refs[:f])
+    nested_def = scan_defs("f() = begin; inner(x = helper()) = x; inner(); end")
+    @test :helper in nested_def.refs[:f]
+    @test !(:inner in nested_def.refs[:f])
+    @test !(:x in nested_def.refs[:f])
+    indexed = scan_defs("f(values, i) = begin; store[i] = values; end")
+    @test :store in indexed.refs[:f]
+    @test !(:values in indexed.refs[:f])
+    @test !(:i in indexed.refs[:f])
+    typed = scan_defs("f() = begin; x::Marker = make(); x; end")
+    @test :Marker in typed.refs[:f] && :make in typed.refs[:f]
+    @test !(:x in typed.refs[:f])
+
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")\ninclude(\"b.jl\")")
+        write(joinpath(dir, "m", "a.jl"), "function owner()\n    if true\n        helper = 1\n    end\n    helper\nend\n")
+        write(joinpath(dir, "m", "b.jl"), "helper() = 1\n")
+        rank = Dict(:M => 1)
+        dir2mod = Dict("m" => :M)
+        index = build_source_index(dir, rank, dir2mod)
+        cg = build_call_graph(index, :M)
+        @test !(:helper in cg.calls[:owner])
+    end
 end
 
 @testset "struct-field coupling (static)" begin
@@ -892,7 +933,7 @@ end
 
     # a nested def is a local, not top-level; its ref is still seen
     sc2 = scan_defs("outer() = (inner(x) = x + 1; inner(3))")
-    @test :outer in sc2.funcs && !(:inner in sc2.funcs) && :inner in sc2.refs[:outer]
+    @test :outer in sc2.funcs && !(:inner in sc2.funcs) && !(:inner in sc2.refs[:outer])
 
     # function forms, type separation, source line
     sc3 = scan_defs("function foo(x); x; end\nbar(y) = y\nstruct Baz end")
