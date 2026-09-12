@@ -328,6 +328,33 @@ end
     @test :helper in labeled.refs[:nested] && !(:items in labeled.refs[:nested])
     called = scan_defs("called() = (items = items(),)")
     @test :items in called.refs[:called]
+
+    positional = scan_defs("owner(x = helper()) = x\nhelper() = 1")
+    @test :helper in positional.refs[:owner]
+    @test !(:x in positional.refs[:owner])
+    keyworded = scan_defs("keyed(; knots = helper()) = knots\nhelper() = 1")
+    @test :helper in keyworded.refs[:keyed]
+    @test !(:knots in keyworded.refs[:keyed])
+    same = scan_defs("same(helper = helper()) = helper\nhelper() = 1")
+    @test :helper in same.refs[:same]
+    later = scan_defs("later(x = helper(), helper = 1) = x\nhelper() = 1")
+    @test :helper in later.refs[:later]
+    earlier = scan_defs("earlier(helper = () -> 2, x = helper()) = x\nhelper() = 1")
+    @test !(:helper in earlier.refs[:earlier])
+    keyed_same = scan_defs("keyed_same(; helper = helper()) = helper\nhelper() = 1")
+    @test :helper in keyed_same.refs[:keyed_same]
+    hid = scan_defs("function hid(x = helper())\n    helper = 1\n    x\nend\nhelper() = 1")
+    @test :helper in hid.refs[:hid]
+    anon = scan_defs("anon(::Helper, x = Helper()) = x")
+    @test :Helper in anon.refs[:anon]
+    ctor = scan_defs("struct Owner\n    value::Int   # stored test value\n    Owner(x = helper()) = new(x)\nend\nhelper() = 1")
+    @test :helper in ctor.refs[:Owner]
+    destructured = scan_defs("f((helper, value), x = helper()) = x\nhelper() = 1")
+    @test !(:helper in destructured.refs[:f])
+    whered = scan_defs("f(x::T, y = zero(T)) where T = y")
+    @test !(:T in whered.refs[:f])
+    bounded = scan_defs("f(x::T, y = zero(T)) where {T<:Integer} = y")
+    @test !(:T in bounded.refs[:f])
 end
 
 @testset "struct-field coupling (static)" begin
@@ -431,6 +458,17 @@ end
         @test "gone" in syms                        # never called, not external -> dead
         @test !("keep" in syms) && !("entry" in syms)   # called / external
         @test all(f -> f.kind === :dead_code && !isblocking(f), dead)
+    end
+    mktempdir() do dir
+        mkpath(joinpath(dir, "aa"))
+        write(joinpath(dir, "aa", "Aa.jl"), "include(\"aa.jl\")")
+        write(joinpath(dir, "aa", "aa.jl"), "owner(x = helper()) = x\nhelper() = 1")
+        rank = Dict(:Aa => 1)
+        dir2mod = Dict("aa" => :Aa)
+        index = build_source_index(dir, rank, dir2mod)
+        dead = Set(f.symbol for f in check_dead_code_static(index))
+        @test !("helper" in dead)
+        @test "owner" in dead
     end
     # entry-dir names keep a def alive: the same tree is dead without them, live with them
     mktempdir() do dir

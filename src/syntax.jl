@@ -69,9 +69,19 @@ end
 # one is reading its own local, not calling the function that shares the name.
 function _argname!(names, a)
     k = JS.kind(a)
-    if k == K"parameters"
-        for c in child_nodes(a); _argname!(names, c); end
-    elseif k == K"::" || k == K"=" || k == K"..."
+    if k == K"parameters" || k == K"tuple" || k == K"braces"
+        kids = child_nodes(a)
+        kids === nothing && return
+        for c in kids; _argname!(names, c); end
+    elseif k == K"::"
+        kk = child_nodes(a)
+        (kk === nothing || length(kk) < 2) && return   # `::T` binds nothing; `x::T` names x
+        _argname!(names, kk[1])
+    elseif k == K"<:" || k == K">:"
+        kk = child_nodes(a)
+        (kk === nothing || isempty(kk)) && return
+        _argname!(names, kk[1])
+    elseif k == K"=" || k == K"..."
         kk = child_nodes(a)
         (kk === nothing || isempty(kk)) || _argname!(names, kk[1])
     elseif a.val isa Symbol
@@ -79,11 +89,26 @@ function _argname!(names, a)
     end
 end
 
-function sig_argnames(sig)
+# Type variables on `where` clauses, including nested and bounded (`T<:Integer`) forms.
+function where_vars!(names, sig)
     kd = JS.kind(sig)
-    (kd == K"where" || kd == K"::") && return sig_argnames(child_nodes(sig)[1])
-    kd == K"call" || return Symbol[]
+    kd == K"::" && return where_vars!(names, child_nodes(sig)[1])
+    kd == K"where" || return
+    kids = child_nodes(sig)
+    kids === nothing && return
+    where_vars!(names, kids[1])
+    for v in kids[2:end]; _argname!(names, v); end
+end
+
+function sig_argnames(sig)
     names = Symbol[]
+    where_vars!(names, sig)
+    kd = JS.kind(sig)
+    while kd == K"where" || kd == K"::"
+        sig = child_nodes(sig)[1]
+        kd = JS.kind(sig)
+    end
+    kd == K"call" || return names
     for a in child_nodes(sig)[2:end]; _argname!(names, a); end
     names
 end
@@ -156,7 +181,39 @@ function tuple_tail_slots(body)
     length(slots)
 end
 
-# One method's body refs, minus names that method binds.
+# Default RHS refs in signature order: positionals, then keyword `parameters`.
+# Each value is filtered by where-typevars plus the names of arguments to its left.
+function absorb_defaults!(fs, target, sig, depth)
+    prefix = Symbol[]
+    where_vars!(prefix, sig)
+    kd = JS.kind(sig)
+    while kd == K"where" || kd == K"::"
+        sig = child_nodes(sig)[1]
+        kd = JS.kind(sig)
+    end
+    kd == K"call" || return
+    for a in child_nodes(sig)[2:end]
+        args = JS.kind(a) == K"parameters" ? child_nodes(a) : (a,)
+        args === nothing && continue
+        for arg in args
+            if JS.kind(arg) == K"="
+                kids = child_nodes(arg)
+                if kids !== nothing && length(kids) >= 2
+                    owned = fs.refs[target]
+                    found = Set{Symbol}()
+                    fs.refs[target] = found
+                    walk_defs!(fs, kids[2], depth, target)
+                    setdiff!(found, prefix)
+                    fs.refs[target] = owned
+                    union!(owned, found)
+                end
+            end
+            _argname!(prefix, arg)
+        end
+    end
+end
+
+# Body refs minus this method's bindings, union default-value refs.
 function absorb_method!(fs, target, sig, body, depth)
     owned = get!(fs.refs, target, Set{Symbol}())
     method_refs = Set{Symbol}()
@@ -165,6 +222,7 @@ function absorb_method!(fs, target, sig, body, depth)
     setdiff!(method_refs, method_bound(sig, body))
     fs.refs[target] = owned
     union!(owned, method_refs)
+    absorb_defaults!(fs, target, sig, depth)
 end
 
 # depth counts function-def nesting; only defs at depth 0 are top-level (a local closure's def is not).
