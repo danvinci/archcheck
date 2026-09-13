@@ -750,6 +750,108 @@ end
         @test isempty(check_corpus(index))                  # both declared, so neither is a hole
     end
 
+    # a literal include outside the mapped directory is still indexed under the module that executes it
+    mktempdir() do dir
+        geometry = joinpath(dir, "geometry")
+        mkpath(geometry)
+        write(joinpath(geometry, "Geometry.jl"),
+              "module Geometry\ninclude(\"early.jl\")\ninclude(\"late.jl\")\ninclude(\"../shared.jl\")\nend\n")
+        write(joinpath(geometry, "early.jl"), "struct Shape end\nBase.length(shape::Shape) = late_helper()\n")
+        write(joinpath(geometry, "late.jl"), "late_helper() = 4\n")
+        write(joinpath(dir, "shared.jl"), "shared_helper() = late_helper()\n")
+        rank = Dict(:Geometry => 1)
+        dir2mod = Dict("geometry" => :Geometry)
+        index = build_source_index(dir, rank, dir2mod)
+        @test any(f -> f.name == "shared.jl" && f.mod === :Geometry && f.filerank == 3, index.files)
+        @test file_rank(geometry)["../shared.jl"] == 3
+        @test isempty(index.missing) && isempty(index.nonliteral) && isempty(index.unparsed)
+        @test isempty(check_corpus(index))
+    end
+
+    # a reference from an earlier file to an outside include is a file backedge on the real paths
+    mktempdir() do dir
+        geometry = joinpath(dir, "geometry")
+        mkpath(geometry)
+        write(joinpath(geometry, "Geometry.jl"), "include(\"early.jl\")\ninclude(\"../shared.jl\")\n")
+        write(joinpath(geometry, "early.jl"), "climb() = shared_helper()")
+        write(joinpath(dir, "shared.jl"), "shared_helper() = 1")
+        rank = Dict(:Geometry => 1)
+        dir2mod = Dict("geometry" => :Geometry)
+        index = build_source_index(dir, rank, dir2mod)
+        graph = build_call_graph(index, :Geometry)
+        @test endswith(graph.files[:shared_helper], "shared.jl")
+        back = only(check_file_backedges(graph))
+        @test back.kind === :file_backedge
+        @test endswith(back.file, "early.jl") && endswith(back.symbol, "shared.jl")
+        @test ev(back, :via) == "climb" && ev(back, :include_order) == "1->2"
+    end
+
+    # missing, dynamic, and unparsed includes outside the mapped directory still report
+    mktempdir() do dir
+        geometry = joinpath(dir, "geometry")
+        mkpath(geometry)
+        write(joinpath(geometry, "Geometry.jl"),
+              "include(\"../missing.jl\")\ninclude(joinpath(@__DIR__, \"../dyn.jl\"))\ninclude(\"../bad.jl\")\n")
+        write(joinpath(dir, "bad.jl"), "function wrecked(x\n")
+        rank = Dict(:Geometry => 1)
+        dir2mod = Dict("geometry" => :Geometry)
+        index = build_source_index(dir, rank, dir2mod)
+        corpus = check_corpus(index)
+        @test any(f -> f.kind === :missing_include && f.symbol == "../missing.jl", corpus)
+        @test any(f -> f.kind === :nonliteral_include && endswith(f.file, "Geometry.jl"), corpus)
+        @test any(f -> f.kind === :unparsed && endswith(f.file, "bad.jl"), corpus)
+        @test !any(f -> f.name == "bad.jl", index.files)
+    end
+
+    # a cross-directory include owns the file under the module that executes it
+    mktempdir() do dir
+        mkpath(joinpath(dir, "a"))
+        mkpath(joinpath(dir, "b"))
+        write(joinpath(dir, "a", "A.jl"), "include(\"../b/shared.jl\")")
+        write(joinpath(dir, "b", "B.jl"), "include(\"local.jl\")")
+        write(joinpath(dir, "b", "shared.jl"), "shared_helper() = 1")
+        write(joinpath(dir, "b", "local.jl"), "local_helper() = 1")
+        rank = Dict(:A => 1, :B => 2)
+        dir2mod = Dict("a" => :A, "b" => :B)
+        index = build_source_index(dir, rank, dir2mod)
+        @test Set(f.mod for f in index.files if f.name == "shared.jl") == Set([:A])
+        @test any(f -> f.name == "local.jl" && f.mod === :B, index.files)
+    end
+
+    # the same source included by two modules keeps both execution contexts
+    mktempdir() do dir
+        mkpath(joinpath(dir, "a"))
+        mkpath(joinpath(dir, "b"))
+        write(joinpath(dir, "a", "A.jl"), "include(\"../b/shared.jl\")")
+        write(joinpath(dir, "b", "B.jl"), "include(\"shared.jl\")")
+        write(joinpath(dir, "b", "shared.jl"), "shared_helper() = 1")
+        rank = Dict(:A => 1, :B => 2)
+        dir2mod = Dict("a" => :A, "b" => :B)
+        index = build_source_index(dir, rank, dir2mod)
+        @test Set(f.mod for f in index.files if f.name == "shared.jl") == Set([:A, :B])
+    end
+
+    # same-line, begin, and split literal includes still load the named source
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"),
+              "include(\"early.jl\"); include(\"same.jl\")\nbegin\ninclude(\"inside.jl\")\nend\ninclude(\n\"split.jl\"\n)\n")
+        write(joinpath(dir, "m", "early.jl"), "climb() = split_helper()")
+        write(joinpath(dir, "m", "same.jl"), "same_helper() = 1")
+        write(joinpath(dir, "m", "inside.jl"), "inside_helper() = 1")
+        write(joinpath(dir, "m", "split.jl"), "split_helper() = 1")
+        rank = Dict(:M => 1)
+        dir2mod = Dict("m" => :M)
+        index = build_source_index(dir, rank, dir2mod)
+        names = Set(f.name for f in index.files)
+        @test all(n -> n in names, ("early.jl", "same.jl", "inside.jl", "split.jl"))
+        @test isempty(check_corpus(index))
+        graph = build_call_graph(index, :M)
+        @test endswith(graph.files[:split_helper], "split.jl")
+        back = only(check_file_backedges(graph))
+        @test endswith(back.file, "early.jl") && endswith(back.symbol, "split.jl")
+    end
+
     # the wrapper is the one file its module never includes - not a hole
     mktempdir() do dir
         mkpath(joinpath(dir, "m"))
@@ -839,6 +941,21 @@ end
         run(Cmd(`git add m/M.jl m/known.jl`; dir = dir))
         index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
         @test Set(f.name for f in index.files) == Set(["M.jl", "known.jl"])
+        @test isempty(check_corpus(index))
+    end
+
+    # an untracked file the wrapper includes is still indexed under that module
+    mktempdir() do dir
+        run(Cmd(`git init -q`; dir = dir))
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"known.jl\")\ninclude(\"../shared.jl\")")
+        write(joinpath(dir, "m", "known.jl"), "a() = 1")
+        write(joinpath(dir, "shared.jl"), "b() = 2")
+        run(Cmd(`git add m/M.jl m/known.jl`; dir = dir))
+        rank = Dict(:M => 1)
+        dir2mod = Dict("m" => :M)
+        index = build_source_index(dir, rank, dir2mod)
+        @test any(f -> f.name == "shared.jl" && f.mod === :M && f.filerank == 2, index.files)
         @test isempty(check_corpus(index))
     end
 

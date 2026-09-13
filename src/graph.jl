@@ -1,5 +1,4 @@
-# The one pass over src/: cross-module references, the include-order ranks at both zooms, and where
-# every def lives.
+# Shared source index: module references, include-order ranks and definition sites.
 struct ModRef
     from::Symbol
     to::Symbol
@@ -18,9 +17,13 @@ end
 # <Domain>.jl ranks files.
 function include_stmts(entry_path::AbstractString)
     stmts = Tuple{String,Int}[]
-    for (line, text) in enumerate(eachline(entry_path))
-        m = match(r"^\s*include\(\"([^\"]+)\"\)", text)
-        isnothing(m) || push!(stmts, (m.captures[1], line))
+    source = read(entry_path, String)
+    tree = parse_file(source, entry_path)
+    isnothing(tree) && return stmts
+    walk_include_calls!(tree) do arg, line
+        spec = static_string(arg)
+        isnothing(spec) && return
+        push!(stmts, (spec, line))
     end
     stmts
 end
@@ -178,7 +181,7 @@ struct FileNode
     scan::FileScan    # this file's defs and the names each references
 end
 
-# src/ and the entry dirs, parsed once. Every check reads a slice; nothing re-walks the tree.
+# src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
 struct SourceIndex
     repo::String                            # the root every path below is relative to
     rank::Dict{Symbol,Int}                  # module -> package-spine include position
@@ -240,28 +243,60 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
             end
         end
     end
+    indexed = Set{Tuple{Symbol,String}}()
+    parsed = Set{String}()
+    function add_file!(owner, path)
+        path = normpath(path)
+        (owner, path) in indexed && return
+        push!(indexed, (owner, path))
+        push!(parsed, path)
+        rel = relpath(path, repo)
+        source = read(path, String)
+        tree = parse_file(source, rel)
+        if isnothing(tree)
+            push!(unparsed, (owner, rel))
+            return
+        end
+        collect_includes!(owner, path, rel, tree)
+        walk_modrefs!(refs, owner, rel, known, tree)
+        entry = get(wrappers, owner, nothing)
+        iswrapper = !isnothing(entry) && normpath(entry) == path
+        inmod = relpath(path, moddirs[owner])
+        filerank = get(franks[owner], inmod, 0)
+        modrank = get(rank, owner, 0)
+        name = basename(path)
+        scan = scan_tree(tree)
+        push!(nodes, FileNode(owner, rel, name, modrank, filerank, iswrapper, scan))
+    end
+    # Ranked includes are module-owned even when they sit outside the mapped directory or git tree.
+    for (mod, order) in franks
+        moddir = moddirs[mod]
+        for rel in keys(order)
+            target = normpath(joinpath(moddir, rel))
+            if isfile(target)
+                add_file!(mod, target)
+            end
+        end
+        entry = get(wrappers, mod, nothing)
+        if !isnothing(entry) && isfile(entry)
+            add_file!(mod, entry)
+        end
+    end
     for (root, _, files) in walkdir(src_root), fn in files
         endswith(fn, ".jl") || continue
         path = joinpath(root, fn)
-        isnothing(tracked) || normpath(path) in tracked || continue   # untracked = not the shipped corpus
-        mod = module_of(path, src_root, dir2mod)
-        rel = relpath(path, repo)
-        if isnothing(mod)
-            tree = parse_file(read(path, String), rel)
-            tree === nothing || collect_includes!(Symbol(first(splitext(fn))), path, rel, tree)
+        abs_path = normpath(path)
+        abs_path in parsed && continue
+        isnothing(tracked) || abs_path in tracked || continue
+        owner = module_of(path, src_root, dir2mod)
+        if isnothing(owner)
+            rel = relpath(path, repo)
+            source = read(path, String)
+            tree = parse_file(source, rel)
+            isnothing(tree) || collect_includes!(Symbol(first(splitext(fn))), path, rel, tree)
             continue
         end
-        tree = parse_file(read(path, String), rel)
-        if tree === nothing
-            push!(unparsed, (mod, rel))
-            continue
-        end
-        collect_includes!(mod, path, rel, tree)
-        walk_modrefs!(refs, mod, rel, known, tree)              # cross-module edges
-        iswrapper = path == get(wrappers, mod, "")
-        inmod = relpath(path, moddirs[mod])      # the key file ranks are held against
-        push!(nodes, FileNode(mod, rel, fn, get(rank, mod, 0), get(franks[mod], inmod, 0),
-                              iswrapper, scan_tree(tree)))   # defs + body refs
+        add_file!(owner, abs_path)
     end
 
     # Entry dirs are parsed but never loaded: a parse failure here shrinks `external`, turning defs used
