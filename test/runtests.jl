@@ -262,6 +262,41 @@ end
     end
 end
 
+@testset "qualified methods retain their file dependencies" begin
+    method_name = Symbol("Base.getindex")
+    source = """
+        function Base.getindex(shape::Shape{T}, helper, index = default_index()) where {T}
+            helper(index)
+            nested(value) = leaf(value)
+            nested(shape)
+        end
+        """
+    scan = scan_defs(source)
+    @test get(scan.refs, method_name, Set{Symbol}()) == Set([:default_index, :leaf])
+    @test isempty(scan.funcs)
+
+    mktempdir() do root
+        module_dir = joinpath(root, "m")
+        mkpath(module_dir)
+        wrapper = joinpath(module_dir, "M.jl")
+        write(wrapper, "include(\"types.jl\")\ninclude(\"extension.jl\")\ninclude(\"late.jl\")\n")
+        write(joinpath(module_dir, "types.jl"), "struct Shape{T} end\n")
+        write(joinpath(module_dir, "extension.jl"), source)
+        write(joinpath(module_dir, "late.jl"), "default_index() = 1\nleaf(value) = value\nhelper() = 2\n")
+        rank = Dict(:M => 1)
+        dir2mod = Dict("m" => :M)
+        index = build_source_index(root, rank, dir2mod)
+        graph = build_call_graph(index, :M)
+        found = check_file_backedges(graph)
+        edges = Set((basename(f.file), basename(f.symbol)) for f in found)
+        @test edges == Set([("extension.jl", "late.jl")])
+        @test !haskey(graph.files, method_name)
+        @test isempty(graph.calls[:Shape])
+        dead = Set(f.symbol for f in check_dead_code_static(index))
+        @test dead == Set(["helper"])
+    end
+end
+
 @testset "intra-module call graph (static)" begin
     # per-def calls, including a callee inside a closure (the reflection blind spot)
     sc = scan_defs("top() = mid() + leaf()\nmid() = leaf()\nbuild() = map(x -> deck(x), z)")
@@ -372,7 +407,7 @@ end
     @test :helper in where_call.refs[:Law]
     @test !(:law in where_call.refs[:Law]) && !(:T in where_call.refs[:Law])
     foreign = scan_defs("function Base.getindex(a::Law, i)\n    helper()\nend\nhelper() = 1")
-    @test :helper in foreign.modrefs
+    @test :helper in foreign.refs[Symbol("Base.getindex")]
     @test !(:getindex in foreign.funcs)
     @test !haskey(foreign.refs, :Law) || !(:helper in foreign.refs[:Law])
 

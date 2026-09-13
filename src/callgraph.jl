@@ -42,9 +42,9 @@ function build_call_graph(index, mod::Symbol)
     refs = Dict(name => Set{Symbol}() for name in known)
     site_refs = Dict{Tuple{Symbol,String},Set{Symbol}}()
     for f in members, (name, used) in f.scan.refs
+        union!(get!(site_refs, (name, f.path), Set{Symbol}()), used)
         name in known || continue
         union!(refs[name], used)
-        union!(get!(site_refs, (name, f.path), Set{Symbol}()), used)
     end
     calls = Dict(n => Set(c for c in refs[n] if c in known && c != n) for n in keys(refs))
     funcs = [n for n in keys(refs) if !(n in types)]

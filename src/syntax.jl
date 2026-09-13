@@ -39,6 +39,18 @@ function sig_name(sig)
     JS.kind(head) == K"curly" ? type_name(head) : nothing   # S{T}(x) names S
 end
 
+# A qualified generic identifies a method site without declaring a locally owned function.
+function qualified_method_name(sig)
+    kd = JS.kind(sig)
+    if kd == K"where" || kd == K"::"
+        return qualified_method_name(child_nodes(sig)[1])
+    end
+    kd == K"call" || return nothing
+    head = first(child_nodes(sig))
+    JS.kind(head) == K"." || return nothing
+    Symbol(JS.sourcetext(head))
+end
+
 # Receiver type of `(x::T)(...)` and `(::T)(...)`.
 function callable_receiver(sig)
     kd = JS.kind(sig)
@@ -57,7 +69,7 @@ end
 struct FileScan
     funcs::Vector{Symbol}
     types::Vector{Symbol}
-    refs::Dict{Symbol,Set{Symbol}}   # def (function or struct) -> names it references (a struct: field types, supertype, inner-ctor bodies)
+    refs::Dict{Symbol,Set{Symbol}}   # definition or qualified method -> referenced names; structs include field types and constructors
     modrefs::Set{Symbol}             # names referenced outside any function (module-level code, field names)
     line::Dict{Symbol,Int}           # def-name -> source line
     argtypes::Dict{Symbol,Vector{Union{Symbol,Nothing}}}   # function -> positional arg declared-types (last method wins)
@@ -484,8 +496,11 @@ function walk_defs!(fs, n, depth, current)
         end
         if length(kids) >= 2
             receiver = callable_receiver(kids[1])
+            qualified = qualified_method_name(kids[1])
             if top
                 absorb_method!(fs, nm, kids[1], kids[2], depth + 1)
+            elseif !isnothing(qualified)
+                absorb_method!(fs, qualified, kids[1], kids[2], depth + 1)
             elseif receiver !== nothing
                 absorb_method!(fs, receiver, kids[1], kids[2], depth + 1)
             elseif current !== nothing && current in fs.types
