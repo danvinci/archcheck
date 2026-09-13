@@ -43,6 +43,16 @@ module FIface
     present() = 1
     hidden() = 2
 end
+# shown is exported, offered is public-unexported, hidden is private
+module FPub
+    export shown
+    public offered
+    shown() = 1
+    offered() = 2
+    hidden() = 3
+    value = 4
+    struct Secret end
+end
 # abstract-field corpus: closed storage vs every open-dispatch shape the check names
 module FAbs
     abstract type Abs end
@@ -1155,5 +1165,33 @@ end
         write(joinpath(entry, "probe.jl"),
               "# FIface.hidden()\ns = \"FIface.hidden()\"\nx = 1  # FIface.hidden\n")
         @test isempty(check_reaches_internal(index, [FIface]; entry_dirs = [entry]))
+    end
+
+    # public-unexported names are the declared interface; aliases and quotes follow the same rule
+    mktempdir() do dir
+        mkpath(joinpath(dir, "m"))
+        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")")
+        write(joinpath(dir, "m", "a.jl"), "g() = 1")
+        rank = Dict(:M => 1)
+        dir2mod = Dict("m" => :M)
+        index = build_source_index(dir, rank, dir2mod)
+        entry = mktempdir()
+        probe = joinpath(entry, "probe.jl")
+        write(probe,
+              "const G = Main.FPub\nG.hidden()\nG.offered()\nFPub.hidden()\nFPub.offered()\nFPub.shown()\nMain.FPub.hidden()\nfunction wrap()\n    G = 1\n    G.hidden()\nend\nq = :(FPub.hidden())\nobj = (FPub = (hidden = 1,),)\nobj.FPub.hidden\n")
+        found = check_reaches_internal(index, [FPub]; entry_dirs = [entry])
+        @test Set(f.symbol for f in found) == Set(["FPub.hidden"])
+        @test length(found) == 3
+        write(probe, """
+            const G = Main.FPub
+            typed(x::G.Secret)::G.Secret = x
+            bounded(x::T) where {T<:G.Secret} = x
+            G.value = 4
+            G.hidden(x) = x
+            lambda = (x::G.Secret) -> x
+            """)
+        found = check_reaches_internal(index, [FPub]; entry_dirs = [entry, entry])
+        @test sort([f.symbol for f in found]) ==
+              [fill("FPub.Secret", 4); "FPub.hidden"; "FPub.value"]
     end
 end
