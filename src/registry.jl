@@ -39,6 +39,9 @@ struct ReaderSet <: Check
     super::Type     # concrete subtypes of this type must answer each reader
     required::Tuple # (reader, extra argument types after the subject) pairs
 end
+struct ScanSeeds <: Check
+    directories::Tuple # source directories relative to the repository root, or absolute paths
+end
 
 run(::Corpus, ctx) = check_corpus(ctx.index)
 run(::ModuleBackEdges, ctx) = check_backedges(ctx.graph)
@@ -54,6 +57,7 @@ run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.mods; repo = ctx.index.repo
 run(::AbstractFields, ctx) = check_abstract_fields(ctx.mods, ctx.sites)
 run(check::ReaderSet, ctx) =
     check_reader_set(ctx.mods, check.super, check.required; sites = ctx.sites)
+run(check::ScanSeeds, ctx) = check_scan_seeds(ctx.index; directories = check.directories)
 
 run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
 run(::FileSinkable, ctx) = collect_modules(cg -> check_file_sinkable(cg, ctx.sites), ctx)
