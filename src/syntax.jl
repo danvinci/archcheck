@@ -605,3 +605,24 @@ function call_args(n)
     kids === nothing && return Any[]
     [c for c in kids[2:end] if JS.kind(c) != K"parameters"]
 end
+
+# Visits every node with the name of the nearest enclosing top-level def ("" at module scope):
+# `visit(node, enclosing_name)` answers which function an expression sits inside.
+function walk_with_enclosing(visit, n, current = Symbol(""))
+    kids = child_nodes(n)
+    k = JS.kind(n)
+    if k == K"function" || (k == K"=" && kids !== nothing && !isempty(kids) && is_sig(kids[1]))
+        nm = sig_name(kids[1])
+        body = nm === nothing ? current : nm
+        kids === nothing && return
+        for c in kids
+            walk_with_enclosing(visit, c, body)
+        end
+        return
+    end
+    visit(n, current)
+    kids === nothing && return
+    for c in kids
+        walk_with_enclosing(visit, c, current)
+    end
+end
