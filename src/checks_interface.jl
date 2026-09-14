@@ -176,3 +176,40 @@ function check_reaches_internal(index::SourceIndex, mods; entry_dirs)
     end
     findings
 end
+
+# Every concrete subtype of `super` answers each (reader, extra-argument types) pair, including inherited methods.
+function check_reader_set(mods, super::Type, required; sites = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}())
+    findings = Finding[]
+    seen = Set{Type}()
+    for M in mods, n in names(M; all = true)
+        is_module = n === nameof(M)
+        is_internal = startswith(string(n), "#")
+        (is_module || is_internal) && continue
+        isdefined(M, n) || continue
+        T = getfield(M, n)
+        T isa Type || continue
+        unwrapped = Base.unwrap_unionall(T)
+        unwrapped isa DataType || continue
+        isabstracttype(unwrapped) && continue
+        family = unwrapped.name.wrapper
+        family <: super || continue
+        family == super && continue
+        family in seen && continue
+        push!(seen, family)
+        owner_mod = parentmodule(unwrapped)
+        type_name = nameof(unwrapped)
+        file, line = site_of(sites, nameof(owner_mod), type_name, ("", 0))
+        for (reader, extras) in required
+            sig = Tuple{family, extras.parameters...}
+            hasmethod(reader, sig) && continue
+            reader_name = nameof(reader)
+            symbol = "$(type_name).$(reader_name)"
+            found = Finding(nameof(owner_mod), :reader_set, file, symbol, line,
+                  "the type answers no method matching this reader",
+                  [:reader => string(reader_name)];
+                  tier = :structure)
+            push!(findings, found)
+        end
+    end
+    findings
+end
