@@ -1536,15 +1536,18 @@ end
     checks = (ArchCheck.ForeignFields(),)
     findings = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
     reads = Set((string(f.mod), f.symbol) for f in findings)
-    @test reads == Set([("Geo.Cuts", "Geo.Curves.OpenBox.held")])
+    # Ring is a bits value Cuts keeps internal, so its fields stay closed
+    @test reads == Set([("Geo.Cuts", "Geo.Curves.OpenBox.held"), ("Hi", "Geo.Cuts.Ring.radius")])
     @test all(f -> tier(f) === :structure, findings)
 
-    # Hi reads a bits value (Ring) and a contract type (Record): the analysis sees both, the rule opens both
+    # Hi also reads a declared bits value (Span) and a contract type (Record): the analysis sees them, the rule
+    # opens them
     hi_path = joinpath(pkgdir(Nested), "src", "hi", "Hi.jl")
     hi_tree = parse_file(read(hi_path, String), hi_path)
     hi_reads = ArchCheck.field_reads(hi_tree, Nested.Hi).reads
     read_names = Set((nameof(r.type), r.field) for r in hi_reads)
-    @test read_names == Set([(:Ring, :radius), (:Record, :values)])
+    @test read_names == Set([(:Ring, :radius), (:Record, :values), (:Span, :hi), (:Span, :lo)])
     @test ArchCheck.is_bits_value(Nested.Geo.Cuts.Ring)
+    @test ArchCheck.is_bits_value(Nested.Low.Span)
     @test !ArchCheck.is_bits_value(Nested.Geo.Curves.OpenBox)
 end

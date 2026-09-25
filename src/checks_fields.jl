@@ -169,8 +169,8 @@ end
 
 is_contract(owner) = owner === CONTRACTS_MODULE || startswith(string(owner), "$CONTRACTS_MODULE.")
 
-# A bits value: immutable, and bits once its type parameters are. Such a struct is its fields; no reader could
-# hide a representation behind them.
+# A bits value: immutable, and bits once its type parameters are. Such a struct is its fields, so an owner that
+# declares the type declares them too.
 function is_bits_value(T, seen = Set{DataType}())
     isbitstype(T) && return true
     S = Base.unwrap_unionall(T)
@@ -180,8 +180,12 @@ function is_bits_value(T, seen = Set{DataType}())
     all(F -> F isa TypeVar || is_bits_value(F, seen), fieldtypes(S))
 end
 
-# Reads a caller may make of another module's struct: contract types, and bits values.
-is_open_read(owner, S) = is_contract(owner) || is_bits_value(S)
+# Reads a caller may make of another module's struct: contract types, and bits values their owner declares.
+function is_open_read(owner, S::DataType)
+    is_contract(owner) && return true
+    declared = Base.ispublic(parentmodule(S), nameof(S))
+    declared && is_bits_value(S)
+end
 
 # The read's standing: a declared field of a concrete struct, a property the struct does not declare, or a read
 # through an abstract annotation, which no declaration settles.

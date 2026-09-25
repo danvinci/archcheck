@@ -17,5 +17,6 @@ function ring_radius(ring::Geo.Cuts.Ring)
 end
 
 record_values(record::Record) = record.values
+span_width(span::Low.Span) = span.hi - span.lo
 
 end # module Hi
