@@ -119,14 +119,17 @@ is_type_interface(n, argtypes, ctypes) =
     n in ctypes ||
     (haskey(argtypes, n) && !isempty(argtypes[n]) && all(t -> t !== nothing && t in ctypes, argtypes[n]))
 
+# The package's contracts module: seam types and their intrinsic interface, read field by field across modules.
+const CONTRACTS_MODULE = :Contracts
+
 function check_contracts_logic(index)
-    files = files_of(index, :Contracts)
+    files = files_of(index, CONTRACTS_MODULE)
     ctypes = Set{Symbol}(t for f in files for t in f.scan.types)   # every type across the contracts dir
     findings = Finding[]
     for f in files, name in unique(f.scan.funcs)
         is_type_interface(name, f.scan.argtypes, ctypes) && continue
         line = f.scan.line[name]
-        push!(findings, Finding(:Contracts, :contracts_logic, f.path, string(name), line,
+        push!(findings, Finding(CONTRACTS_MODULE, :contracts_logic, f.path, string(name), line,
                                 "a function in contracts/, which holds types only"))
     end
     findings

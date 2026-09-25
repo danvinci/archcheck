@@ -11,6 +11,7 @@ include("checks_reflect.jl")
 include("callgraph.jl")
 include("checks_file.jl")
 include("checks_interface.jl")
+include("checks_fields.jl")
 include("registry.jl")
 include("checks_opt.jl")
 include("gate.jl")
@@ -30,7 +31,8 @@ export check_file_sinkable, check_file_backedges, check_extract_candidates
 export check_tuple_returns
 export scan_defs, scan_tree, parse_file, check_dead_code_static, check_scan_seeds
 export check_blanket_exports, check_stale_exports, check_reaches_internal, check_reader_set
-export check_private_imports, check_module_corpus
+export check_private_imports, check_module_corpus, check_declared_names, check_declared_modules
+export check_foreign_fields
 export check_abstract_fields, check_boxed_captures, is_open_field
 export OptEntry, OptAnalysis, check_opt_entries, jet_loaded
 

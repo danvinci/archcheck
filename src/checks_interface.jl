@@ -176,11 +176,56 @@ end
 function check_private_imports(index::SourceIndex)
     findings = Finding[]
     for ref in index.refs, name in ref.names
+        ref.via === :import || ref.via === :using || continue
         startswith(string(name), "_") || continue
         symbol = "$(ref.to).$name"
         detail = "imports a name its module marks private with a leading underscore"
         evidence = [:via => string(ref.via)]
         push!(findings, Finding(ref.from, :private_import, ref.file, symbol, ref.line, detail, evidence))
+    end
+    findings
+end
+
+# undeclared-name: a reference to a name the module it is written through neither exports nor declares public.
+# A re-export declares the name there, so a module that only re-exports serves its callers.
+function check_declared_names(index::SourceIndex, mods)
+    by_key = Dict(module_key(M) => M for M in mods)
+    key_of = Dict(M => module_key(M) for M in mods)
+    findings = Finding[]
+    for ref in index.refs, name in ref.names
+        through = get(by_key, ref.to, nothing)
+        isnothing(through) && continue
+        isdefined(through, name) || continue
+        Base.ispublic(through, name) && continue
+        home = Base.binding_module(through, name)
+        owner = get(key_of, home, join(fullname(home), "."))
+        symbol = "$(ref.to).$name"
+        detail = "reaches a name the module it names neither exports nor declares public"
+        evidence = [:via => string(ref.via), :owner => string(owner)]
+        push!(findings, Finding(ref.from, :undeclared_name, ref.file, symbol, ref.line, detail, evidence))
+    end
+    findings
+end
+
+# undeclared-module: a reference to a module its source's wrapper does not name in a using or import line.
+# Qualified paths count, so the wrapper's using and import lines list every module the module reaches.
+function check_declared_modules(index::SourceIndex)
+    wrappers = Dict(f.mod => f.path for f in index.files if is_wrapper(f))
+    declared = Dict{Symbol,Set{Symbol}}()
+    for ref in index.refs
+        is_clause = ref.via === :using || ref.via === :import
+        is_clause && get(wrappers, ref.from, "") == ref.file || continue
+        push!(get!(Set{Symbol}, declared, ref.from), ref.to)
+    end
+    findings = Finding[]
+    for ref in index.refs
+        haskey(wrappers, ref.from) || continue
+        named = get(declared, ref.from, Set{Symbol}())
+        ref.to in named && continue
+        target = string(ref.to)
+        detail = "reaches a module its wrapper does not name in a using or import line"
+        evidence = [:via => string(ref.via)]
+        push!(findings, Finding(ref.from, :undeclared_module, ref.file, target, ref.line, detail, evidence))
     end
     findings
 end

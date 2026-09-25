@@ -1448,7 +1448,7 @@ end
     @test blocked
     back = only(r for r in records if r["kind"] == "back_edge")
     @test back["module"] == "Geo.Curves" && back["symbol"] == "Geo.Cuts"
-    @test back["evidence"]["include_order"] == "2.1->2.2"
+    @test back["evidence"]["include_order"] == "3.1->3.2"
     @test !any(r -> r["kind"] == "unranked_module", records)
 
     # file zoom: a submodule's files rank by its own wrapper
@@ -1488,4 +1488,63 @@ end
     refs = scan_modrefs(source, :Bb, "x.jl", Set([:Aa, :Bb]))
     @test Set(name for r in refs for name in r.names) == Set([:_hidden, :open, :_tail])
     @test all(r -> r.to === :Aa, refs)
+end
+
+@testset "declared names: a reference reaches only what the module it names declares" begin
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    checks = (ArchCheck.DeclaredNames(), ArchCheck.PrivateImports())
+    findings = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
+    undeclared = filter(f -> f.kind === :undeclared_name, findings)
+    # a name reached through Geo, which declares it for its callers, is declared along the written path;
+    # Geo's own import of it from Curves, which keeps it private, is not
+    @test Set((string(f.mod), f.symbol, ev(f, :via)) for f in undeclared) == Set([
+        ("Geo", "Geo.Curves.calls_later", "import"),
+        ("Geo.Curves", "Low._lowpriv", "import"),
+        ("Geo.Cuts", "Geo.Curves._secret", "using"),
+        ("Geo.Curves", "Geo.Cuts.cut_only", "qualified"),
+        ("Hi", "Geo.Curves._secret", "qualified"),
+        ("Hi", "Geo.Cuts.Ring", "qualified"),
+        ("Hi", "Low._lowpriv", "extends"),
+    ])
+    @test !any(isblocking, undeclared)
+    # an underscore import is one case of an undeclared name
+    private = filter(f -> f.kind === :private_import, findings)
+    @test !isempty(private)
+    @test all(p -> any(u -> u.file == p.file && u.line == p.line, undeclared), private)
+end
+
+@testset "declared modules: a module reaches only the modules its wrapper names" begin
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    checks = (ArchCheck.DeclaredModules(),)
+    findings = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
+    reached = Set((string(f.mod), f.symbol, ev(f, :via)) for f in findings)
+    @test reached == Set([
+        ("Geo.Curves", "Geo.Cuts", "qualified"),
+        ("Hi", "Geo.Curves", "qualified"),
+        ("Hi", "Geo.Curves", "extends"),
+        ("Hi", "Geo.Cuts", "qualified"),
+    ])
+
+    # a path opening with the package's own name reaches the module below it
+    source = "x = Pkg.Aa.f()\nimport ..Pkg\n"
+    refs = scan_modrefs(source, :Bb, "x.jl", Set([:Aa, :Bb]); root = :Pkg)
+    @test Set((r.to, r.via) for r in refs) == Set([(:Aa, :qualified), (:Pkg, :import)])
+end
+
+@testset "foreign fields: a field read on another module's struct" begin
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    checks = (ArchCheck.ForeignFields(),)
+    findings = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
+    reads = Set((string(f.mod), f.symbol) for f in findings)
+    @test reads == Set([("Geo.Cuts", "Geo.Curves.OpenBox.held")])
+    @test all(f -> tier(f) === :structure, findings)
+
+    # Hi reads a bits value (Ring) and a contract type (Record): the analysis sees both, the rule opens both
+    hi_path = joinpath(pkgdir(Nested), "src", "hi", "Hi.jl")
+    hi_tree = parse_file(read(hi_path, String), hi_path)
+    hi_reads = ArchCheck.field_reads(hi_tree, Nested.Hi).reads
+    read_names = Set((nameof(r.type), r.field) for r in hi_reads)
+    @test read_names == Set([(:Ring, :radius), (:Record, :values)])
+    @test ArchCheck.is_bits_value(Nested.Geo.Cuts.Ring)
+    @test !ArchCheck.is_bits_value(Nested.Geo.Curves.OpenBox)
 end

@@ -4,8 +4,8 @@ struct ModRef
     to::Symbol
     file::String     # repo-relative
     line::Int
-    via::Symbol      # :using | :import | :qualified
-    names::Vector{Symbol}   # names an import clause binds from `to`; empty for a whole module or a qualified name
+    via::Symbol      # :using | :import | :qualified | :extends (a method on `to`'s function)
+    names::Vector{Symbol}   # names reached in `to`: an import list, or the name after a qualified path; empty for a whole module
 end
 ModRef(from, to, file, line, via) = ModRef(from, to, file, line, via, Symbol[])
 
@@ -180,11 +180,23 @@ function module_of(path, src_root, dir2mod)
     nothing
 end
 
+# The names module paths resolve against.
+struct ModuleNames
+    known::Set{Symbol}               # every project module, by dotted key below the package
+    root::Union{Symbol,Nothing}      # the package's own name, which a path may open with; nothing when unknown
+end
+
 # The project module a name path reaches from `scope`, and how many names it spans. One leading dot opens in
 # `scope`, each more in its parent; lookup widens to the root, where `using ..Name` bindings point.
-function resolve_module(known, scope, path, dots)
+function resolve_module(modules::ModuleNames, scope, path, dots)
+    known = modules.known
     opening = max(length(scope) - (dots - 1), 0)
     for depth in opening:-1:0
+        if depth == 0 && first(path) === modules.root   # the package itself; its modules sit below it
+            length(path) == 1 && return modules.root, 1
+            inner, spanned = resolve_module(modules, Symbol[], path[2:end], 1)
+            return isnothing(inner) ? (modules.root, 1) : (inner, spanned + 1)
+        end
         segments = [scope[1:depth]; path[1]]
         key = Symbol(join(segments, "."))
         key in known || continue
@@ -230,12 +242,12 @@ function dotted_names(n)
 end
 
 # One using/import clause: the project module its path names and the names it binds from there. A path with
-# no leading dot names an outside package.
-function clause_ref!(refs, from, scope, file, line, known, clause, via)
+# no leading dot names an outside package, unless it opens with the package's own name.
+function clause_ref!(refs, from, scope, file, line, modules, clause, via)
     k = JS.kind(clause)
     if k == K"as"
         source = first(child_nodes(clause))
-        return clause_ref!(refs, from, scope, file, line, known, source, via)
+        return clause_ref!(refs, from, scope, file, line, modules, source, via)
     end
     path_node = clause
     listed = Symbol[]
@@ -250,15 +262,51 @@ function clause_ref!(refs, from, scope, file, line, known, clause, via)
     end
     JS.kind(path_node) == K"importpath" || return
     dots, path = importpath_parts(path_node)
-    (dots == 0 || isempty(path)) && return
-    to, spanned = resolve_module(known, scope, path, dots)
+    isempty(path) && return
+    dots == 0 && first(path) !== modules.root && return
+    to, spanned = resolve_module(modules, scope, path, dots)
     (isnothing(to) || to == from) && return
     tail = path[(spanned + 1):end]
     push!(refs, ModRef(from, to, file, line, via, [tail; listed]))
 end
 
+# A dotted name reaching a project module: the reference, with the first name past the module path.
+function qualified_ref(from, scope, file, line, modules, path, via)
+    to, spanned = resolve_module(modules, scope, path, 1)
+    (isnothing(to) || to == from) && return nothing
+    reached = path[(spanned + 1):min(spanned + 1, length(path))]
+    ModRef(from, to, file, line, via, reached)
+end
+
+# The call inside a signature, past `where` clauses and a return type.
+function signature_call(sig)
+    while JS.kind(sig) == K"where" || JS.kind(sig) == K"::"
+        sig = first(child_nodes(sig))
+    end
+    JS.kind(sig) == K"call" ? sig : nothing
+end
+
+# A signature's parts other than the method name: arguments, `where` bounds, return type.
+function walk_signature_rest!(refs, from, scope, file, modules, sig)
+    kids = child_nodes(sig)
+    kids === nothing && return
+    JS.kind(sig) == K"call" || walk_signature_rest!(refs, from, scope, file, modules, kids[1])
+    for c in kids[2:end]
+        walk_modrefs!(refs, from, scope, file, modules, c)
+    end
+end
+
+# A method whose name is qualified by a project module extends that module's function.
+function extension_ref(from, scope, file, line, modules, n)
+    call = signature_call(first(child_nodes(n)))
+    isnothing(call) && return nothing
+    path = dotted_names(first(child_nodes(call)))
+    (isnothing(path) || length(path) < 2) && return nothing
+    qualified_ref(from, scope, file, line, modules, path, :extends)
+end
+
 # `scope` is `from` split into its dotted segments, the frame every name in the file resolves in.
-function walk_modrefs!(refs, from, scope, file, known, n)
+function walk_modrefs!(refs, from, scope, file, modules, n)
     kids = child_nodes(n)
     kids === nothing && return
     k = JS.kind(n)
@@ -266,27 +314,38 @@ function walk_modrefs!(refs, from, scope, file, known, n)
     if k == K"using" || k == K"import"
         via = Symbol(string(k))
         for clause in kids
-            clause_ref!(refs, from, scope, file, line, known, clause, via)
+            clause_ref!(refs, from, scope, file, line, modules, clause, via)
         end
         return
     elseif k == K"."
         path = dotted_names(n)
         if !isnothing(path)
-            to, _ = resolve_module(known, scope, path, 1)
-            (isnothing(to) || to == from) || push!(refs, ModRef(from, to, file, line, :qualified))
+            ref = qualified_ref(from, scope, file, line, modules, path, :qualified)
+            isnothing(ref) || push!(refs, ref)
+            return
+        end
+    elseif is_method_form(n)
+        extension = extension_ref(from, scope, file, line, modules, n)
+        if !isnothing(extension)
+            push!(refs, extension)
+            walk_signature_rest!(refs, from, scope, file, modules, kids[1])
+            for c in kids[2:end]
+                walk_modrefs!(refs, from, scope, file, modules, c)
+            end
             return
         end
     end
     for c in kids
-        walk_modrefs!(refs, from, scope, file, known, c)
+        walk_modrefs!(refs, from, scope, file, modules, c)
     end
 end
 
-function scan_modrefs(src::AbstractString, from, file, known)
+function scan_modrefs(src::AbstractString, from, file, known; root = nothing)
     refs = ModRef[]
     tree = parse_file(src, file)
     tree === nothing && return refs
-    walk_modrefs!(refs, from, key_segments(from), file, known, tree)
+    modules = ModuleNames(Set{Symbol}(known), root)
+    walk_modrefs!(refs, from, key_segments(from), file, modules, tree)
     refs
 end
 
@@ -330,12 +389,12 @@ function tracked_files(dir::AbstractString)
     Set(normpath(joinpath(dir, line)) for line in lines if !isempty(line))
 end
 
-function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs = String[])
+function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs = String[], root = nothing)
     src_root = abspath(src_root)
     repo = dirname(src_root)
     tracked = tracked_files(src_root)
     ranks, dir2mod = nest_modules(src_root, rank, dir2mod)
-    known = Set(keys(ranks))
+    modules = ModuleNames(Set(keys(ranks)), root)
     franks = Dict{Symbol,Dict{String,Int}}()
     wrappers = Dict{Symbol,String}()   # module -> its entry file, the one file the module never includes
     moddirs = Dict{Symbol,String}()    # module -> its directory, the root its file ranks are keyed against
@@ -384,7 +443,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
             return
         end
         collect_includes!(owner, path, rel, tree)
-        walk_modrefs!(refs, owner, key_segments(owner), rel, known, tree)
+        walk_modrefs!(refs, owner, key_segments(owner), rel, modules, tree)
         entry = get(wrappers, owner, nothing)
         iswrapper = !isnothing(entry) && normpath(entry) == path
         inmod = relpath(path, moddirs[owner])

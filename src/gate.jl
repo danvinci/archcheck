@@ -18,7 +18,8 @@ function gate(pkg::Module;
     pkg_name = string(nameof(pkg))
     spine = joinpath(src, pkg_name * ".jl")
     rank, dir2mod = parse_spine_order(spine)
-    index = build_source_index(src, rank, dir2mod; entry_dirs)   # the one parse, src/ and entry dirs
+    root = nameof(pkg)
+    index = build_source_index(src, rank, dir2mod; entry_dirs, root)   # the one parse, src/ and entry dirs
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
     mods = [loaded_module(pkg, m) for m in ordered]
 

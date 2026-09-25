@@ -7,7 +7,7 @@ const ENFORCE_KINDS = (:unparsed, :missing_include, :nonliteral_include, :unrank
 # Kinds that name a violated architectural invariant rather than a placement or style preference: an
 # include order that is not a topological sort, a name nothing reaches.
 const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal,
-                         :private_import)
+                         :private_import, :undeclared_name, :undeclared_module, :foreign_field)
 
 function kind_tier(kind::Symbol)
     kind in ENFORCE_KINDS && return :enforce

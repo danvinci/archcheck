@@ -4,6 +4,8 @@ __precompile__(false)
 
 module Nested
 
+include("contracts/Contracts.jl")
+using .Contracts
 include("low/Low.jl")
 using .Low
 include("geo/Geo.jl")

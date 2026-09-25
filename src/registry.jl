@@ -43,6 +43,9 @@ end
 struct ScanSeeds <: Check
     directories::Tuple # source directories relative to the repository root, or absolute paths
 end
+struct DeclaredNames <: Check end
+struct DeclaredModules <: Check end
+struct ForeignFields <: Check end
 
 function run(::Corpus, ctx)
     files = check_corpus(ctx.index)
@@ -64,6 +67,9 @@ run(::AbstractFields, ctx) = check_abstract_fields(ctx.mods, ctx.sites)
 run(check::ReaderSet, ctx) =
     check_reader_set(ctx.mods, check.super, check.required; sites = ctx.sites)
 run(check::ScanSeeds, ctx) = check_scan_seeds(ctx.index; directories = check.directories)
+run(::DeclaredNames, ctx) = check_declared_names(ctx.index, ctx.mods)
+run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
+run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
 
 run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
 run(::FileSinkable, ctx) = collect_modules(cg -> check_file_sinkable(cg, ctx.sites), ctx)
@@ -98,6 +104,9 @@ const CHECKS = (
     StaleExports(),
     ReachesInternal(),
     PrivateImports(),
+    DeclaredNames(),
+    DeclaredModules(),
+    ForeignFields(),
     BoxedCaptures(),
     AbstractFields(),
 )
