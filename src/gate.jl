@@ -1,6 +1,14 @@
-# The gate a consumer calls: one parse of its src/, every check, a JSONL report, and a hard error on
-# any blocking finding. `pkg` is the loaded package module - its own directory locates src/ and the
-# spine file, and the reflection checks read its submodules.
+# The loaded module a dotted key names below the package.
+function loaded_module(pkg::Module, key::Symbol)
+    mod = pkg
+    for name in key_segments(key)
+        mod = getfield(mod, name)
+    end
+    mod
+end
+
+# The consumer's entry: one parse of `pkg`'s src/, every check, a JSONL report, and a hard error on any
+# blocking finding. The reflection checks read the package's modules at every depth.
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
@@ -12,7 +20,7 @@ function gate(pkg::Module;
     rank, dir2mod = parse_spine_order(spine)
     index = build_source_index(src, rank, dir2mod; entry_dirs)   # the one parse, src/ and entry dirs
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
-    mods = [getfield(pkg, m) for m in ordered]
+    mods = [loaded_module(pkg, m) for m in ordered]
 
     ctx = Context(index, mods; entry_dirs)
     findings = run_checks(ctx, checks)

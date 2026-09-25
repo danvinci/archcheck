@@ -1,12 +1,13 @@
 # Tiers, worst first. Enforce halts the run; structure is a broken invariant; advice is a suggestion.
 const TIERS = (:enforce, :structure, :advice)
 
-const ENFORCE_KINDS = (:unparsed, :missing_include, :nonliteral_include, :unranked_file, :back_edge, :cycle,
-                       :duplicate_owner, :contracts_logic)
+const ENFORCE_KINDS = (:unparsed, :missing_include, :nonliteral_include, :unranked_file, :unranked_module,
+                       :back_edge, :cycle, :duplicate_owner, :contracts_logic)
 
 # Kinds that name a violated architectural invariant rather than a placement or style preference: an
 # include order that is not a topological sort, a name nothing reaches.
-const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal)
+const STRUCTURE_KINDS = (:file_backedge, :dead_code, :blanket_export, :stale_export, :reaches_internal,
+                         :private_import)
 
 function kind_tier(kind::Symbol)
     kind in ENFORCE_KINDS && return :enforce
@@ -130,7 +131,7 @@ function print_architecture(io::IO, findings, new, fixed, rank)
 
     if !isempty(new)
         println(io, "\n  NEW")
-        for f in sort(new, by = f -> (tier_rank(f), get(rank, f.mod, 0), string(f.kind), f.file, f.symbol))
+        for f in sort(new, by = f -> (tier_rank(f), get(rank, f.mod, Int[]), string(f.kind), f.file, f.symbol))
             mark = isblocking(f) ? "x" : " "
             owner = rpad(string(f.mod), 12)
             kind = rpad(string(f.kind), 16)

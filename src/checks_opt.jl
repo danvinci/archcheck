@@ -27,7 +27,7 @@ end
 
 function entry_location(entry::OptEntry, repo)
     m = which(entry.f, entry.argtypes)
-    (nameof(m.module), relpath(string(m.file), repo), Int(m.line))
+    (module_key(m.module), relpath(string(m.file), repo), Int(m.line))
 end
 
 function analyze_entries(jet::Module, entries, repo, target_modules)

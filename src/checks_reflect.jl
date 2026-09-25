@@ -1,6 +1,43 @@
 # Reflection checks (duplicate-owner, sinkable): the method table is dispatch-aware, so these
 # read the loaded modules, not source text.
 
+# A loaded module's key, as the source index names it: its path below the package root, `Geometry.Meshes`.
+module_key(M::Module) = Symbol(join(fullname(M)[2:end], "."))
+
+# The module's wrapper path by layout convention, for a finding with no single source line:
+# `Geometry.Meshes` -> src/geometry/meshes/Meshes.jl.
+function module_file(M::Module)
+    key = string(module_key(M))
+    segments = split(key, '.')
+    dirs = lowercase(join(segments, "/"))
+    "src/" * dirs * "/" * last(segments) * ".jl"
+end
+
+# The modules defined directly inside M.
+function submodules(M::Module)
+    found = Module[]
+    for name in names(M; all = true)
+        isdefined(M, name) || continue
+        value = getfield(M, name)
+        value isa Module || continue
+        value !== M && parentmodule(value) === M && push!(found, value)
+    end
+    found
+end
+
+# unranked-module: a loaded submodule no wrapper declares by the spine rule, so the index files it under its
+# parent and no rank rule reaches it.
+function check_module_corpus(mods, rank)
+    findings = Finding[]
+    for M in mods, child in submodules(M)
+        haskey(rank, module_key(child)) && continue
+        name = string(nameof(child))
+        detail = "a submodule its wrapper does not declare as an include followed by a using"
+        push!(findings, Finding(module_key(M), :unranked_module, module_file(M), name, 0, detail))
+    end
+    findings
+end
+
 # Names M defines itself (function/type owned by M), skipping non-owned names and internals.
 function owned_defs(mod::Module)
     out = Symbol[]
@@ -84,7 +121,7 @@ function check_boxed_captures(mods; repo)
             key = (file, Int(m.line))
             key in seen && continue
             push!(seen, key)
-            push!(findings, Finding(nameof(M), :boxed_capture, file, written_name(n), Int(m.line),
+            push!(findings, Finding(module_key(M), :boxed_capture, file, written_name(n), Int(m.line),
                   "a captured local is assigned in more than one place, so lowering boxes it",
                   [:boxes => string(boxes)]))
         end
@@ -153,8 +190,9 @@ function check_abstract_fields(mods, sites)
         for (field, declared) in zip(fieldnames(S), fieldtypes(S))
             uses_struct_params(declared, vars) && continue
             is_open_field(declared) || continue
-            file, line = site_of(sites, nameof(M), n, ("", 0))
-            push!(findings, Finding(nameof(M), :abstract_field, file, "$n.$field", line,
+            owner = module_key(M)
+            file, line = site_of(sites, owner, n, ("", 0))
+            push!(findings, Finding(owner, :abstract_field, file, "$n.$field", line,
                   "the field's type leaves dispatch open",
                   [:declared => string(declared)]))
         end
@@ -171,7 +209,7 @@ function check_dup_owners(mods, rank)
     findings = Finding[]
     for (n, ms) in byname
         (length(ms) < 2 || length(unique(getproperty(M, n) for M in ms)) < 2) && continue
-        owners = sort([nameof(M) for M in ms], by = m -> get(rank, m, 0))
+        owners = sort([module_key(M) for M in ms], by = m -> rank[m])
         push!(findings, Finding(first(owners), :duplicate_owner, "", string(n), 0,
                                 "exported by more than one module, bound to different objects",
                                 [:owners => join(owners, " ")]))
@@ -184,11 +222,13 @@ end
 # Callers place a def: one its own module calls belongs there, and one touching no project module at
 # all says nothing about where it belongs.
 function check_sinkable(mods, rank, body_calls, sites; repo)
-    proj = Dict(M => nameof(M) for M in mods)
+    proj = Dict(M => module_key(M) for M in mods)
     findings = Finding[]
     for M in mods
-        rM = get(rank, nameof(M), 0); rM == 0 && continue
-        dc = get(body_calls, nameof(M), Dict{Symbol,Set{Symbol}}())
+        key = module_key(M)
+        haskey(rank, key) || continue
+        own_rank = rank[key]
+        dc = get(body_calls, key, Dict{Symbol,Set{Symbol}}())
         called_at_home = Set{Symbol}()
         for (_, names) in dc, name in names
             push!(called_at_home, name)
@@ -208,11 +248,11 @@ function check_sinkable(mods, rank, body_calls, sites; repo)
                 haskey(proj, owner) && push!(foot, proj[owner])
             end
             isempty(foot) && continue
-            (nameof(M) in foot || !all(fm -> rank[fm] < rM, foot)) && continue
+            (key in foot || !all(fm -> completes_before(rank[fm], own_rank), foot)) && continue
             site = first(owned)
             declared = string(site.file)
             reflected = (relpath(declared, repo), site.line)   # same form as an indexed site, not a basename
-            file, line = site_of(sites, nameof(M), n, reflected)
+            file, line = site_of(sites, key, n, reflected)
             ranked = sort(collect(foot), by = x -> rank[x])
             evidence = [:touches => join(ranked, " ")]
             # One module in the footprint names the destination; a wider one does not, since the def may
@@ -221,7 +261,7 @@ function check_sinkable(mods, rank, body_calls, sites; repo)
                 destination = string(only(foot))
                 push!(evidence, :sinks_to => destination)
             end
-            push!(findings, Finding(nameof(M), :sinkable, file, string(n), line,
+            push!(findings, Finding(key, :sinkable, file, string(n), line,
                   "every module it touches ranks below its own", evidence))
         end
     end

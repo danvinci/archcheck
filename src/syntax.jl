@@ -570,17 +570,6 @@ function scan_defs(src::AbstractString, filename = "none")
     scan_tree(tree)
 end
 
-# module name of an importpath, if RELATIVE (starts with `.`); else nothing (external pkg).
-function importpath_module(path)
-    kids = child_nodes(path)
-    (kids === nothing || isempty(kids)) && return nothing
-    first(kids).val === :. || return nothing
-    for c in kids
-        c.val isa Symbol && c.val !== :. && return c.val
-    end
-    nothing
-end
-
 # every Symbol anywhere under a node, collected into `out`.
 function all_symbols!(out, n)
     n.val isa Symbol && push!(out, n.val)

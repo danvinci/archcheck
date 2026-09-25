@@ -43,18 +43,40 @@ function check_corpus(index)
 end
 
 # Rank 0 = position never declared, so exempt from both rules below.
-isranked(rank, a, b) = haskey(rank, a) && haskey(rank, b) && rank[a] > 0 && rank[b] > 0
+is_placed(position::Integer) = position > 0
+is_placed(path::AbstractVector{<:Integer}) = !isempty(path) && all(>(0), path)
+function isranked(rank, a, b)
+    haskey(rank, a) && haskey(rank, b) || return false
+    is_placed(rank[a]) && is_placed(rank[b])
+end
+
+# Load order, the one comparison both zooms make: `a` finishes loading strictly before `b`. A module rank
+# orders siblings by their wrapper's include order and puts a module after everything nested in it.
+completes_before(a::Integer, b::Integer) = a < b
+function completes_before(a::AbstractVector{<:Integer}, b::AbstractVector{<:Integer})
+    for (x, y) in zip(a, b)
+        x == y || return x < y
+    end
+    length(a) > length(b)
+end
 
 # The rank rule, shared by both zooms; exhaustive over the ranked domain.
-is_backedge(rank, from, to) = isranked(rank, from, to) && rank[to] >= rank[from]
-is_downrank(rank, from, to) = isranked(rank, from, to) && rank[to] < rank[from]
+is_backedge(rank, from, to) = isranked(rank, from, to) && !completes_before(rank[to], rank[from])
+is_downrank(rank, from, to) = isranked(rank, from, to) && completes_before(rank[to], rank[from])
 
-# back-edge: any cross-module reference that does not point strictly down-rank.
-check_backedges(g::ModuleGraph) =
-    [Finding(r.from, :back_edge, r.file, string(r.to), r.line,
-             "references a module the package spine includes at or after it",
-             [:include_order => "$(g.rank[r.from])->$(g.rank[r.to])", :via => string(r.via)])
-     for r in g.refs if is_backedge(g.rank, r.from, r.to)]
+# back-edge: any cross-module reference whose target does not finish loading strictly before its source.
+function check_backedges(g::ModuleGraph)
+    findings = Finding[]
+    for r in g.refs
+        is_backedge(g.rank, r.from, r.to) || continue
+        order = join(g.rank[r.from], ".") * "->" * join(g.rank[r.to], ".")
+        evidence = [:include_order => order, :via => string(r.via)]
+        target = string(r.to)
+        detail = "references a module that finishes loading at or after it"
+        push!(findings, Finding(r.from, :back_edge, r.file, target, r.line, detail, evidence))
+    end
+    findings
+end
 
 # DFS three-colour cycle detection; each cycle returned as its node loop.
 function find_cycles(nodes, adj::AbstractDict)
@@ -172,8 +194,7 @@ function check_scan_seeds(index::SourceIndex; directories)
         any(directories) do directory
             path = joinpath(index.repo, file.path)
             root = joinpath(index.repo, directory)
-            relative = relpath(path, root)
-            relative != ".." && !startswith(relative, "../")
+            is_within(path, root)
         end
     end
     groups = Dict{String,Dict{Symbol,Vector{JS.SyntaxNode}}}()

@@ -5,7 +5,7 @@
 struct Context
     index::SourceIndex                      # the one parse of src/ and the entry dirs
     graph::ModuleGraph                      # module rank + cross-module references
-    mods::Vector{Module}                    # loaded submodules, rank order; reflection checks only
+    mods::Vector{Module}                    # loaded modules at every depth, rank order; reflection checks only
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
     entry_dirs::Vector{String}              # tested/scripted entry points; interface checks scan them too
@@ -33,6 +33,7 @@ struct DeadCode <: Check end
 struct BlanketExports <: Check end
 struct StaleExports <: Check end
 struct ReachesInternal <: Check end
+struct PrivateImports <: Check end
 struct BoxedCaptures <: Check end
 struct AbstractFields <: Check end
 struct ReaderSet <: Check
@@ -43,7 +44,11 @@ struct ScanSeeds <: Check
     directories::Tuple # source directories relative to the repository root, or absolute paths
 end
 
-run(::Corpus, ctx) = check_corpus(ctx.index)
+function run(::Corpus, ctx)
+    files = check_corpus(ctx.index)
+    modules = check_module_corpus(ctx.mods, ctx.index.rank)
+    vcat(files, modules)
+end
 run(::ModuleBackEdges, ctx) = check_backedges(ctx.graph)
 run(::ModuleCycles, ctx) = check_cycles(ctx.graph)
 run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
@@ -53,6 +58,7 @@ run(::DeadCode, ctx) = check_dead_code_static(ctx.index)
 run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)
 run(::StaleExports, ctx) = check_stale_exports(ctx.mods)
 run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods; entry_dirs = ctx.entry_dirs)
+run(::PrivateImports, ctx) = check_private_imports(ctx.index)
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.mods; repo = ctx.index.repo)
 run(::AbstractFields, ctx) = check_abstract_fields(ctx.mods, ctx.sites)
 run(check::ReaderSet, ctx) =
@@ -91,6 +97,7 @@ const CHECKS = (
     BlanketExports(),
     StaleExports(),
     ReachesInternal(),
+    PrivateImports(),
     BoxedCaptures(),
     AbstractFields(),
 )

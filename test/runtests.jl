@@ -2,6 +2,11 @@
 using Test, JSON, Random
 using ArchCheck
 
+# The nested fixture loads as a package, so its modules carry the dotted names its source spine declares.
+pushfirst!(LOAD_PATH, joinpath(@__DIR__, "fixtures"))
+using Nested
+popfirst!(LOAD_PATH)
+
 # A synthetic tree has no parsed def index, so these tests declare its absence rather than omit it.
 const NO_SITES = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
 
@@ -132,6 +137,12 @@ module FReadGeneric
     triangles(::Comp) = nothing
 end
 
+# a parent holding one submodule its spine declares and one it does not
+module FNest
+    module Declared end
+    module Stray end
+end
+
 # evidence is a fixed key/value vocabulary per kind, so tests read it by key, never by prose
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
@@ -203,7 +214,8 @@ end
 
 @testset "AST enforce checks (back-edge, cycle, contracts-logic)" begin
     # tool correctness on synthetic inputs
-    rank = Dict(:Lo => 1, :Hi => 2); d2m = Dict("lo" => :Lo, "hi" => :Hi)
+    rank = Dict(:Lo => [1], :Hi => [2])
+    d2m = Dict("lo" => :Lo, "hi" => :Hi)
     @test isempty(check_backedges(ModuleGraph(rank, d2m, [ModRef(:Hi, :Lo, "f.jl", 0, :using)])))   # down: clean
     up = check_backedges(ModuleGraph(rank, d2m, [ModRef(:Lo, :Hi, "f.jl", 0, :using)]))              # up: flagged
     @test length(up) == 1 && up[1].kind === :back_edge && up[1].mod === :Lo
@@ -246,7 +258,7 @@ end
     # module at all, so it carries no evidence either way.
     bc = Dict(:FakeHi => Dict(:body_own => Set([:sig_own]), :calls_helper => Set([:helper_low])))
     repo = normpath(joinpath(@__DIR__, "..", ".."))
-    sink = check_sinkable([FakeLo, FakeHi], Dict(:FakeLo => 1, :FakeHi => 2), bc, NO_SITES; repo)
+    sink = check_sinkable([FakeLo, FakeHi], Dict(:FakeLo => [1], :FakeHi => [2]), bc, NO_SITES; repo)
     syms = Set(f.symbol for f in sink)
     @test "takes_low" in syms                       # footprint is the lower module alone -> candidate
     @test !("helper_low" in syms)                   # same footprint, but called at home -> stays
@@ -263,15 +275,15 @@ end
     @test flagged.file == relpath(@__FILE__, repo)
     # a footprint spanning two modules names no destination: the def may belong in a shared module
     # nobody has written yet
-    wide = check_sinkable([FakeLo, FakeMid, FakeHi], Dict(:FakeLo => 1, :FakeMid => 2, :FakeHi => 3), bc, NO_SITES; repo)
+    wide = check_sinkable([FakeLo, FakeMid, FakeHi], Dict(:FakeLo => [1], :FakeMid => [2], :FakeHi => [3]), bc, NO_SITES; repo)
     spanning = only(f for f in wide if f.symbol == "spans_two")
     @test ev(spanning, :touches) == "FakeLo FakeMid"
     @test !any(k === :sinks_to for (k, _) in spanning.evidence)
 
     # duplicate-owner: same name, different objects, two modules -> collision; single owner -> clean
-    dup = check_dup_owners([FDupA, FDupB], Dict(:FDupA => 1, :FDupB => 2))
+    dup = check_dup_owners([FDupA, FDupB], Dict(:FDupA => [1], :FDupB => [2]))
     @test length(dup) == 1 && dup[1].kind === :duplicate_owner && dup[1].symbol == "dup"
-    @test isempty(check_dup_owners([FDupA], Dict(:FDupA => 1)))
+    @test isempty(check_dup_owners([FDupA], Dict(:FDupA => [1])))
 end
 
 @testset "abstract-field" begin
@@ -1127,7 +1139,7 @@ end
 
     # the report prints the delta in full and the standing set as counts
     io = IOBuffer()
-    print_architecture(io, [moved, fresh], [fresh], 1, Dict(:Aero => 1, :Geo => 2))
+    print_architecture(io, [moved, fresh], [fresh], 1, Dict(:Aero => [1], :Geo => [2]))
     out = String(take!(io))
     @test occursin("new 1", out) && occursin("fixed 1", out) && occursin("standing 1", out)
     @test occursin("NEW", out) && occursin("solve.jl", out)   # new one named
@@ -1332,4 +1344,148 @@ end
         together = check_scan_seeds(index; directories=(geometry, other))
         @test Set(finding.symbol for finding in together) == union(expected, Set(["separate"]))
     end
+end
+
+# A random package nested two deep, each module one wrapper calling others by dotted name. The order the
+# generator finishes modules in (each after everything it includes) is the back-edge oracle.
+function random_package(rng, src)
+    keys = String[]
+    children = Dict{String,Vector{String}}("" => String[])
+    function grow!(parent, name, depth)
+        key = isempty(parent) ? name : "$parent.$name"
+        push!(keys, key)
+        push!(children[parent], key)
+        children[key] = String[]
+        depth < 2 || return
+        for j in 1:rand(rng, 0:2)
+            grow!(key, "$(name)s$j", depth + 1)
+        end
+    end
+    for i in 1:rand(rng, 2:4)
+        grow!("", "T$i", 0)
+    end
+    for kids in values(children)
+        shuffle!(rng, kids)
+    end
+
+    finished = String[]
+    function load!(key)
+        foreach(load!, children[key])
+        push!(finished, key)
+    end
+    foreach(load!, children[""])
+    position = Dict(key => i for (i, key) in enumerate(finished))
+
+    leaf(key) = String(last(split(key, '.')))
+    function directory(key)
+        segments = lowercase.(split(key, '.'))
+        joinpath(src, segments...)
+    end
+    function include_lines(kids)
+        lines = String[]
+        for kid in kids
+            name = leaf(kid)
+            wrapper = joinpath(lowercase(name), name * ".jl")
+            push!(lines, "include(\"$wrapper\")\nusing .$name")
+        end
+        join(lines, "\n")
+    end
+    mkpath(src)
+    spine = "module Pkg\n" * include_lines(children[""]) * "\nend\n"
+    write(joinpath(src, "Pkg.jl"), spine)
+
+    truth = Set{Tuple{String,String}}()
+    for key in keys
+        calls = String[]
+        for _ in 1:rand(rng, 0:3)
+            target = rand(rng, keys)
+            target == key && continue
+            push!(calls, "$target.f()")
+            push!(truth, (key, target))
+        end
+        body = isempty(calls) ? "1" : join(calls, " + ")
+        nested = include_lines(children[key])
+        mkpath(directory(key))
+        wrapper = joinpath(directory(key), leaf(key) * ".jl")
+        write(wrapper, "module $(leaf(key))\n$nested\nf() = $body\nend\n")
+    end
+    (keys = keys, truth = truth, position = position)
+end
+
+@testset "fuzz: nested module back-edges against the generated load order" begin
+    for seed in 1:40
+        rng = MersenneTwister(seed)
+        mktempdir() do root
+            src = joinpath(root, "src")
+            spec = random_package(rng, src)
+            rank, dir2mod = ArchCheck.parse_spine_order(joinpath(src, "Pkg.jl"))
+            index = build_source_index(src, rank, dir2mod)
+            @test Set(string.(keys(index.rank))) == Set(spec.keys)   # every declared module, at every depth
+
+            found = check_backedges(build_module_graph(index))
+            got = Set((string(f.mod), f.symbol) for f in found)
+            # the oracle: a reference climbs exactly when its target finishes loading at or after its source
+            expected = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])
+            @test got == expected
+        end
+    end
+end
+
+@testset "submodules: every check reads the nested package" begin
+    readers = ReaderSet(Nested.Geo.Curves.Shape, ((Nested.Geo.Curves.perimeter, Tuple{}),))
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    blocked = try
+        ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks = (CHECKS..., readers))
+        false
+    catch err
+        err isa ErrorException || rethrow()
+        true
+    end
+    records = [JSON.parse(line) for line in eachline(report)]
+    held(kind, mod, symbol) = any(r -> r["kind"] == kind && r["module"] == mod && r["symbol"] == symbol, records)
+
+    # module zoom: a submodule sits at its parent's rank, then at its place in the parent's include order
+    @test blocked
+    back = only(r for r in records if r["kind"] == "back_edge")
+    @test back["module"] == "Geo.Curves" && back["symbol"] == "Geo.Cuts"
+    @test back["evidence"]["include_order"] == "2.1->2.2"
+    @test !any(r -> r["kind"] == "unranked_module", records)
+
+    # file zoom: a submodule's files rank by its own wrapper
+    file_back = only(r for r in records if r["kind"] == "file_backedge")
+    @test file_back["module"] == "Geo.Cuts"
+    @test endswith(file_back["file"], "ring.jl") && endswith(file_back["symbol"], "measure.jl")
+
+    # the reflection checks and the reader set see submodule definitions
+    @test held("abstract_field", "Geo.Curves", "OpenBox.held")
+    @test held("stale_export", "Geo.Curves", "vanished")
+    @test held("reader_set", "Geo.Cuts", "Ring.perimeter")
+    @test held("reaches_internal", "Geo.Curves", "Geo.Curves._secret")
+    sink = only(r for r in records if r["kind"] == "sinkable" && r["symbol"] == "box_contents")
+    @test sink["module"] == "Geo.Cuts" && sink["evidence"]["sinks_to"] == "Geo.Curves"
+
+    # an import clause naming another module's underscore name, at either nesting, reports and lets the run pass
+    private = filter(r -> r["kind"] == "private_import", records)
+    @test Set((r["module"], r["symbol"]) for r in private) ==
+          Set([("Geo.Curves", "Low._lowpriv"), ("Geo.Cuts", "Geo.Curves._secret")])
+    @test !any(r -> r["blocking"], private)
+end
+
+@testset "submodules: a loaded submodule the spine does not declare" begin
+    rank = Dict(:FNest => [1], Symbol("FNest.Declared") => [1, 1])
+    stray = only(ArchCheck.check_module_corpus([FNest, FNest.Declared], rank))
+    @test stray.kind === :unranked_module && stray.mod === :FNest && stray.symbol == "Stray"
+    @test isblocking(stray)
+end
+
+@testset "private imports: the names an import clause binds" begin
+    source = """
+        import ..Aa: _hidden as shown, open
+        import ..Aa._tail
+        using ..Aa
+        import Base: _private
+        """
+    refs = scan_modrefs(source, :Bb, "x.jl", Set([:Aa, :Bb]))
+    @test Set(name for r in refs for name in r.names) == Set([:_hidden, :open, :_tail])
+    @test all(r -> r.to === :Aa, refs)
 end

@@ -1,12 +1,6 @@
 # Interface checks: does a module declare what it publishes, and does anything reach past that declaration.
 # A module that exports its whole namespace has no interface to hold, so nothing behind it can move.
 
-# The module's own wrapper path, for a finding that has no single source line.
-function module_file(M)
-    name = string(nameof(M))
-    "src/" * lowercase(name) * "/" * name * ".jl"
-end
-
 function resolve_scan_path(index::SourceIndex, path)
     absolute = isabspath(path) ? path : joinpath(index.repo, path)
     normpath(absolute)
@@ -64,10 +58,10 @@ end
 function check_stale_exports(mods)
     findings = Finding[]
     for M in mods
-        owner = nameof(M)
+        owner = module_key(M)
         path = module_file(M)
         for n in names(M)
-            n === owner && continue
+            n === nameof(M) && continue
             isdefined(M, n) && continue
             found = Finding(owner, :stale_export, path, string(n), "exported name is never defined")
             push!(findings, found)
@@ -167,12 +161,26 @@ function check_reaches_internal(index::SourceIndex, mods; entry_dirs)
             M in tracked || return
             isdefined(M, member) || return
             Base.ispublic(M, member) && return
-            mod_name = nameof(M)
+            mod_name = module_key(M)
             symbol = "$mod_name.$member"
             detail = "reference to a name its module does not declare public"
             push!(findings, Finding(mod_name, :reaches_internal, path, symbol, line, detail))
         end
         walk_scoped!(fs, tree, 0, placeholder, Set{Symbol}(), on_qualified)
+    end
+    findings
+end
+
+# private-import: an import clause binding another module's underscore name, the mark of what its owner keeps
+# internal. The qualified form, `Owner._name`, is reaches-internal's.
+function check_private_imports(index::SourceIndex)
+    findings = Finding[]
+    for ref in index.refs, name in ref.names
+        startswith(string(name), "_") || continue
+        symbol = "$(ref.to).$name"
+        detail = "imports a name its module marks private with a leading underscore"
+        evidence = [:via => string(ref.via)]
+        push!(findings, Finding(ref.from, :private_import, ref.file, symbol, ref.line, detail, evidence))
     end
     findings
 end
@@ -196,15 +204,15 @@ function check_reader_set(mods, super::Type, required; sites = Dict{Tuple{Symbol
         family == super && continue
         family in seen && continue
         push!(seen, family)
-        owner_mod = parentmodule(unwrapped)
+        owner = module_key(parentmodule(unwrapped))
         type_name = nameof(unwrapped)
-        file, line = site_of(sites, nameof(owner_mod), type_name, ("", 0))
+        file, line = site_of(sites, owner, type_name, ("", 0))
         for (reader, extras) in required
             sig = Tuple{family, extras.parameters...}
             hasmethod(reader, sig) && continue
             reader_name = nameof(reader)
             symbol = "$(type_name).$(reader_name)"
-            found = Finding(nameof(owner_mod), :reader_set, file, symbol, line,
+            found = Finding(owner, :reader_set, file, symbol, line,
                   "the type answers no method matching this reader",
                   [:reader => string(reader_name)];
                   tier = :structure)

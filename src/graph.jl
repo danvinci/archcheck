@@ -5,12 +5,23 @@ struct ModRef
     file::String     # repo-relative
     line::Int
     via::Symbol      # :using | :import | :qualified
+    names::Vector{Symbol}   # names an import clause binds from `to`; empty for a whole module or a qualified name
 end
+ModRef(from, to, file, line, via) = ModRef(from, to, file, line, via, Symbol[])
 
 struct ModuleGraph
-    rank::Dict{Symbol,Int}          # module -> position in the package spine's include order
-    dir2mod::Dict{String,Symbol}    # src subdir -> module
+    rank::Dict{Symbol,Vector{Int}}  # module -> package-spine position, then its place in each enclosing wrapper's include order
+    dir2mod::Dict{String,Symbol}    # src subdir -> module, nested modules by dotted key
     refs::Vector{ModRef}            # every cross-module reference in src/
+end
+
+# A module's dotted key from the package root, split: `Geometry.Meshes` -> [:Geometry, :Meshes].
+key_segments(key::Symbol) = Symbol.(split(string(key), '.'))
+
+# Whether `path` lies inside directory `dir`.
+function is_within(path, dir)
+    relative = relpath(path, dir)
+    relative != ".." && !startswith(relative, "../")
 end
 
 # An entry file's include order - the rank source at both zooms: the package spine ranks modules,
@@ -87,6 +98,30 @@ function parse_spine_order(spine_path::AbstractString)
     rank, dir2mod
 end
 
+# Each wrapper declares its nested modules by the package spine's rule. A nested module is keyed by its dotted
+# path; its rank is its parent's plus its position in the parent wrapper's include order.
+function nest_modules(src_root, rank, dir2mod)
+    ranks = Dict{Symbol,Vector{Int}}(mod => [position] for (mod, position) in rank)
+    dirs = copy(dir2mod)
+    pending = collect(dir2mod)
+    while !isempty(pending)   # bounded: a directory enters `dirs`, and so the queue, once
+        dir, mod = pop!(pending)
+        haskey(ranks, mod) || continue
+        wrapper = wrapper_of(joinpath(src_root, dir))
+        isnothing(wrapper) && continue
+        positions, children = parse_spine_order(wrapper)
+        for (child_dir, child) in children
+            nested_dir = normpath(joinpath(dir, child_dir))
+            haskey(dirs, nested_dir) && continue
+            key = Symbol(mod, ".", child)
+            ranks[key] = [ranks[mod]; positions[child]]
+            dirs[nested_dir] = key
+            push!(pending, nested_dir => key)
+        end
+    end
+    ranks, dirs
+end
+
 # The module dir's entry file: capitalized by convention, and the one candidate no sibling includes.
 # Nothing when the dir declares no entry or leaves it ambiguous, which blocks via unranked_file.
 function wrapper_of(module_dir::AbstractString)
@@ -113,7 +148,7 @@ end
 
 # A module wrapper's include order is the declared file DAG within that module: path in module -> position.
 # Depth-first, so a nested include takes its position from where its includer reaches it - Julia's load order.
-function file_rank(module_dir::AbstractString)
+function file_rank(module_dir::AbstractString; nested = String[])
     entry = wrapper_of(module_dir)
     isnothing(entry) && return Dict{String,Int}()
     order = Dict{String,Int}()
@@ -122,6 +157,7 @@ function file_rank(module_dir::AbstractString)
         here = dirname(file)          # an include resolves against its includer, not the module root
         for included in include_paths(file)
             target = normpath(joinpath(here, included))
+            any(dir -> is_within(target, dir), nested) && continue   # a nested module ranks its own files
             rel = relpath(target, module_dir)
             haskey(order, rel) && continue     # also the cycle guard: a revisit never recurses
             position += 1
@@ -144,29 +180,113 @@ function module_of(path, src_root, dir2mod)
     nothing
 end
 
-function walk_modrefs!(refs, from, file, known, n)
-    kids = child_nodes(n); kids === nothing && return
-    k = JS.kind(n); ln = JS.source_location(n)[1]
+# The project module a name path reaches from `scope`, and how many names it spans. One leading dot opens in
+# `scope`, each more in its parent; lookup widens to the root, where `using ..Name` bindings point.
+function resolve_module(known, scope, path, dots)
+    opening = max(length(scope) - (dots - 1), 0)
+    for depth in opening:-1:0
+        segments = [scope[1:depth]; path[1]]
+        key = Symbol(join(segments, "."))
+        key in known || continue
+        spanned = 1
+        while spanned < length(path)
+            deeper = Symbol(key, ".", path[spanned + 1])
+            deeper in known || break
+            key = deeper
+            spanned += 1
+        end
+        return key, spanned
+    end
+    nothing, 0
+end
+
+# Leading-dot count and names of an import path: `..A.B` -> (2, [:A, :B]).
+function importpath_parts(path)
+    dots = 0
+    names = Symbol[]
+    kids = child_nodes(path)
+    kids === nothing && return dots, names
+    for c in kids
+        c.val isa Symbol || continue
+        if c.val === :. && isempty(names)
+            dots += 1
+        else
+            push!(names, c.val)
+        end
+    end
+    dots, names
+end
+
+# The identifiers of a pure dotted name, `A.B.c` -> [:A, :B, :c]; nothing when any part is an expression.
+function dotted_names(n)
+    n.val isa Symbol && return [n.val]
+    JS.kind(n) == K"." || return nothing
+    kids = child_nodes(n)
+    (kids === nothing || length(kids) != 2) && return nothing
+    head = dotted_names(kids[1])
+    member = kids[2].val
+    (isnothing(head) || !(member isa Symbol)) && return nothing
+    push!(head, member)
+end
+
+# One using/import clause: the project module its path names and the names it binds from there. A path with
+# no leading dot names an outside package.
+function clause_ref!(refs, from, scope, file, line, known, clause, via)
+    k = JS.kind(clause)
+    if k == K"as"
+        source = first(child_nodes(clause))
+        return clause_ref!(refs, from, scope, file, line, known, source, via)
+    end
+    path_node = clause
+    listed = Symbol[]
+    if k == K":"
+        kids = child_nodes(clause)
+        path_node = first(kids)
+        for item in kids[2:end]
+            source = JS.kind(item) == K"as" ? first(child_nodes(item)) : item
+            _, item_names = importpath_parts(source)
+            append!(listed, item_names)
+        end
+    end
+    JS.kind(path_node) == K"importpath" || return
+    dots, path = importpath_parts(path_node)
+    (dots == 0 || isempty(path)) && return
+    to, spanned = resolve_module(known, scope, path, dots)
+    (isnothing(to) || to == from) && return
+    tail = path[(spanned + 1):end]
+    push!(refs, ModRef(from, to, file, line, via, [tail; listed]))
+end
+
+# `scope` is `from` split into its dotted segments, the frame every name in the file resolves in.
+function walk_modrefs!(refs, from, scope, file, known, n)
+    kids = child_nodes(n)
+    kids === nothing && return
+    k = JS.kind(n)
+    line = JS.source_location(n)[1]
     if k == K"using" || k == K"import"
+        via = Symbol(string(k))
         for clause in kids
-            path = JS.kind(clause) == K":" ? first(child_nodes(clause)) : clause   # `using X: a` -> X
-            if JS.kind(path) == K"importpath"
-                to = importpath_module(path)
-                (to !== nothing && to != from) && push!(refs, ModRef(from, to, file, ln, Symbol(string(k))))
-            end
+            clause_ref!(refs, from, scope, file, line, known, clause, via)
         end
         return
-    elseif k == K"." && !isempty(kids) && kids[1].val isa Symbol && kids[1].val in known && kids[1].val != from
-        push!(refs, ModRef(from, kids[1].val, file, ln, :qualified))
+    elseif k == K"."
+        path = dotted_names(n)
+        if !isnothing(path)
+            to, _ = resolve_module(known, scope, path, 1)
+            (isnothing(to) || to == from) || push!(refs, ModRef(from, to, file, line, :qualified))
+            return
+        end
     end
-    for c in kids; walk_modrefs!(refs, from, file, known, c); end
+    for c in kids
+        walk_modrefs!(refs, from, scope, file, known, c)
+    end
 end
 
 function scan_modrefs(src::AbstractString, from, file, known)
     refs = ModRef[]
     tree = parse_file(src, file)
     tree === nothing && return refs
-    walk_modrefs!(refs, from, file, known, tree)
+    walk_modrefs!(refs, from, key_segments(from), file, known, tree)
     refs
 end
 
@@ -175,7 +295,7 @@ struct FileNode
     mod::Symbol       # owning module
     path::String      # repo-relative path
     name::String      # basename
-    modrank::Int      # module position in the package spine's include order
+    modrank::Vector{Int}   # module rank: package-spine position, then its place in each enclosing wrapper
     filerank::Int     # file position in the wrapper's depth-first include order; 0 when nothing includes it
     iswrapper::Bool   # this module's entry file, resolved from its directory rather than by name
     scan::FileScan    # this file's defs and the names each references
@@ -184,7 +304,7 @@ end
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
 struct SourceIndex
     repo::String                            # the root every path below is relative to
-    rank::Dict{Symbol,Int}                  # module -> package-spine include position
+    rank::Dict{Symbol,Vector{Int}}          # module, nested ones by dotted key -> package-spine position, then wrapper positions
     dir2mod::Dict{String,Symbol}            # src subdir -> module
     files::Vector{FileNode}                 # every module-owned source file
     refs::Vector{ModRef}                    # cross-module references, from the same parse
@@ -214,14 +334,20 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
     src_root = abspath(src_root)
     repo = dirname(src_root)
     tracked = tracked_files(src_root)
-    known = Set(keys(rank))
+    ranks, dir2mod = nest_modules(src_root, rank, dir2mod)
+    known = Set(keys(ranks))
     franks = Dict{Symbol,Dict{String,Int}}()
     wrappers = Dict{Symbol,String}()   # module -> its entry file, the one file the module never includes
     moddirs = Dict{Symbol,String}()    # module -> its directory, the root its file ranks are keyed against
     for (dir, mod) in dir2mod
         moddir = joinpath(src_root, dir)
         moddirs[mod] = moddir
-        franks[mod] = file_rank(moddir)
+        inner = String[]
+        for (other_dir, other) in dir2mod
+            other_path = joinpath(src_root, other_dir)
+            other !== mod && is_within(other_path, moddir) && push!(inner, other_path)
+        end
+        franks[mod] = file_rank(moddir; nested = inner)
         entry = wrapper_of(moddir)
         if !isnothing(entry)
             wrappers[mod] = entry
@@ -258,12 +384,12 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
             return
         end
         collect_includes!(owner, path, rel, tree)
-        walk_modrefs!(refs, owner, rel, known, tree)
+        walk_modrefs!(refs, owner, key_segments(owner), rel, known, tree)
         entry = get(wrappers, owner, nothing)
         iswrapper = !isnothing(entry) && normpath(entry) == path
         inmod = relpath(path, moddirs[owner])
         filerank = get(franks[owner], inmod, 0)
-        modrank = get(rank, owner, 0)
+        modrank = get(ranks, owner, Int[])
         name = basename(path)
         scan = scan_tree(tree)
         push!(nodes, FileNode(owner, rel, name, modrank, filerank, iswrapper, scan))
@@ -316,7 +442,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
             end
         end
     end
-    SourceIndex(repo, rank, dir2mod, nodes, refs, external, unparsed, missing, nonliteral)
+    SourceIndex(repo, ranks, dir2mod, nodes, refs, external, unparsed, missing, nonliteral)
 end
 
 build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, index.refs)
