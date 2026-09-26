@@ -1,6 +1,5 @@
-# foreign-field: a field read on a struct another module owns, unless the struct is a contract type or a public type
-# that documents the field. A syntax heuristic: receivers are typed by annotations, aliases of typed names, and
-# declared field types along a chain.
+# foreign-field: a field read on another module's struct, unless it is a contract type or a public type documenting
+# the field. A syntax heuristic: receivers are typed by annotations, aliases of typed names, and field chains.
 
 # One field read on a typed receiver.
 struct FieldRead
