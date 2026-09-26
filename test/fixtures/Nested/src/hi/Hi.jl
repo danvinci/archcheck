@@ -18,5 +18,6 @@ end
 
 record_values(record::Record) = record.values
 span_width(span::Low.Span) = span.hi - span.lo
+mark_at(mark::Low.Mark) = mark.at
 
 end # module Hi

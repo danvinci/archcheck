@@ -1,11 +1,18 @@
 module Low
 
-export lowf, Span
+export lowf, Span, Mark
 
-# A declared bits value: its fields are open to every caller.
+"A declared interval: the field it documents is open to every caller."
 struct Span
-    lo::Float64   # start
-    hi::Float64   # end
+    "start"
+    lo::Float64
+    hi::Float64   # end, left undocumented
+end
+
+# A field docstring under no type docstring, which Julia does not record.
+struct Mark
+    "position"
+    at::Float64
 end
 
 lowf(x) = x + 1

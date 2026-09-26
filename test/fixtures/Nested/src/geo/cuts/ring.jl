@@ -1,5 +1,7 @@
+"A circle Cuts keeps internal, though it documents its field."
 struct Ring <: Shape
-    radius::Float64   # m
+    "radius, m"
+    radius::Float64
 end
 
 ring_area(ring::Ring) = pi * squared(ring.radius)

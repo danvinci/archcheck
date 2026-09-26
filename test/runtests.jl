@@ -1536,18 +1536,23 @@ end
     checks = (ArchCheck.ForeignFields(),)
     findings = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
     reads = Set((string(f.mod), f.symbol) for f in findings)
-    # Ring is a bits value Cuts keeps internal, so its fields stay closed
-    @test reads == Set([("Geo.Cuts", "Geo.Curves.OpenBox.held"), ("Hi", "Geo.Cuts.Ring.radius")])
+    # Span is public and documented: the field it documents is open, the field it leaves bare is not
+    @test !(("Hi", "Low.Span.lo") in reads)
+    @test ("Hi", "Low.Span.hi") in reads
+    # Mark is public and documents its field but not itself, so Julia records no field docstring
+    @test ("Hi", "Low.Mark.at") in reads
+    # Ring documents itself and its field, but Cuts keeps it internal
+    @test ("Hi", "Geo.Cuts.Ring.radius") in reads
+    # OpenBox is public and documents nothing; no other read is flagged
+    @test ("Geo.Cuts", "Geo.Curves.OpenBox.held") in reads
+    @test length(reads) == 4
     @test all(f -> tier(f) === :structure, findings)
 
-    # Hi also reads a declared bits value (Span) and a contract type (Record): the analysis sees them, the rule
+    # Hi also reads a documented field (Span.lo) and a contract type (Record): the analysis sees them, the rule
     # opens them
     hi_path = joinpath(pkgdir(Nested), "src", "hi", "Hi.jl")
     hi_tree = parse_file(read(hi_path, String), hi_path)
     hi_reads = ArchCheck.field_reads(hi_tree, Nested.Hi).reads
     read_names = Set((nameof(r.type), r.field) for r in hi_reads)
-    @test read_names == Set([(:Ring, :radius), (:Record, :values), (:Span, :hi), (:Span, :lo)])
-    @test ArchCheck.is_bits_value(Nested.Geo.Cuts.Ring)
-    @test ArchCheck.is_bits_value(Nested.Low.Span)
-    @test !ArchCheck.is_bits_value(Nested.Geo.Curves.OpenBox)
+    @test read_names == Set([(:Ring, :radius), (:Record, :values), (:Span, :hi), (:Span, :lo), (:Mark, :at)])
 end

@@ -1,5 +1,6 @@
-# foreign-field: a field read on a struct another module owns, other than a contract type or a bits value. A syntax
-# heuristic: receivers are typed by annotations, aliases of typed names, and declared field types along a chain.
+# foreign-field: a field read on a struct another module owns, unless the struct is a contract type or a public type
+# that documents the field. A syntax heuristic: receivers are typed by annotations, aliases of typed names, and
+# declared field types along a chain.
 
 # One field read on a typed receiver.
 struct FieldRead
@@ -169,22 +170,28 @@ end
 
 is_contract(owner) = owner === CONTRACTS_MODULE || startswith(string(owner), "$CONTRACTS_MODULE.")
 
-# A bits value: immutable, and bits once its type parameters are. Such a struct is its fields, so an owner that
-# declares the type declares them too.
-function is_bits_value(T, seen = Set{DataType}())
-    isbitstype(T) && return true
-    S = Base.unwrap_unionall(T)
-    S isa DataType && isstructtype(S) && !ismutabletype(S) || return false
-    S in seen && return false
-    push!(seen, S)
-    all(F -> F isa TypeVar || is_bits_value(F, seen), fieldtypes(S))
+# A field S's docstring documents. Julia records field docstrings under `:fields` only when S has its own docstring;
+# the lookup leaves a module with no docs uninitialised.
+function is_documented_field(S::DataType, field)
+    home = parentmodule(S)
+    docs = Base.Docs.meta(home; autoinit = false)
+    isnothing(docs) && return false
+    binding = Base.Docs.Binding(home, nameof(S))
+    entries = get(docs, binding, nothing)
+    isnothing(entries) && return false
+    for entry in values(entries.docs)
+        recorded = get(entry.data, :fields, nothing)
+        !isnothing(recorded) && haskey(recorded, field) && return true
+    end
+    false
 end
 
-# Reads a caller may make of another module's struct: contract types, and bits values their owner declares.
-function is_open_read(owner, S::DataType)
+# Reads a caller may make of another module's struct: contract types, and the fields a public type documents.
+function is_open_read(owner, S::DataType, field)
     is_contract(owner) && return true
-    declared = Base.ispublic(parentmodule(S), nameof(S))
-    declared && is_bits_value(S)
+    home = parentmodule(S)
+    is_public = Base.ispublic(home, nameof(S))
+    is_public && is_documented_field(S, field)
 end
 
 # The read's standing: a declared field of a concrete struct, a property the struct does not declare, or a read
@@ -208,7 +215,7 @@ function check_foreign_fields(index::SourceIndex, mods)
             S = Base.unwrap_unionall(access.type)
             S isa DataType || continue
             owner = get(key_of, parentmodule(S), nothing)
-            (isnothing(owner) || owner == file.mod || is_open_read(owner, S)) && continue
+            (isnothing(owner) || owner == file.mod || is_open_read(owner, S, access.field)) && continue
             symbol = "$owner.$(nameof(S)).$(access.field)"
             detail = "reads a field of a struct another module owns"
             evidence = [:receiver => access.receiver, :declared => read_kind(S, access.field)]
