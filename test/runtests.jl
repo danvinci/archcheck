@@ -143,6 +143,26 @@ module FNest
     module Stray end
 end
 
+# method-family corpus: a function spread over two sibling submodules, one kept whole, and Base's `show`
+# extended in both
+module FFam
+    module SibA
+        struct Leaf end
+        const OWNED_AT = @__LINE__() + 1
+        spread(x::Int) = x
+        whole(x::Int) = x
+        whole(x::Float64) = x
+        Base.show(io::IO, ::Leaf) = print(io, "leaf")
+    end
+    module SibB
+        using ..SibA
+        struct Twig end
+        const EXTENDED_AT = @__LINE__() + 1
+        SibA.spread(x::Float64) = x
+        Base.show(io::IO, ::Twig) = print(io, "twig")
+    end
+end
+
 # evidence is a fixed key/value vocabulary per kind, so tests read it by key, never by prose
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
@@ -284,6 +304,25 @@ end
     dup = check_dup_owners([FDupA, FDupB], Dict(:FDupA => [1], :FDupB => [2]))
     @test length(dup) == 1 && dup[1].kind === :duplicate_owner && dup[1].symbol == "dup"
     @test isempty(check_dup_owners([FDupA], Dict(:FDupA => [1])))
+end
+
+@testset "method families: every method of one function lives in one module" begin
+    repo = normpath(joinpath(@__DIR__, ".."))
+    here = relpath(@__FILE__, repo)
+    found = check_method_families([FFam, FFam.SibA, FFam.SibB], NO_SITES; repo)
+    @test all(f -> f.kind === :method_family && tier(f) === :structure, found)
+
+    # methods in two sibling submodules: the module adding to the other's function carries the finding
+    spread = only(f for f in found if f.symbol == "spread")
+    @test spread.mod === Symbol("FFam.SibB")
+    @test spread.file == here && spread.line == FFam.SibB.EXTENDED_AT
+    @test ev(spread, :owner) == "FFam.SibA"
+    @test ev(spread, :owner_site) == "$here:$(FFam.SibA.OWNED_AT)"
+
+    # every method in one module passes; Base's function extended in two modules is Julia's protocol
+    @test !any(f -> f.symbol == "whole", found)
+    @test !any(f -> f.symbol == "show", found)
+    @test length(found) == 1
 end
 
 @testset "abstract-field" begin
@@ -1466,6 +1505,7 @@ end
     @test held("stale_export", "Geo.Curves", "vanished")
     @test held("reader_set", "Geo.Cuts", "Ring.perimeter")
     @test held("reaches_internal", "Geo.Curves", "Geo.Curves._secret")
+    @test held("method_family", "Hi", "_lowpriv")
     sink = only(r for r in records if r["kind"] == "sinkable" && r["symbol"] == "box_contents")
     @test sink["module"] == "Geo.Cuts" && sink["evidence"]["sinks_to"] == "Geo.Curves"
 

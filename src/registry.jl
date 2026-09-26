@@ -25,6 +25,7 @@ struct ModuleBackEdges <: Check end
 struct ModuleCycles <: Check end
 struct ContractsPurity <: Check end
 struct OwnerUniqueness <: Check end
+struct MethodFamilies <: Check end
 struct FileBackEdges <: Check end
 struct FileSinkable <: Check end
 struct Sinkable <: Check end
@@ -56,6 +57,7 @@ run(::ModuleBackEdges, ctx) = check_backedges(ctx.graph)
 run(::ModuleCycles, ctx) = check_cycles(ctx.graph)
 run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
 run(::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank)
+run(::MethodFamilies, ctx) = check_method_families(ctx.mods, ctx.sites; repo = ctx.index.repo)
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
 run(::DeadCode, ctx) = check_dead_code_static(ctx.index)
 run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)
@@ -95,6 +97,7 @@ const CHECKS = (
     ModuleCycles(),
     ContractsPurity(),
     OwnerUniqueness(),
+    MethodFamilies(),
     FileBackEdges(),
     FileSinkable(),
     Sinkable(),

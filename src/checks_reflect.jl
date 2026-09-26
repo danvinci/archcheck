@@ -129,6 +129,49 @@ function check_boxed_captures(mods; repo)
     findings
 end
 
+# method-family: a function a checked module owns (`parentmodule`) with methods in another checked module.
+# Base, Core, stdlib and dependency functions are owned outside the project, so extending them is protocol.
+function check_method_families(mods, sites; repo)
+    project = Set(mods)
+    findings = Finding[]
+    for owner_mod in mods, name in owned_defs(owner_mod)
+        family = getproperty(owner_mod, name)
+        family isa Function || continue
+        nameof(family) === name || continue   # an alias binding names the same function again
+        homes = Dict{Module,Vector{Method}}()
+        for method in methods(family)
+            method.module in project || continue
+            held = get!(() -> Method[], homes, method.module)
+            push!(held, method)
+        end
+        length(homes) < 2 && continue
+        owner = module_key(owner_mod)
+        own_methods = get(homes, owner_mod, Method[])
+        reflected = isempty(own_methods) ? ("", 0) : method_site(first_method(own_methods), repo)
+        owner_file, owner_line = site_of(sites, owner, name, reflected)
+        for (home, added) in homes
+            home === owner_mod && continue
+            file, line = method_site(first_method(added), repo)
+            evidence = [:owner => string(owner), :owner_site => "$owner_file:$owner_line",
+                        :methods => string(length(added))]
+            adder = module_key(home)
+            detail = "adds methods to a function another project module owns"
+            finding = Finding(adder, :method_family, file, string(name), line, detail, evidence)
+            push!(findings, finding)
+        end
+    end
+    findings
+end
+
+# The earliest of a module's methods in source order.
+function first_method(held)
+    ordered = sort(held, by = method -> (string(method.file), method.line))
+    first(ordered)
+end
+
+# A method's definition site, repo-relative like an indexed site.
+method_site(method::Method, repo) = (relpath(string(method.file), repo), Int(method.line))
+
 # TypeVars bound by a UnionAll struct (Foo{T} -> T). A field type's own parameters (Vector's eltype) are separate.
 function struct_typevars(@nospecialize(T))
     vars = TypeVar[]

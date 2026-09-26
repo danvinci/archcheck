@@ -25,7 +25,7 @@ export def_sites, site_of
 export Check, Context, CHECKS, run_checks, ReaderSet, ScanSeeds
 export check_corpus, check_backedges, is_backedge, is_downrank, find_cycles, check_cycles
 export check_contracts_logic
-export check_dup_owners, check_sinkable
+export check_dup_owners, check_sinkable, check_method_families
 export CallGraph, build_call_graph
 export check_file_sinkable, check_file_backedges, check_extract_candidates
 export check_tuple_returns
