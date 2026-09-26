@@ -1211,6 +1211,11 @@ end
         @test length(found) == 1
         @test found[1].symbol == "FIface.hidden"
         @test found[1].kind === :reaches_internal
+
+        # a missing entry dir contributes nothing, as the index treats it
+        absent = joinpath(dir, "absent")
+        found = check_reaches_internal(index, [FIface]; entry_dirs = [absent, entry])
+        @test [f.symbol for f in found] == ["FIface.hidden"]
     end
 
     # comments and strings are not references

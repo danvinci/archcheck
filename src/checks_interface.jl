@@ -134,9 +134,12 @@ end
 
 function scanned_paths(index::SourceIndex, entry_dirs)
     paths = String[f.path for f in index.files]
-    for d in entry_dirs, (root, _, files) in walkdir(d), f in files
-        endswith(f, ".jl") || continue
-        push!(paths, joinpath(root, f))
+    for d in entry_dirs
+        isdir(d) || continue   # a missing entry dir contributes nothing, as in the index
+        for (root, _, files) in walkdir(d), f in files
+            endswith(f, ".jl") || continue
+            push!(paths, joinpath(root, f))
+        end
     end
     unique(path -> resolve_scan_path(index, path), paths)
 end
