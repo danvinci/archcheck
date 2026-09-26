@@ -1543,16 +1543,32 @@ end
     @test ("Hi", "Low.Mark.at") in reads
     # Ring documents itself and its field, but Cuts keeps it internal
     @test ("Hi", "Geo.Cuts.Ring.radius") in reads
-    # OpenBox is public and documents nothing; no other read is flagged
+    # OpenBox is public and documents nothing
     @test ("Geo.Cuts", "Geo.Curves.OpenBox.held") in reads
-    @test length(reads) == 4
+    # Tick is Low's own, read through receivers only inference types; no other read is flagged
+    @test ("Hi", "Low.Tick.at") in reads
+    @test length(reads) == 5
     @test all(f -> tier(f) === :structure, findings)
 
-    # Hi also reads a documented field (Span.lo) and a contract type (Record): the analysis sees them, the rule
-    # opens them
+    # Hi also reads documented fields (Span.lo, Ruler.ticks) and a contract type (Record): the analysis sees them,
+    # the rule opens them
     hi_path = joinpath(pkgdir(Nested), "src", "hi", "Hi.jl")
     hi_tree = parse_file(read(hi_path, String), hi_path)
     hi_reads = ArchCheck.field_reads(hi_tree, Nested.Hi).reads
     read_names = Set((nameof(r.type), r.field) for r in hi_reads)
-    @test read_names == Set([(:Ring, :radius), (:Record, :values), (:Span, :hi), (:Span, :lo), (:Mark, :at)])
+    @test read_names == Set([(:Ring, :radius), (:Record, :values), (:Span, :hi), (:Span, :lo), (:Mark, :at),
+                             (:Ruler, :ticks), (:Tick, :at)])
+end
+
+@testset "foreign fields: receivers Julia infers" begin
+    hi_path = joinpath(pkgdir(Nested), "src", "hi", "Hi.jl")
+    hi_tree = parse_file(read(hi_path, String), hi_path)
+    typed = Dict(r.receiver => r.type for r in ArchCheck.field_reads(hi_tree, Nested.Hi).reads)
+    # a local bound from a call takes the one concrete type Julia infers for the call
+    @test get(typed, "made", nothing) === Nested.Low.Tick
+    # a loop variable over a declared field's vector takes the element type
+    @test get(typed, "tick", nothing) === Nested.Low.Tick
+    # an abstract or a Union result types nothing, so reads through it stay unchecked
+    @test !haskey(typed, "face")
+    @test !haskey(typed, "either")
 end
