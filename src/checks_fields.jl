@@ -1,6 +1,5 @@
 # foreign-field: a field read on another module's struct, unless it is a contract type or a public type documenting
-# the field. A syntax heuristic: receivers are typed by annotations, aliases of typed names and field chains, and by
-# the type Julia infers for a call, an index or a loop element when that is one concrete type.
+# the field. Receivers are typed by annotations, aliases, field chains, and inference when it gives one concrete type.
 
 # One field read on a typed receiver.
 struct FieldRead
