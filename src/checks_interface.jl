@@ -259,8 +259,7 @@ function check_reader_set(mods, super::Type, required; sites = Dict{Tuple{Symbol
             symbol = "$(type_name).$(reader_name)"
             found = Finding(owner, :reader_set, file, symbol, line,
                   "the type answers no method matching this reader",
-                  [:reader => string(reader_name)];
-                  tier = :structure)
+                  [:reader => string(reader_name)])
             push!(findings, found)
         end
     end

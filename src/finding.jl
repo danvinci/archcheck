@@ -2,7 +2,7 @@
 const TIERS = (:enforce, :structure, :advice)
 
 const ENFORCE_KINDS = (:unparsed, :missing_include, :nonliteral_include, :unranked_file, :unranked_module,
-                       :back_edge, :cycle, :duplicate_owner, :contracts_logic)
+                       :back_edge, :cycle, :duplicate_owner, :contracts_logic, :reader_set)
 
 # Kinds that name a violated architectural invariant rather than a placement or style preference: an
 # include order that is not a topological sort, a name nothing reaches.

@@ -1263,8 +1263,8 @@ end
     )
     missing = check_reader_set([FReadMissing], FReadMissing.Comp, missing_required; sites = NO_SITES)
     @test all(f -> f.kind === :reader_set, missing)
-    @test all(f -> !isblocking(f), missing)
-    @test all(f -> tier(f) === :structure, missing)
+    @test all(isblocking, missing)
+    @test all(f -> tier(f) === :enforce, missing)
     syms = Set(f.symbol for f in missing)
     @test syms == Set(["Bare.classify", "Bare.section", "Bare.x_span", "Bare.triangles",
                       "Fam.classify", "Fam.section", "Fam.x_span", "Fam.triangles", "Flat.classify"])
