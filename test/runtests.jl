@@ -457,18 +457,22 @@ end
         mkpath(joinpath(root, "iface"))
         mkpath(joinpath(root, "lofts"))
         write(joinpath(root, "iface", "Iface.jl"), "include(\"verbs.jl\")\n")
-        write(joinpath(root, "iface", "verbs.jl"), "function breaks end\n")
+        write(joinpath(root, "iface", "verbs.jl"), "function breaks end\nfunction splits end\n")
         write(joinpath(root, "lofts", "Lofts.jl"),
-              "import ..Iface: breaks\ninclude(\"early.jl\")\ninclude(\"cut.jl\")\ninclude(\"late.jl\")\n")
-        write(joinpath(root, "lofts", "early.jl"), "measure(x) = breaks(x)\n")
-        write(joinpath(root, "lofts", "cut.jl"), "struct Cut end\nbreaks(c::Cut) = refine(c)\n")
+              "import ..Iface: breaks, splits as divide\nimport Base: show\n" *
+              "include(\"early.jl\")\ninclude(\"cut.jl\")\ninclude(\"late.jl\")\n")
+        write(joinpath(root, "lofts", "early.jl"),
+              "measure(x) = breaks(x)\npart(x) = divide(x)\ndescribe(io, x) = show(io, x)\n")
+        write(joinpath(root, "lofts", "cut.jl"),
+              "struct Cut end\nbreaks(c::Cut) = refine(c)\ndivide(c::Cut) = c\nshow(io::IO, c::Cut) = print(io, c)\n")
         write(joinpath(root, "lofts", "late.jl"), "refine(c) = c\n")
         rank = Dict(:Iface => 1, :Lofts => 2)
         dir2mod = Dict("iface" => :Iface, "lofts" => :Lofts)
         index = build_source_index(root, rank, dir2mod)
         graph = build_call_graph(index, :Lofts)
         found = check_file_backedges(graph)
-        # a call to the verb reaches Iface; the method cut.jl adds carries that file's own edge
+        # a call to the verb reaches its declaring module, whether a project module under its imported name
+        # or an outside package; the method cut.jl adds carries that file's own edge
         edges = Set((basename(f.file), basename(f.symbol), ev(f, :via)) for f in found)
         @test edges == Set([("cut.jl", "late.jl", "breaks")])
     end

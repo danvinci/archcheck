@@ -74,6 +74,7 @@ struct FileScan
     line::Dict{Symbol,Int}           # def-name -> source line
     argtypes::Dict{Symbol,Vector{Union{Symbol,Nothing}}}   # function -> positional arg declared-types (last method wins)
     tupletail::Dict{Symbol,Int}      # function -> slot count when its body ends in a bare tuple; absent otherwise
+    imports::Set{Symbol}             # names this file's `import` clauses bind: a path's last name, or its `as` alias
 end
 
 # a type name, unwrapping `<:` (supertype) and `{}` (parameters) to the bare Identifier.
@@ -497,6 +498,18 @@ function walk_defs!(fs, n, depth, current)
         return
     elseif k == K"export" || k == K"public"
         return   # a listed name, not a call, a value read, or a qualified access
+    elseif k == K"import"
+        # `import A: f, g as h` lists its items after the path; `import A.f` and `import A.f as h` are the item.
+        # An item's last child is the name it binds: a path's last segment, or the `as` alias.
+        for clause in kids
+            items = JS.kind(clause) == K":" ? child_nodes(clause)[2:end] : [clause]
+            for item in items
+                parts = child_nodes(item)
+                bound = last(parts).val
+                bound isa Symbol && push!(fs.imports, bound)
+            end
+        end
+        for c in kids; walk_defs!(fs, c, depth, current); end
     elseif k == K"struct" || k == K"abstract"
         nm = type_name(first(kids))
         if depth == 0 && nm !== nothing
@@ -551,7 +564,7 @@ function walk_defs!(fs, n, depth, current)
 end
 
 empty_scan() = FileScan(Symbol[], Symbol[], Dict{Symbol,Set{Symbol}}(), Set{Symbol}(), Dict{Symbol,Int}(),
-                        Dict{Symbol,Vector{Union{Symbol,Nothing}}}(), Dict{Symbol,Int}())
+                        Dict{Symbol,Vector{Union{Symbol,Nothing}}}(), Dict{Symbol,Int}(), Set{Symbol}())
 
 # The walk, over an already-parsed tree.
 function scan_tree(tree)
