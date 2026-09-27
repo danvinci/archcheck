@@ -4,6 +4,11 @@ struct Ring <: Shape
     radius::Float64
 end
 
+# A position on a circle, under the field name Low's faces use.
+struct Arc
+    at::Float64   # angle, rad
+end
+
 ring_area(ring::Ring) = pi * squared(ring.radius)
 reveal(x) = _secret(x)
 box_contents(box::OpenBox) = box.held

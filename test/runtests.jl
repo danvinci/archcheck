@@ -1735,18 +1735,23 @@ end
     @test ("Hi", "Geo.Cuts.Ring.radius") in reads
     # OpenBox is public and documents nothing
     @test ("Geo.Cuts", "Geo.Curves.OpenBox.held") in reads
-    # Tick is Low's own, read through receivers only inference types; no other read is flagged
+    # Tick is Low's own, read through receivers only inference types
     @test ("Hi", "Low.Tick.at") in reads
-    @test length(reads) == 5
+    # a receiver annotated with a Union reads the field on each member, owned by that member's module
+    @test ("Hi", "Low.Notch.at") in reads
+    @test ("Hi", "Geo.Cuts.Arc.at") in reads
+    # no other read is flagged
+    @test length(reads) == 7
 
     # Hi also reads documented fields (Span.lo, Ruler.ticks) and a contract type (Record): the analysis sees them,
     # the rule opens them
     hi_path = joinpath(pkgdir(Nested), "src", "hi", "Hi.jl")
     hi_tree = parse_file(read(hi_path, String), hi_path)
     hi_reads = ArchCheck.field_reads(hi_tree, Nested.Hi).reads
-    read_names = Set((nameof(r.type), r.field) for r in hi_reads)
+    member_reads = ((member, r.field) for r in hi_reads for member in Base.uniontypes(r.type))
+    read_names = Set((nameof(member), field) for (member, field) in member_reads)
     @test read_names == Set([(:Ring, :radius), (:Record, :values), (:Span, :hi), (:Span, :lo), (:Mark, :at),
-                             (:Ruler, :ticks), (:Tick, :at)])
+                             (:Ruler, :ticks), (:Tick, :at), (:Notch, :at), (:Arc, :at)])
 end
 
 @testset "foreign fields: receivers Julia infers" begin

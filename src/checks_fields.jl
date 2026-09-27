@@ -56,9 +56,17 @@ function constant_value(M::Module, path)
     value
 end
 
-# The type an annotation names in M: a name or a dotted path, parameters dropped. A `where` variable names none.
+# The type an annotation names in M: a name or a dotted path, parameters dropped, or the Union of the types its
+# members name. A `where` variable names none, and so does a Union with a member that names none.
 function annotation_type(M::Module, node, typevars)
-    JS.kind(node) == K"curly" && return annotation_type(M, first(child_nodes(node)), typevars)
+    if JS.kind(node) == K"curly"
+        head, parameters... = child_nodes(node)
+        named = annotation_type(M, head, typevars)
+        named === Union || return named
+        members = [annotation_type(M, parameter, typevars) for parameter in parameters]
+        any(isnothing, members) && return nothing
+        return Union{members...}
+    end
     path = dotted_names(node)
     isnothing(path) && return nothing
     first(path) in typevars && return nothing
@@ -457,8 +465,9 @@ function check_foreign_fields(index::SourceIndex, mods)
         path = joinpath(index.repo, file.path)
         tree = parse_file(read(path, String), file.path)
         isnothing(tree) && continue
-        for access in field_reads(tree, M).reads
-            S = Base.unwrap_unionall(access.type)
+        # a read through a Union reads the field on each member
+        for access in field_reads(tree, M).reads, member in Base.uniontypes(access.type)
+            S = Base.unwrap_unionall(member)
             S isa DataType || continue
             owner = get(key_of, parentmodule(S), nothing)
             (isnothing(owner) || owner == file.mod || is_open_read(owner, S, access.field)) && continue

@@ -1,6 +1,6 @@
 module Low
 
-export lowf, Span, Mark, Ruler, first_tick, first_face, either_face, gauge
+export lowf, Span, Mark, Ruler, Notch, first_tick, first_face, either_face, gauge
 
 "A declared interval: the field it documents is open to every caller."
 struct Span

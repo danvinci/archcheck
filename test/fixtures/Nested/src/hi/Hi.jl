@@ -48,4 +48,7 @@ function face_at(x)
     face.at + either.at
 end
 
+# A Union annotation reads the field on each member, each owned by its own module.
+notch_or_arc_at(position::Union{Low.Notch, Geo.Cuts.Arc}) = position.at
+
 end # module Hi
