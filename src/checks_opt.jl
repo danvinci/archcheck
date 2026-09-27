@@ -65,4 +65,8 @@ end
 
 run(check::OptAnalysis, ctx) =
     check_opt_entries(check.entries; repo = ctx.index.repo, target_modules = ctx.mods)
-kinds(::OptAnalysis) = (:runtime_dispatch => :advisory, :inferred_box => :advisory)
+kinds(::OptAnalysis) = opt_kinds(jet_loaded())
+
+# Without JET the analysis cannot run, so it declares no kinds and a JET-less run claims none of them clean.
+opt_kinds(::Nothing) = ()
+opt_kinds(::Module) = (:runtime_dispatch => :advisory, :inferred_box => :advisory)

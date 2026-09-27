@@ -394,6 +394,9 @@ end
 
 @testset "opt analysis (JET port)" begin
     @test isempty(check_opt_entries(OptEntry[]; repo = ".", target_modules = Module[]))
+    # with no JET module the analysis declares no kinds, so error_kinds cannot name one that did not run
+    jetless = ArchCheck.opt_kinds(nothing)
+    @test isempty(jetless)
 
     if isnothing(Base.find_package("JET"))
         @test_skip "JET not on LOAD_PATH"
