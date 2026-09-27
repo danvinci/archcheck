@@ -726,6 +726,14 @@ end
         @test !(:tested in index.external)
         @test "tested" in Set(f.symbol for f in check_dead_code_static(index))
     end
+    # a def's own export line is not a use: exported with no caller is still dead
+    mktempdir() do dir
+        mkpath(joinpath(dir, "bb"))
+        write(joinpath(dir, "bb", "Bb.jl"), "export uncalled\ninclude(\"impl.jl\")")
+        write(joinpath(dir, "bb", "impl.jl"), "uncalled() = 1")
+        index = build_source_index(dir, Dict(:Bb => 1), Dict("bb" => :Bb))
+        @test "uncalled" in Set(f.symbol for f in check_dead_code_static(index))
+    end
 end
 
 # Build a random module: n files, each with a few defs, referencing defs in other files at random, and a

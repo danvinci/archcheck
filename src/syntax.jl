@@ -492,6 +492,8 @@ function walk_defs!(fs, n, depth, current)
     k = JS.kind(n)
     if k == K"." && walk_dot_base!(c -> walk_defs!(fs, c, depth, current), n)
         return
+    elseif k == K"export" || k == K"public"
+        return   # a listed name, not a call, a value read, or a qualified access
     elseif k == K"struct" || k == K"abstract"
         nm = type_name(first(kids))
         if depth == 0 && nm !== nothing
