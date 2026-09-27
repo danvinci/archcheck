@@ -5,17 +5,18 @@
 struct Context
     index::SourceIndex                      # the one parse of src/ and the entry dirs
     graph::ModuleGraph                      # module rank + cross-module references
+    root::Module                            # the package module itself; it has no rank, so it is not in mods
     mods::Vector{Module}                    # loaded modules at every depth, rank order; reflection checks only
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
     entry_dirs::Vector{String}              # tested/scripted entry points; interface checks scan them too
 end
 
-function Context(index::SourceIndex, mods; entry_dirs = String[])
+function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[])
     graph = build_module_graph(index)
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
-    Context(index, graph, mods, sites, callgraphs, entry_dirs)
+    Context(index, graph, root, mods, sites, callgraphs, entry_dirs)
 end
 
 abstract type Check end
@@ -57,7 +58,7 @@ run(::ModuleBackEdges, ctx) = check_backedges(ctx.graph)
 run(::ModuleCycles, ctx) = check_cycles(ctx.graph)
 run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
 run(::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank)
-run(::MethodFamilies, ctx) = check_method_families(ctx.mods, ctx.sites; repo = ctx.index.repo)
+run(::MethodFamilies, ctx) = check_method_families([ctx.root; ctx.mods], ctx.sites; repo = ctx.index.repo)
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
 run(::DeadCode, ctx) = check_dead_code_static(ctx.index)
 run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)

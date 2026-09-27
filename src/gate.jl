@@ -23,7 +23,7 @@ function gate(pkg::Module;
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
     mods = [loaded_module(pkg, m) for m in ordered]
 
-    ctx = Context(index, mods; entry_dirs)
+    ctx = Context(index, pkg, mods; entry_dirs)
     findings = run_checks(ctx, checks)
 
     mkpath(dirname(report_path))

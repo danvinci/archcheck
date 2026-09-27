@@ -10,6 +10,11 @@ include("low/Low.jl")
 using .Low
 include("geo/Geo.jl")
 using .Geo
+
+# Methods across the root seam: Hi extends the root's function, and the root extends Low's.
+root_measure(x::Int) = x
+Low.lowf(text::String) = text
+
 include("hi/Hi.jl")
 using .Hi
 

@@ -2,7 +2,12 @@
 # read the loaded modules, not source text.
 
 # A loaded module's key, as the source index names it: its path below the package root, `Geometry.Meshes`.
-module_key(M::Module) = Symbol(join(fullname(M)[2:end], "."))
+# The root has no path below it, so it is keyed by its own name.
+function module_key(M::Module)
+    below = fullname(M)[2:end]
+    isempty(below) && return nameof(M)
+    Symbol(join(below, "."))
+end
 
 # The module's wrapper path by layout convention, for a finding with no single source line:
 # `Geometry.Meshes` -> src/geometry/meshes/Meshes.jl.

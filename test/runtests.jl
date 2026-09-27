@@ -1506,6 +1506,9 @@ end
     @test held("reader_set", "Geo.Cuts", "Ring.perimeter")
     @test held("reaches_internal", "Geo.Curves", "Geo.Curves._secret")
     @test held("method_family", "Hi", "_lowpriv")
+    # the root module is checked too: as the owner a submodule extends, and as the home extending a submodule
+    @test held("method_family", "Hi", "root_measure")
+    @test held("method_family", "Nested", "lowf")
     sink = only(r for r in records if r["kind"] == "sinkable" && r["symbol"] == "box_contents")
     @test sink["module"] == "Geo.Cuts" && sink["evidence"]["sinks_to"] == "Geo.Curves"
 

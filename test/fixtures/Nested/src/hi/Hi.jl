@@ -3,13 +3,15 @@ module Hi
 using ..Contracts
 using ..Geo
 import ..Low
+import ..root_measure
 
 hi_uses(x) = Geo.Curves._secret(x)
 hi_face(x) = Geo.calls_later(x)
 
-# Methods on other modules' functions: one the owner exports, one it keeps private.
+# Methods on other modules' functions: one the owner exports, one it keeps private, one the root owns.
 Geo.Curves.perimeter(x::Int) = x
 Low._lowpriv(text::String) = text
+root_measure(x::Float64) = x
 
 function ring_radius(ring::Geo.Cuts.Ring)
     same = ring
