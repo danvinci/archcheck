@@ -1,6 +1,6 @@
 module Low
 
-export lowf, Span, Mark, Ruler, Notch, first_tick, first_face, either_face, gauge
+export lowf, Span, Mark, Ruler, Notch, Pin, first_tick, first_face, either_face, gauge
 
 "A declared interval: the field it documents is open to every caller."
 struct Span
@@ -30,6 +30,11 @@ end
 struct Ruler
     "marks in order"
     ticks::Vector{Tick}
+end
+
+# The lowest point of a groove.
+struct Pin
+    depth::Float64   # below the surface, m
 end
 
 const FACES = Face[Tick(0.0), Notch(1.0)]

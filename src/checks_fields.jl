@@ -134,15 +134,22 @@ function method_scope(M, node, outer::Scope)
     scope
 end
 
+# The type a field read on T yields: the field's declared type, or for a Union the Union of each member's. A member
+# that declares no such field, or declares it through a type variable, leaves the read untyped.
 function declared_field_type(T, field)
-    S = Base.unwrap_unionall(T)
-    S isa DataType && isstructtype(S) && hasfield(S, field) || return nothing
-    declared = fieldtype(S, field)
-    declared isa Type ? declared : nothing
+    declared = Type[]
+    for member in Base.uniontypes(T)
+        S = Base.unwrap_unionall(member)
+        S isa DataType && isstructtype(S) && hasfield(S, field) || return nothing
+        member_declared = fieldtype(S, field)
+        member_declared isa Type || return nothing
+        push!(declared, member_declared)
+    end
+    Union{declared...}
 end
 
-# The type a receiver has: a typed name, a field chain through declared field types, or a call or an index whose
-# inferred result is one concrete type.
+# The type a receiver has: a typed name, a field chain through declared field types (through each member of a
+# Union), or a call or an index whose inferred result is one concrete type.
 function receiver_type(state, scope, node)
     if node.val isa Symbol
         bound = get(scope.types, node.val, nothing)

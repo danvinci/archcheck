@@ -51,4 +51,15 @@ end
 # A Union annotation reads the field on each member, each owned by its own module.
 notch_or_arc_at(position::Union{Low.Notch, Geo.Cuts.Arc}) = position.at
 
+# A chain through a Union annotation: the first field's type on each member, then the next field on each of those.
+struct Groove
+    bottom::Low.Pin   # lowest point
+end
+
+struct Slot
+    bottom::Geo.Cuts.Kerf   # lowest point
+end
+
+bottom_depth(cut::Union{Groove, Slot}) = cut.bottom.depth
+
 end # module Hi

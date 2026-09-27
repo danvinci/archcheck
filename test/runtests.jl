@@ -1762,8 +1762,11 @@ end
     # a receiver annotated with a Union reads the field on each member, owned by that member's module
     @test ("Hi", "Low.Notch.at") in reads
     @test ("Hi", "Geo.Cuts.Arc.at") in reads
+    # a chain through a Union reads its next field on each member's declared field type
+    @test ("Hi", "Low.Pin.depth") in reads
+    @test ("Hi", "Geo.Cuts.Kerf.depth") in reads
     # no other read is flagged
-    @test length(reads) == 7
+    @test length(reads) == 9
 
     # Hi also reads documented fields (Span.lo, Ruler.ticks) and a contract type (Record): the analysis sees them,
     # the rule opens them
@@ -1773,7 +1776,8 @@ end
     member_reads = ((member, r.field) for r in hi_reads for member in Base.uniontypes(r.type))
     read_names = Set((nameof(member), field) for (member, field) in member_reads)
     @test read_names == Set([(:Ring, :radius), (:Record, :values), (:Span, :hi), (:Span, :lo), (:Mark, :at),
-                             (:Ruler, :ticks), (:Tick, :at), (:Notch, :at), (:Arc, :at)])
+                             (:Ruler, :ticks), (:Tick, :at), (:Notch, :at), (:Arc, :at),
+                             (:Groove, :bottom), (:Slot, :bottom), (:Pin, :depth), (:Kerf, :depth)])
 end
 
 @testset "foreign fields: receivers Julia infers" begin
