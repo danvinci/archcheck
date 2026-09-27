@@ -452,6 +452,28 @@ end
     end
 end
 
+@testset "file-backedge: an imported verb belongs to the module that declares it" begin
+    mktempdir() do root
+        mkpath(joinpath(root, "iface"))
+        mkpath(joinpath(root, "lofts"))
+        write(joinpath(root, "iface", "Iface.jl"), "include(\"verbs.jl\")\n")
+        write(joinpath(root, "iface", "verbs.jl"), "function breaks end\n")
+        write(joinpath(root, "lofts", "Lofts.jl"),
+              "import ..Iface: breaks\ninclude(\"early.jl\")\ninclude(\"cut.jl\")\ninclude(\"late.jl\")\n")
+        write(joinpath(root, "lofts", "early.jl"), "measure(x) = breaks(x)\n")
+        write(joinpath(root, "lofts", "cut.jl"), "struct Cut end\nbreaks(c::Cut) = refine(c)\n")
+        write(joinpath(root, "lofts", "late.jl"), "refine(c) = c\n")
+        rank = Dict(:Iface => 1, :Lofts => 2)
+        dir2mod = Dict("iface" => :Iface, "lofts" => :Lofts)
+        index = build_source_index(root, rank, dir2mod)
+        graph = build_call_graph(index, :Lofts)
+        found = check_file_backedges(graph)
+        # a call to the verb reaches Iface; the method cut.jl adds carries that file's own edge
+        edges = Set((basename(f.file), basename(f.symbol), ev(f, :via)) for f in found)
+        @test edges == Set([("cut.jl", "late.jl", "breaks")])
+    end
+end
+
 @testset "intra-module call graph (static)" begin
     # per-def calls, including a callee inside a closure (the reflection blind spot)
     sc = scan_defs("top() = mid() + leaf()\nmid() = leaf()\nbuild() = map(x -> deck(x), z)")

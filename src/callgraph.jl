@@ -27,10 +27,14 @@ function build_call_graph(index, mod::Symbol)
     # A name's home is its LOWEST-ranked defining file: methods of one function can live in several files,
     # and a reference is satisfiable by the earliest of them.
     home!(name, f) = (!haskey(files, name) || f.filerank < rank[files[name]]) && (files[name] = f.path)
+    # An imported function's home is the module that declares it, so a method this module adds gives it
+    # no file here.
+    imported = Set(name for r in index.refs if r.from === mod && r.via === :import for name in r.names)
     members = files_of(index, mod)
     for f in members
         rank[f.path] = f.filerank
         for name in f.scan.funcs
+            name in imported && continue
             home!(name, f)
         end
         for name in f.scan.types
