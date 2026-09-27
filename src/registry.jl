@@ -66,6 +66,7 @@ struct DeclaredNames <: Check end
 struct DeclaredModules <: Check end
 struct DeclaredExtensions <: Check end
 struct ForeignFields <: Check end
+struct TypeBranches <: Check end
 
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.
 function run(::Corpus, ctx)
@@ -137,6 +138,111 @@ kinds(::DeclaredExtensions) = (:private_extension => :error,)
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
 kinds(::ForeignFields) = (:foreign_field => :advisory,)
 
+# type-branch: an `isa` or `typeof` test on the method's own parameter picks a path that dispatch should pick.
+# A throw-only branch validates input; lambda parameters, loop targets and destructured names are not the method's.
+function run(::TypeBranches, ctx)
+    findings = Finding[]
+    discarded = IdSet{JS.SyntaxNode}()   # nodes whose value is discarded; only there do `&&` and `||` pick a path
+    function visit(file, node, owner, params)
+        kids = child_nodes(node)
+        kids === nothing && return
+        k = JS.kind(node)
+        is_statement = node in discarded
+        if k == K"block"
+            union!(discarded, is_statement ? kids : kids[1:end-1])
+        elseif k == K"for" || k == K"while"
+            push!(discarded, last(kids))
+        elseif is_statement && k in (K"if", K"elseif", K"let", K"&&", K"||")
+            union!(discarded, kids[2:end])
+        elseif is_statement && k in (K"try", K"catch", K"finally")
+            union!(discarded, kids)
+        end
+        is_method = is_method_form(node)
+        call = is_method ? signature_call(kids[1]) : nothing
+        if k == K"->" || k == K"do" || (is_method && isnothing(call))
+            foreach(part -> visit(file, part, "", Symbol[]), kids)
+            return
+        elseif is_method
+            head, arguments... = child_nodes(call)
+            items = JS.SyntaxNode[]
+            for argument in arguments
+                if JS.kind(argument) == K"parameters"
+                    append!(items, child_nodes(argument))
+                else
+                    push!(items, argument)
+                end
+            end
+            own = Symbol[]
+            for item in items
+                names = Symbol[]
+                _argname!(names, item)
+                bound = item
+                while JS.kind(bound) in (K"=", K"...", K"::")
+                    bound = first(child_nodes(bound))
+                end
+                JS.kind(bound) == K"tuple" || append!(own, names)
+            end
+            name = JS.sourcetext(head)
+            foreach(body -> visit(file, body, name, own), kids[2:end])
+            return
+        elseif k == K"for" || k == K"generator"
+            body = k == K"for" ? last(kids) : first(kids)
+            specs = k == K"for" ? kids[1:end-1] : kids[2:end]
+            targets = Symbol[]
+            foreach(spec -> bound_names!(targets, spec), specs)
+            foreach(spec -> visit(file, spec, owner, params), specs)
+            visit(file, body, owner, setdiff(params, targets))
+            return
+        end
+        is_logical = k == K"&&" || k == K"||"
+        if k == K"if" || k == K"elseif" || k == K"?" || (is_logical && is_statement)
+            test = kids[1]
+            branch = kids[2]
+            statements = JS.kind(branch) == K"block" ? child_nodes(branch) : [branch]
+            is_guard = false
+            if length(statements) == 1 && JS.kind(only(statements)) == K"call"
+                callee = first(child_nodes(only(statements)))
+                is_guard = callee.val === :throw
+            end
+            parts = child_nodes(test)
+            operator = nothing
+            operands = parts
+            if JS.kind(test) == K"<:"
+                operator = :(<:)
+            elseif JS.kind(test) == K"call"
+                is_infix = JS.is_infix_op_call(test)
+                operator = is_infix ? parts[2].val : parts[1].val
+                operands = is_infix ? parts[[1, 3]] : parts[2:end]
+            end
+            subjects = JS.SyntaxNode[]
+            if operator === :isa
+                push!(subjects, first(operands))
+            elseif operator in (:(==), :(===), :(!=), :(!==), :(<:))
+                for operand in operands
+                    inner = child_nodes(operand)
+                    is_typeof = JS.kind(operand) == K"call" && length(inner) == 2 && first(inner).val === :typeof
+                    is_typeof && push!(subjects, last(inner))
+                end
+            end
+            tested = findfirst(subject -> subject.val in params, subjects)
+            if !is_guard && !isnothing(tested)
+                parameter = subjects[tested].val
+                line = Int(JS.source_location(test)[1])
+                detail = "a runtime type test on the method's own parameter picks the path"
+                push!(findings, Finding(file.mod, :type_branch, file.path, "$owner:$parameter", line, detail))
+            end
+        end
+        foreach(child -> visit(file, child, owner, params), kids)
+    end
+    for file in ctx.index.files
+        path = joinpath(ctx.index.repo, file.path)
+        tree = parse_file(read(path, String), file.path)
+        isnothing(tree) || visit(file, tree, "", Symbol[])
+    end
+    findings
+end
+kinds(::TypeBranches) = (:type_branch => :advisory,)
+
 run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
 kinds(::FileBackEdges) = (:file_backedge => :advisory,)
 
@@ -181,6 +287,7 @@ const CHECKS = (
     ForeignFields(),
     BoxedCaptures(),
     AbstractFields(),
+    TypeBranches(),
 )
 
 # A finding's kind must be one its check declares, or the gate has no severity for it.
