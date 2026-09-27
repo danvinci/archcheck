@@ -134,11 +134,16 @@ function check_boxed_captures(mods; repo)
     findings
 end
 
-# method-family: a function a checked module owns (`parentmodule`) with methods in another checked module.
-# Base, Core, stdlib and dependency functions are owned outside the project, so extending them is protocol.
-function check_method_families(mods, sites; repo)
+# A function a checked module owns (`parentmodule`), with its methods grouped by the checked module defining them.
+struct MethodFamily
+    owner_mod::Module                      # the module that owns the function
+    name::Symbol                           # the function's name in its owner
+    homes::Dict{Module,Vector{Method}}     # checked module -> the methods it defines
+end
+
+function project_methods(mods)
     project = Set(mods)
-    findings = Finding[]
+    families = MethodFamily[]
     for owner_mod in mods, name in owned_defs(owner_mod)
         family = getproperty(owner_mod, name)
         family isa Function || continue
@@ -149,6 +154,16 @@ function check_method_families(mods, sites; repo)
             held = get!(() -> Method[], homes, method.module)
             push!(held, method)
         end
+        push!(families, MethodFamily(owner_mod, name, homes))
+    end
+    families
+end
+
+# method-family: a function a checked module owns with methods in another checked module.
+# Base, Core, stdlib and dependency functions are owned outside the project, so extending them is protocol.
+function check_method_families(mods, sites; repo)
+    findings = Finding[]
+    for (; owner_mod, name, homes) in project_methods(mods)
         length(homes) < 2 && continue
         owner = module_key(owner_mod)
         own_methods = get(homes, owner_mod, Method[])

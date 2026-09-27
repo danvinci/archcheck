@@ -210,6 +210,29 @@ function check_declared_names(index::SourceIndex, mods)
     findings
 end
 
+# private-extension: a method one project module adds to a function another owns, unless the owner declares the
+# function public and documents it. Extending an undeclared function reaches into its owner's implementation.
+function check_declared_extensions(mods; repo)
+    findings = Finding[]
+    for (; owner_mod, name, homes) in project_methods(mods)
+        is_public = Base.ispublic(owner_mod, name)
+        docs = recorded_docs(owner_mod, name)
+        is_documented = !isnothing(docs)
+        is_public && is_documented && continue
+        owner = string(module_key(owner_mod))
+        for (home, added) in homes
+            home === owner_mod && continue
+            file, line = method_site(first_method(added), repo)
+            evidence = [:owner => owner, :function => string(name),
+                        :public => string(is_public), :documented => string(is_documented)]
+            detail = "adds a method to a function its owner does not declare public and document"
+            finding = Finding(module_key(home), :private_extension, file, "$owner.$name", line, detail, evidence)
+            push!(findings, finding)
+        end
+    end
+    findings
+end
+
 # undeclared-module: a reference to a module its source's wrapper does not name in a using or import line.
 # Qualified paths count, so the wrapper's using and import lines list every module the module reaches.
 function check_declared_modules(index::SourceIndex)

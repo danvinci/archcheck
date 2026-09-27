@@ -13,6 +13,11 @@ Geo.Curves.perimeter(x::Int) = x
 Low._lowpriv(text::String) = text
 root_measure(x::Float64) = x
 
+# Methods on Low's documented verb: one through its owner, one through Geo, which only passes the name on.
+struct Dial end
+Low.gauge(dial::Dial) = 1
+Geo.gauge(dial::Dial, scale) = scale
+
 function ring_radius(ring::Geo.Cuts.Ring)
     same = ring
     same.radius

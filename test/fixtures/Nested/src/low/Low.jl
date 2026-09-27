@@ -1,6 +1,6 @@
 module Low
 
-export lowf, Span, Mark, Ruler, first_tick, first_face, either_face
+export lowf, Span, Mark, Ruler, first_tick, first_face, either_face, gauge
 
 "A declared interval: the field it documents is open to every caller."
 struct Span
@@ -40,5 +40,8 @@ either_face(x) = x > 0 ? Tick(x) : Notch(x)
 
 lowf(x) = x + 1
 _lowpriv(x) = x + 2
+
+"A declared extension point: a module that owns a type adds the method for it."
+function gauge end
 
 end # module Low

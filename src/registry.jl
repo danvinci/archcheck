@@ -64,6 +64,7 @@ struct Independent <: Check
 end
 struct DeclaredNames <: Check end
 struct DeclaredModules <: Check end
+struct DeclaredExtensions <: Check end
 struct ForeignFields <: Check end
 
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.
@@ -130,6 +131,9 @@ kinds(::DeclaredNames) = (:undeclared_name => :advisory,)
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
 kinds(::DeclaredModules) = (:undeclared_module => :advisory,)
 
+run(::DeclaredExtensions, ctx) = check_declared_extensions([ctx.root; ctx.mods]; repo = ctx.index.repo)
+kinds(::DeclaredExtensions) = (:private_extension => :error,)
+
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
 kinds(::ForeignFields) = (:foreign_field => :advisory,)
 
@@ -173,6 +177,7 @@ const CHECKS = (
     PrivateImports(),
     DeclaredNames(),
     DeclaredModules(),
+    DeclaredExtensions(),
     ForeignFields(),
     BoxedCaptures(),
     AbstractFields(),

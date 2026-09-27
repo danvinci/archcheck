@@ -1639,11 +1639,40 @@ end
         ("Hi", "Geo.Curves._secret", "qualified"),
         ("Hi", "Geo.Cuts.Ring", "qualified"),
         ("Hi", "Low._lowpriv", "extends"),
+        ("Hi", "Geo.gauge", "extends"),
     ])
     # an underscore import is one case of an undeclared name
     private = filter(f -> f.kind === :private_import, findings)
     @test !isempty(private)
     @test all(p -> any(u -> u.file == p.file && u.line == p.line, undeclared), private)
+end
+
+@testset "declared extensions: a module extends only another module's documented public verb" begin
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    checks = (ArchCheck.DeclaredExtensions(), ArchCheck.DeclaredNames(), ArchCheck.ReachesInternal())
+    @test_throws ErrorException ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
+    records = [JSON.parse(line) for line in eachline(report)]
+    extensions = filter(r -> r["kind"] == "private_extension", records)
+    @test all(r -> r["severity"] == "error", extensions)
+    # private, public but undocumented, and the root's private function; Low's documented `gauge` is clean
+    extended = Set((r["module"], r["symbol"], r["evidence"]["public"], r["evidence"]["documented"])
+                   for r in extensions)
+    @test extended == Set([
+        ("Hi", "Low._lowpriv", "false", "false"),
+        ("Hi", "Geo.Curves.perimeter", "true", "false"),
+        ("Hi", "Nested.root_measure", "false", "false"),
+        ("Nested", "Low.lowf", "true", "false"),
+    ])
+    private = only(r for r in extensions if r["symbol"] == "Low._lowpriv")
+    @test private["evidence"]["owner"] == "Low" && private["evidence"]["function"] == "_lowpriv"
+    @test private["file"] == joinpath("src", "hi", "Hi.jl")
+
+    # extending through Geo, which only passes Low's verb on, uses a name Geo does not declare
+    relayed(kind) = only(r for r in records if r["kind"] == kind && r["symbol"] == "Geo.gauge")
+    undeclared = relayed("undeclared_name")
+    @test undeclared["module"] == "Hi" && undeclared["evidence"]["via"] == "extends"
+    @test undeclared["evidence"]["owner"] == "Low"
+    @test relayed("reaches_internal")["file"] == joinpath("src", "hi", "Hi.jl")
 end
 
 @testset "declared modules: a module reaches only the modules its wrapper names" begin
