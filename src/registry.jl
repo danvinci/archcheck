@@ -29,7 +29,7 @@ struct ModuleBackEdges <: Check end
 struct ModuleCycles <: Check end
 struct ContractsPurity <: Check end
 struct OwnerUniqueness <: Check end
-struct MethodFamilies <: Check end
+struct ModulePiracy <: Check end
 struct FileBackEdges <: Check end
 struct FileSinkable <: Check end
 struct Sinkable <: Check end
@@ -88,8 +88,8 @@ kinds(::ContractsPurity) = (:contracts_logic => :error,)
 run(::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
 
-run(::MethodFamilies, ctx) = check_method_families([ctx.root; ctx.mods], ctx.sites; repo = ctx.index.repo)
-kinds(::MethodFamilies) = (:method_family => :advisory,)
+run(::ModulePiracy, ctx) = check_module_piracy([ctx.root; ctx.mods]; repo = ctx.index.repo)
+kinds(::ModulePiracy) = (:module_piracy => :error,)
 
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
 kinds(::TupleReturns) = (:tuple_return => :advisory,)
@@ -165,7 +165,7 @@ const CHECKS = (
     ModuleCycles(),
     ContractsPurity(),
     OwnerUniqueness(),
-    MethodFamilies(),
+    ModulePiracy(),
     FileBackEdges(),
     FileSinkable(),
     Sinkable(),

@@ -67,15 +67,17 @@ function type_module(@nospecialize(T))
     T isa TypeVar && return nothing
     T = Base.unwrap_unionall(T)
     T isa DataType || return nothing
-    (T <: Type && length(T.parameters) == 1) && return type_module(T.parameters[1])
+    if Base.isType(T)
+        held = only(T.parameters)
+        return type_module(held)
+    end
     parentmodule(T)
 end
 
 # Project modules a method signature's argument types touch.
 function sig_modules!(out, @nospecialize(sig), proj)
-    tt = Base.unwrap_unionall(sig)
-    (tt isa DataType && tt <: Tuple) || return out
-    for T in tt.parameters[2:end]
+    _, arguments = split_signature(sig)
+    for T in arguments
         pm = type_module(T)
         haskey(proj, pm) && push!(out, proj[pm])
     end
@@ -122,11 +124,11 @@ function check_boxed_captures(mods; repo)
             m.module === M || continue
             boxes = count_boxes(m)
             boxes == 0 && continue
-            file = relpath(string(m.file), repo)
-            key = (file, Int(m.line))
+            key = method_site(m, repo)
             key in seen && continue
             push!(seen, key)
-            push!(findings, Finding(module_key(M), :boxed_capture, file, written_name(n), Int(m.line),
+            file, line = key
+            push!(findings, Finding(module_key(M), :boxed_capture, file, written_name(n), line,
                   "a captured local is assigned in more than one place, so lowering boxes it",
                   [:boxes => string(boxes)]))
         end
@@ -134,59 +136,77 @@ function check_boxed_captures(mods; repo)
     findings
 end
 
-# A function a checked module owns (`parentmodule`), with its methods grouped by the checked module defining them.
-struct MethodFamily
-    owner_mod::Module                      # the module that owns the function
-    name::Symbol                           # the function's name in its owner
-    homes::Dict{Module,Vector{Method}}     # checked module -> the methods it defines
-end
-
+# Every method a checked module defines, on any function, in source order.
 function project_methods(mods)
     project = Set(mods)
-    families = MethodFamily[]
-    for owner_mod in mods, name in owned_defs(owner_mod)
-        family = getproperty(owner_mod, name)
-        family isa Function || continue
-        nameof(family) === name || continue   # an alias binding names the same function again
-        homes = Dict{Module,Vector{Method}}()
-        for method in methods(family)
-            method.module in project || continue
-            held = get!(() -> Method[], homes, method.module)
-            push!(held, method)
-        end
-        push!(families, MethodFamily(owner_mod, name, homes))
+    defined = Method[]
+    Base.visit(Core.methodtable) do method
+        method.module in project && push!(defined, method)
     end
-    families
+    sort!(defined, by = method -> (string(method.file), method.line))
 end
 
-# method-family: a function a checked module owns with methods in another checked module.
-# Base, Core, stdlib and dependency functions are owned outside the project, so extending them is protocol.
-function check_method_families(mods, sites; repo)
+# module-piracy: a method a module defines on a function it does not own, where neither it nor a module nested
+# in it owns any argument type. The orphan rule at module grain, so Base, stdlib and dependency functions fall
+# under it too: `Base.show(io, ::T)` belongs in the module that owns T.
+function check_module_piracy(mods; repo)
     findings = Finding[]
-    for (; owner_mod, name, homes) in project_methods(mods)
-        length(homes) < 2 && continue
-        owner = module_key(owner_mod)
-        own_methods = get(homes, owner_mod, Method[])
-        reflected = isempty(own_methods) ? ("", 0) : method_site(first_method(own_methods), repo)
-        owner_file, owner_line = site_of(sites, owner, name, reflected)
-        for (home, added) in homes
-            home === owner_mod && continue
-            file, line = method_site(first_method(added), repo)
-            evidence = [:owner => string(owner), :owner_site => "$owner_file:$owner_line",
-                        :methods => string(length(added))]
-            adder = module_key(home)
-            detail = "adds methods to a function another project module owns"
-            finding = Finding(adder, :method_family, file, string(name), line, detail, evidence)
-            push!(findings, finding)
-        end
+    for method in project_methods(mods)
+        # Aqua's `is_pirate` (Aqua.jl src/piracies.jl) at module grain: the function is foreign to the defining
+        # module, and every argument type is foreign to its subtree, the modules whose full name starts with its own.
+        home = method.module
+        home_name = fullname(home)
+        depth = length(home_name)
+        owns_argument = mod -> fullname(mod)[1:min(end, depth)] == home_name
+        function_type, arguments = split_signature(method.sig)
+        # A Union in the function slot is foreign only when every member is.
+        members = Base.uniontypes(function_type)
+        all(T -> is_foreign(T, ==(home)), members) || continue
+        all(T -> is_foreign(T, owns_argument), arguments) || continue
+        file, line = method_site(method, repo)
+        owner = type_module(function_type)
+        owner_path = isnothing(owner) ? string(function_type) : join(fullname(owner), ".")
+        signature = string(method.sig)
+        evidence = [:owner => owner_path, :signature => signature]
+        key = module_key(home)
+        name = string(method.name)
+        detail = "extends a function another module owns on no type its own subtree owns"
+        push!(findings, Finding(key, :module_piracy, file, name, line, detail, evidence))
     end
     findings
 end
 
-# The earliest of a module's methods in source order.
-function first_method(held)
-    ordered = sort(held, by = method -> (string(method.file), method.line))
-    first(ordered)
+# A method signature's function slot and its argument types. A keyword method is a method of Core.kwcall whose
+# third slot holds the function it wraps: (kwcall, kwargs, f, args...).
+function split_signature(@nospecialize(sig))
+    params = Base.unwrap_unionall(sig).parameters
+    is_kwcall = sig <: Tuple{typeof(Core.kwcall),Any,Any,Vararg}
+    slot = is_kwcall ? 3 : 1
+    (params[slot], params[slot+1:end])
+end
+
+# Aqua's foreign-type walk (Aqua.jl src/piracies.jl), where `owns(module)` decides ownership. A value parameter
+# (the 1 in Array{T,1}) stands for its type; a Symbol parameter belongs to nobody, so it counts as owned.
+is_foreign(@nospecialize(x), owns) = is_foreign(typeof(x), owns)
+is_foreign(::Symbol, owns) = false
+is_foreign(@nospecialize(T::TypeVar), owns) = is_foreign(T.ub, owns)
+is_foreign(@nospecialize(T::Core.TypeofVararg), owns) = is_foreign(T.T, owns)
+# Set{T} over an owned T is owned: both the body and the bound must be foreign.
+is_foreign(@nospecialize(U::UnionAll), owns) = is_foreign(U.body, owns) && is_foreign(U.var, owns)
+# One foreign member makes a Union foreign: Union{Owned,Int} claims Int as well.
+function is_foreign(@nospecialize(U::Union), owns)
+    members = Base.uniontypes(U)
+    any(T -> is_foreign(T, owns), members)
+end
+
+# Type{T} belongs where T does; any other type is foreign when its module and all its parameters are.
+function is_foreign(@nospecialize(T::DataType), owns)
+    if Base.isType(T)
+        held = only(T.parameters)
+        return is_foreign(held, owns)
+    end
+    owns(parentmodule(T)) && return false
+    all(param -> is_foreign(param, owns), T.parameters)
 end
 
 # A method's definition site, repo-relative like an indexed site.
@@ -213,10 +233,8 @@ end
 # Type{Float64} holds that one type object; Type{<:T} holds any subtype, so dispatch stays open.
 function is_closed_type_object(@nospecialize(T))
     U = Base.unwrap_unionall(T)
-    U isa DataType || return false
-    U <: Type || return false
-    length(U.parameters) == 1 || return false
-    p = U.parameters[1]
+    Base.isType(U) || return false
+    p = only(U.parameters)
     p isa Type && isconcretetype(p)
 end
 
@@ -312,9 +330,7 @@ function check_sinkable(mods, rank, body_calls, sites; repo)
             end
             isempty(foot) && continue
             (key in foot || !all(fm -> completes_before(rank[fm], own_rank), foot)) && continue
-            site = first(owned)
-            declared = string(site.file)
-            reflected = (relpath(declared, repo), site.line)   # same form as an indexed site, not a basename
+            reflected = method_site(first(owned), repo)
             file, line = site_of(sites, key, n, reflected)
             ranked = sort(collect(foot), by = x -> rank[x])
             evidence = [:touches => join(ranked, " ")]

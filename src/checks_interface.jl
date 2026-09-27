@@ -213,22 +213,31 @@ end
 # private-extension: a method one project module adds to a function another owns, unless the owner declares the
 # function public and documents it. Extending an undeclared function reaches into its owner's implementation.
 function check_declared_extensions(mods; repo)
+    project = Set(mods)
+    reported = Set{Tuple{Module,Module,Symbol}}()   # (owner, home, function): one finding for all of a home's methods
     findings = Finding[]
-    for (; owner_mod, name, homes) in project_methods(mods)
+    for method in project_methods(mods)
+        function_type, _ = split_signature(method.sig)
+        function_type isa DataType && function_type <: Function && isdefined(function_type, :instance) || continue
+        extended = function_type.instance
+        owner_mod = parentmodule(extended)
+        home = method.module
+        owner_mod in project && owner_mod !== home || continue
+        name = nameof(extended)
+        key = (owner_mod, home, name)
+        key in reported && continue
+        push!(reported, key)
         is_public = Base.ispublic(owner_mod, name)
         docs = recorded_docs(owner_mod, name)
         is_documented = !isnothing(docs)
         is_public && is_documented && continue
         owner = string(module_key(owner_mod))
-        for (home, added) in homes
-            home === owner_mod && continue
-            file, line = method_site(first_method(added), repo)
-            evidence = [:owner => owner, :function => string(name),
-                        :public => string(is_public), :documented => string(is_documented)]
-            detail = "adds a method to a function its owner does not declare public and document"
-            finding = Finding(module_key(home), :private_extension, file, "$owner.$name", line, detail, evidence)
-            push!(findings, finding)
-        end
+        file, line = method_site(method, repo)
+        evidence = [:owner => owner, :function => string(name),
+                    :public => string(is_public), :documented => string(is_documented)]
+        detail = "adds a method to a function its owner does not declare public and document"
+        finding = Finding(module_key(home), :private_extension, file, "$owner.$name", line, detail, evidence)
+        push!(findings, finding)
     end
     findings
 end
