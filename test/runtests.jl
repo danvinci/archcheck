@@ -89,6 +89,11 @@ module FOpt
     stable_trapz(xs::Vector{Float64}, ys::Vector{Float64}) =
         sum((xs[k+1] - xs[k]) * (ys[k+1] + ys[k]) / 2 for k in 1:length(xs)-1)
     any_kernel(xs::Vector{Any}) = xs[1] + 1
+    function boxed_total(xs::Vector{Float64})
+        total = 0.0
+        foreach(x -> total += x, xs)
+        total
+    end
 end
 # reader-set corpus: missing methods, a complete type, inherited generics, 2D vs 3D classify
 module FReadMissing
@@ -405,6 +410,18 @@ end
         clean = check_opt_entries([OptEntry(FOpt.stable_trapz, Tuple{Vector{Float64},Vector{Float64}})];
                                   repo, target_modules = [FOpt])
         @test isempty(clean)
+
+        # a box inference finds is its own kind; the reflection check owns :boxed_capture
+        boxed_entry = OptEntry(FOpt.boxed_total, Tuple{Vector{Float64}})
+        boxed = check_opt_entries([boxed_entry]; repo, target_modules = [FOpt])
+        boxed_kinds = Set(f.kind for f in boxed)
+        @test :inferred_box in boxed_kinds && !(:boxed_capture in boxed_kinds)
+        opt_declared = ArchCheck.kinds(OptAnalysis())
+        reflected_declared = ArchCheck.kinds(ArchCheck.BoxedCaptures())
+        opt_kinds = Set(first(pair) for pair in opt_declared)
+        reflected_kinds = Set(first(pair) for pair in reflected_declared)
+        @test opt_kinds == Set([:runtime_dispatch, :inferred_box])
+        @test isempty(intersect(opt_kinds, reflected_kinds))
     end
 end
 

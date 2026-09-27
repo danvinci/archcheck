@@ -48,7 +48,7 @@ function analyze_entries(jet::Module, entries, repo, target_modules)
                   [:dispatches => string(n_dispatch)]))
         end
         if n_box > 0
-            push!(findings, Finding(mod, :boxed_capture, file, entry.symbol, line,
+            push!(findings, Finding(mod, :inferred_box, file, entry.symbol, line,
                   "a captured local is boxed in the inferred graph of this entry",
                   [:boxes => string(n_box)]))
         end
@@ -65,4 +65,4 @@ end
 
 run(check::OptAnalysis, ctx) =
     check_opt_entries(check.entries; repo = ctx.index.repo, target_modules = ctx.mods)
-kinds(::OptAnalysis) = (:runtime_dispatch => :advisory, :boxed_capture => :advisory)
+kinds(::OptAnalysis) = (:runtime_dispatch => :advisory, :inferred_box => :advisory)
