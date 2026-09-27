@@ -8,13 +8,15 @@ function loaded_module(pkg::Module, key::Symbol)
 end
 
 # The consumer's entry: one parse of `pkg`'s src/, every check, a JSONL report, and a hard error on any
-# blocking finding. The reflection checks read the package's modules at every depth.
+# error finding. `error_kinds` promotes advisory kinds to errors for this consumer.
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
               report_path = joinpath(pkgdir(pkg), "test", "out", "architecture.jsonl"),
               io::IO = stdout,
-              checks = CHECKS)
+              checks = CHECKS,
+              error_kinds = ())
+    severity = severities(checks; error_kinds)   # before the parse, so a bad error_kinds fails fast
     pkg_name = string(nameof(pkg))
     spine = joinpath(src, pkg_name * ".jl")
     rank, dir2mod = parse_spine_order(spine)
@@ -31,14 +33,14 @@ function gate(pkg::Module;
     current = Set(fingerprint(f) for f in findings)
     new = new_findings(findings, previous)
     fixed = previous === nothing ? 0 : length(setdiff(previous, current))
-    print_architecture(io, findings, new, fixed, index.rank)
-    open(handle -> emit_jsonl(handle, findings), report_path, "w")
+    print_architecture(io, findings, new, fixed, index.rank, severity)
+    open(handle -> emit_jsonl(handle, findings, severity), report_path, "w")
 
-    block = filter(isblocking, findings)
-    if !isempty(block)
-        println(io, "\n  BLOCKING")   # in full whether new or standing; the delta cannot hide these
-        print_findings(io, block)
-        error("architecture gate RED: $(length(block)) blocking finding(s)")
+    errors = filter(f -> iserror(f, severity), findings)
+    if !isempty(errors)
+        println(io, "\n  ERRORS")   # in full whether new or standing; the delta cannot hide these
+        print_findings(io, errors, severity)
+        error("architecture gate RED: $(length(errors)) error finding(s)")
     end
     println(io, "== architecture clean ==")
     findings

@@ -1,5 +1,5 @@
-# The check registry. Each check is a type; `run` is its one method. Adding a check is a struct, a
-# method, and an entry in CHECKS - the gate never changes.
+# The check registry. Each check is a type with two methods: `run` emits its findings, `kinds` declares
+# each kind it emits as `kind => :error | :advisory`. A new check is a struct, both methods, and a CHECKS entry.
 
 # Everything a check may read, built once per run.
 struct Context
@@ -20,6 +20,9 @@ function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[])
 end
 
 abstract type Check end
+
+# Required of every check, with no fallback: a check that declares nothing cannot run.
+function kinds end
 
 struct Corpus <: Check end
 struct ModuleBackEdges <: Check end
@@ -49,33 +52,75 @@ struct DeclaredNames <: Check end
 struct DeclaredModules <: Check end
 struct ForeignFields <: Check end
 
+# A hole in the corpus makes every other result untrustworthy, so each one is an error.
 function run(::Corpus, ctx)
     files = check_corpus(ctx.index)
     modules = check_module_corpus(ctx.mods, ctx.index.rank)
     vcat(files, modules)
 end
+kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,
+                   :unranked_file => :error, :unranked_module => :error)
+
 run(::ModuleBackEdges, ctx) = check_backedges(ctx.graph)
+kinds(::ModuleBackEdges) = (:back_edge => :error,)
+
 run(::ModuleCycles, ctx) = check_cycles(ctx.graph)
+kinds(::ModuleCycles) = (:cycle => :error,)
+
 run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
+kinds(::ContractsPurity) = (:contracts_logic => :error,)
+
 run(::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank)
+kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
+
 run(::MethodFamilies, ctx) = check_method_families([ctx.root; ctx.mods], ctx.sites; repo = ctx.index.repo)
+kinds(::MethodFamilies) = (:method_family => :advisory,)
+
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
+kinds(::TupleReturns) = (:tuple_return => :advisory,)
+
 run(::DeadCode, ctx) = check_dead_code_static(ctx.index)
+kinds(::DeadCode) = (:dead_code => :advisory,)
+
 run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)
+kinds(::BlanketExports) = (:blanket_export => :advisory,)
+
 run(::StaleExports, ctx) = check_stale_exports(ctx.mods)
+kinds(::StaleExports) = (:stale_export => :advisory,)
+
 run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods; entry_dirs = ctx.entry_dirs)
+kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
+
 run(::PrivateImports, ctx) = check_private_imports(ctx.index)
+kinds(::PrivateImports) = (:private_import => :advisory,)
+
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.mods; repo = ctx.index.repo)
+kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
+
 run(::AbstractFields, ctx) = check_abstract_fields(ctx.mods, ctx.sites)
+kinds(::AbstractFields) = (:abstract_field => :advisory,)
+
 run(check::ReaderSet, ctx) =
     check_reader_set(ctx.mods, check.super, check.required; sites = ctx.sites)
+kinds(::ReaderSet) = (:reader_set => :error,)
+
 run(check::ScanSeeds, ctx) = check_scan_seeds(ctx.index; directories = check.directories)
+kinds(::ScanSeeds) = (:scan_seed => :advisory,)
+
 run(::DeclaredNames, ctx) = check_declared_names(ctx.index, ctx.mods)
+kinds(::DeclaredNames) = (:undeclared_name => :advisory,)
+
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
+kinds(::DeclaredModules) = (:undeclared_module => :advisory,)
+
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
+kinds(::ForeignFields) = (:foreign_field => :advisory,)
 
 run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
+kinds(::FileBackEdges) = (:file_backedge => :advisory,)
+
 run(::FileSinkable, ctx) = collect_modules(cg -> check_file_sinkable(cg, ctx.sites), ctx)
+kinds(::FileSinkable) = (:file_sinkable => :advisory,)
 
 # sinkable and extract-candidate are one analysis at two granularities, so one check emits both.
 function run(::Sinkable, ctx)
@@ -83,6 +128,7 @@ function run(::Sinkable, ctx)
     sink = check_sinkable(ctx.mods, ctx.graph.rank, body_calls, ctx.sites; repo = ctx.index.repo)
     vcat(sink, check_extract_candidates(sink))
 end
+kinds(::Sinkable) = (:sinkable => :advisory, :extract_candidate => :advisory)
 
 function collect_modules(f, ctx)
     findings = Finding[]
@@ -115,10 +161,33 @@ const CHECKS = (
     AbstractFields(),
 )
 
+# A finding's kind must be one its check declares, or the gate has no severity for it.
 function run_checks(ctx, checks = CHECKS)
     findings = Finding[]
     for check in checks
-        append!(findings, run(check, ctx))
+        found = run(check, ctx)
+        declared = Set(first(pair) for pair in kinds(check))
+        stray = Set(f.kind for f in found if !(f.kind in declared))
+        if !isempty(stray)
+            listed = sort!(collect(stray))
+            throw(ArgumentError("$(typeof(check)) emits undeclared kinds $listed"))
+        end
+        append!(findings, found)
     end
     findings
+end
+
+# Each kind the checks declare, at its severity. `error_kinds` promotes kinds to :error and cannot demote one;
+# naming a kind no check declares throws, so a typo cannot pass as a promotion.
+function severities(checks; error_kinds = ())
+    table = Dict{Symbol,Symbol}()
+    for check in checks, (kind, severity) in kinds(check)
+        severity in SEVERITIES || throw(ArgumentError("$(typeof(check)) declares $kind as $severity"))
+        table[kind] = severity
+    end
+    for kind in error_kinds
+        haskey(table, kind) || throw(ArgumentError("error_kinds names $kind, which no running check declares"))
+        table[kind] = :error
+    end
+    table
 end

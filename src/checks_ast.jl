@@ -255,7 +255,7 @@ function check_scan_seeds(index::SourceIndex; directories)
             detail = "fixed integer counts form a uniform parameter grid"
             line = minimum(values(grids))
             symbol = string(owner)
-            finding = Finding(file.mod, :scan_seed, file.path, symbol, line, detail, evidence; tier = :structure)
+            finding = Finding(file.mod, :scan_seed, file.path, symbol, line, detail, evidence)
             push!(findings, finding)
         end
     end

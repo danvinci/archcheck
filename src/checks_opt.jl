@@ -65,3 +65,4 @@ end
 
 run(check::OptAnalysis, ctx) =
     check_opt_entries(check.entries; repo = ctx.index.repo, target_modules = ctx.mods)
+kinds(::OptAnalysis) = (:runtime_dispatch => :advisory, :boxed_capture => :advisory)
