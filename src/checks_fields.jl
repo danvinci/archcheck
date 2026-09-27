@@ -409,7 +409,7 @@ function field_reads(tree, M::Module)
     state
 end
 
-is_contract(owner) = owner === CONTRACTS_MODULE || startswith(string(owner), "$CONTRACTS_MODULE.")
+is_contract(owner) = is_within_module(owner, CONTRACTS_MODULE)
 
 # A field S's docstring documents. Julia records field docstrings under `:fields` only when S has its own docstring;
 # the lookup leaves a module with no docs uninitialised.

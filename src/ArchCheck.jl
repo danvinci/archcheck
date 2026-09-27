@@ -23,6 +23,7 @@ export ModRef, ModuleGraph, build_module_graph, scan_modrefs
 export FileNode, SourceIndex, build_source_index, files_of, file_rank, include_paths, is_wrapper
 export def_sites, site_of
 export Check, Context, CHECKS, run_checks, ReaderSet, ScanSeeds
+export Independent
 export check_corpus, check_backedges, is_backedge, is_downrank, find_cycles, check_cycles
 export check_contracts_logic
 export check_dup_owners, check_sinkable, check_method_families

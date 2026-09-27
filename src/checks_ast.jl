@@ -112,6 +112,33 @@ function check_cycles(g::ModuleGraph)
      for c in find_cycles(collect(keys(g.rank)), adj)]
 end
 
+# Whether module `key` is `owner` or nested in it, by dotted key.
+function is_within_module(key::Symbol, owner::Symbol)
+    key === owner && return true
+    prefix = string(owner, ".")
+    startswith(string(key), prefix)
+end
+
+# sibling-edge: a reference from one member of the set, or a module nested in it, to another member's tree.
+function check_independent(g::ModuleGraph, modules)
+    for mod in modules
+        haskey(g.rank, mod) || throw(ArgumentError("Independent names $mod, which the module graph does not rank"))
+    end
+    findings = Finding[]
+    for r in g.refs
+        source = findfirst(mod -> is_within_module(r.from, mod), modules)
+        target = findfirst(mod -> is_within_module(r.to, mod), modules)
+        (isnothing(source) || isnothing(target) || source == target) && continue
+        from_member = modules[source]
+        to_member = modules[target]
+        evidence = [:from => string(from_member), :to => string(to_member), :via => string(r.via)]
+        reached = string(r.to)
+        detail = "references a module the independence set keeps apart from it"
+        push!(findings, Finding(r.from, :sibling_edge, r.file, reached, r.line, detail, evidence))
+    end
+    findings
+end
+
 # A contracts/ function is type surface, not logic, when it is an outer constructor (name is a contract
 # type) or dispatches purely over contract types (an accessor). Anything mixing in a raw or domain type,
 # or taking no argument, computes something and belongs in a domain module.

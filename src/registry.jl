@@ -48,6 +48,20 @@ end
 struct ScanSeeds <: Check
     directories::Tuple # source directories relative to the repository root, or absolute paths
 end
+# Modules that do not reference one another, each counted with the modules nested in it; import-linter's
+# `independence` contract is the precedent. The constructor refuses a set of one and a member inside another.
+struct Independent <: Check
+    modules::Tuple{Vararg{Symbol}}   # dotted module keys below the package
+    function Independent(modules::Symbol...)
+        length(modules) >= 2 || throw(ArgumentError("Independent needs two or more modules, got $modules"))
+        allunique(modules) || throw(ArgumentError("Independent names a module twice: $modules"))
+        for outer in modules, inner in modules
+            outer !== inner && is_within_module(inner, outer) &&
+                throw(ArgumentError("Independent names $inner, which is nested in $outer"))
+        end
+        new(modules)
+    end
+end
 struct DeclaredNames <: Check end
 struct DeclaredModules <: Check end
 struct ForeignFields <: Check end
@@ -106,6 +120,9 @@ kinds(::ReaderSet) = (:reader_set => :error,)
 
 run(check::ScanSeeds, ctx) = check_scan_seeds(ctx.index; directories = check.directories)
 kinds(::ScanSeeds) = (:scan_seed => :advisory,)
+
+run(check::Independent, ctx) = check_independent(ctx.graph, check.modules)
+kinds(::Independent) = (:sibling_edge => :error,)
 
 run(::DeclaredNames, ctx) = check_declared_names(ctx.index, ctx.mods)
 kinds(::DeclaredNames) = (:undeclared_name => :advisory,)
