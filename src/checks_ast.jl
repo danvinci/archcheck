@@ -1,6 +1,6 @@
 # Checks over the static index: corpus, dead code, and the module-zoom rank rules.
 
-# dead-code: a top-level def never appearing as a call site in src and not named in test/ or scripts/.
+# dead-code: a top-level def with no call site in src and not named in scripts/.
 # JuliaSyntax sees closure-internal calls, so deck-wrapped functions are not dead.
 function check_dead_code_static(index, external = index.external)
     defs = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
@@ -14,7 +14,7 @@ function check_dead_code_static(index, external = index.external)
             defs[(f.mod, nm)] = (f.path, f.scan.line[nm])
         end
     end
-    [Finding(m, :dead_code, file, string(nm), line, "no textual reference in src, test, or scripts")
+    [Finding(m, :dead_code, file, string(nm), line, "no reference in src or scripts")
      for ((m, nm), (file, line)) in defs if !(nm in referenced) && !(nm in external)]
 end
 

@@ -367,7 +367,7 @@ struct SourceIndex
     dir2mod::Dict{String,Symbol}            # src subdir -> module
     files::Vector{FileNode}                 # every module-owned source file
     refs::Vector{ModRef}                    # cross-module references, from the same parse
-    external::Set{Symbol}                   # names referenced from the entry dirs (test/, scripts/)
+    external::Set{Symbol}                   # names referenced from entry dirs other than test/ (scripts/, ...)
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
     missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
     nonliteral::Vector{Tuple{Symbol,String,Int}}      # include whose argument is not a string literal: owner, file, line
@@ -489,6 +489,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
     external = Set{Symbol}()
     for dir in entry_dirs
         isdir(dir) || continue
+        basename(normpath(dir)) == "test" && continue   # nothing production runs reaches a test/ reference
         for (root, _, files) in walkdir(dir), fn in files
             endswith(fn, ".jl") || continue
             path = joinpath(root, fn)

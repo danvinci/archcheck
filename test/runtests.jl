@@ -713,6 +713,19 @@ end
         @test :shipped in withentry.external
         @test isempty(check_dead_code_static(withentry))
     end
+    # a test/ entry dir does not keep a def alive: nothing production runs reaches it there
+    mktempdir() do dir
+        mkpath(joinpath(dir, "aa"))
+        mkpath(joinpath(dir, "test"))
+        write(joinpath(dir, "aa", "Aa.jl"), "include(\"aa.jl\")")
+        write(joinpath(dir, "aa", "aa.jl"), "tested() = 1")
+        entry = joinpath(dir, "test")
+        write(joinpath(entry, "runtests.jl"), "tested()")
+
+        index = build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa); entry_dirs = [entry])
+        @test !(:tested in index.external)
+        @test "tested" in Set(f.symbol for f in check_dead_code_static(index))
+    end
 end
 
 # Build a random module: n files, each with a few defs, referencing defs in other files at random, and a
