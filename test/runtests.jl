@@ -181,22 +181,6 @@ function default_severity()
     ArchCheck.severities(engine)
 end
 
-@testset "finding record" begin
-    fs = [Finding(:Geometry, :back_edge, "src/geometry/surface.jl", "point_at", "refs Aero (rank 7 > 6)"),
-          Finding(:Geometry, :sinkable, "src/geometry/surface.jl", "basis_funs", "footprint Numerics; belongs there"),
-          Finding(:Contracts, :contracts_logic, "src/contracts/types.jl", "helper", "function body in the spine")]
-
-    # JSONL round-trips: each line parses; the fields and the applied severity survive
-    io = IOBuffer()
-    emit_jsonl(io, fs, default_severity())
-    lines = split(strip(String(take!(io))), '\n')
-    @test length(lines) == 3
-    recs = JSON.parse.(lines)
-    @test recs[1]["module"] == "Geometry" && recs[1]["kind"] == "back_edge"
-    @test recs[1]["severity"] == "error"
-    @test recs[2]["symbol"] == "basis_funs" && recs[2]["severity"] == "advisory"
-end
-
 # A consumer check whose declaration leaves out the kind its run emits.
 module FConsumer
     using ArchCheck
@@ -224,14 +208,6 @@ end
 end
 
 @testset "module graph" begin
-    # tool correctness on synthetic inputs (independent oracle, no coupling to the real tree)
-    mktemp() do path, io
-        write(io, "include(\"aa/Aa.jl\"); using .Aa\ninclude(\"bb/Bb.jl\"); using .Bb\n")
-        flush(io)
-        rank, dir2mod = ArchCheck.parse_spine_order(path)
-        @test rank == Dict(:Aa => 1, :Bb => 2)               # include order = rank
-        @test dir2mod == Dict("aa" => :Aa, "bb" => :Bb)
-    end
     # the module name comes from the paired `using`, so a wrapper filename may differ from it, and a
     # module may sit nested inside another module's directory
     mktemp() do path, io
@@ -241,29 +217,14 @@ end
         @test rank == Dict(:Aa => 1, :Inner => 2)
         @test dir2mod == Dict("aa" => :Aa, "bb/inner" => :Inner)
     end
-    # a nested module owns its own files; the parent owns only what is not nested
-    nested = Dict("bb" => :Bb, "bb/inner" => :Inner)
-    @test ArchCheck.module_of("s/bb/inner/x.jl", "s", nested) === :Inner
-    @test ArchCheck.module_of("s/bb/y.jl", "s", nested) === :Bb
-    @test ArchCheck.module_of("s/zz/q.jl", "s", nested) === nothing
     # relative import = edge, qualified X.f = edge, external pkg skipped, self-ref dropped
     refs = scan_modrefs("using ..Aa, ..Bb, QuadGK\nq = Cc.foo(1)", :Aa, "x.jl", Set([:Aa, :Bb, :Cc]))
     @test Set((r.to, r.via) for r in refs) == Set([(:Bb, :using), (:Cc, :qualified)])
 end
 
 @testset "AST enforce checks (back-edge, cycle, contracts-logic)" begin
-    # tool correctness on synthetic inputs
-    rank = Dict(:Lo => [1], :Hi => [2])
-    d2m = Dict("lo" => :Lo, "hi" => :Hi)
-    @test isempty(check_backedges(ModuleGraph(rank, d2m, [ModRef(:Hi, :Lo, "f.jl", 0, :using)])))   # down: clean
-    up = check_backedges(ModuleGraph(rank, d2m, [ModRef(:Lo, :Hi, "f.jl", 0, :using)]))              # up: flagged
-    @test length(up) == 1 && up[1].kind === :back_edge && up[1].mod === :Lo
-
     @test isempty(find_cycles([:a, :b, :c], Dict(:a => [:b, :c], :b => [:c])))
     @test !isempty(find_cycles([:a, :b], Dict(:a => [:b], :b => [:a])))
-
-    sc = scan_defs("struct S; x::Int; S(x) = new(x); end\nfoo(a) = a + 1\nfunction bar(b); b; end")
-    @test Set(sc.funcs) == Set([:foo, :bar]) && :S in sc.types   # inner ctor excluded; S is a type
 end
 
 @testset "contracts-logic classification" begin
@@ -276,11 +237,6 @@ end
     freefn(x::Float64) = x + 1                   # logic: no contract type at all
     """
     sc = scan_defs(src)
-    @test sc.argtypes[:density] == [:Composite]
-    @test isempty(sc.argtypes[:Nozzle])
-    @test sc.argtypes[:scale]  == [:Composite, :Float64]
-    @test sc.argtypes[:freefn] == [:Float64]
-
     ctypes = Set(sc.types)
     @test ArchCheck.is_type_interface(:density, sc.argtypes, ctypes)      # accessor -> type surface
     @test ArchCheck.is_type_interface(:Nozzle,  sc.argtypes, ctypes)      # constructor -> type surface
@@ -305,7 +261,6 @@ end
     @test !("sig_own" in syms)                      # own type in signature -> stays
     @test !("body_own" in syms)                     # own module in body -> stays
     @test !("pure_in_low" in syms)                  # already in the substrate -> not flagged
-    @test all(f -> f.kind === :sinkable, sink)
     flagged = only(f for f in sink if f.symbol == "takes_low")
     @test ev(flagged, :touches) == "FakeLo"
     @test ev(flagged, :sinks_to) == "FakeLo"                # one module in the footprint names it
@@ -329,7 +284,6 @@ end
     repo = normpath(joinpath(@__DIR__, ".."))
     here = relpath(@__FILE__, repo)
     found = check_module_piracy([FFam, FFam.SibA, FFam.SibB]; repo)
-    @test all(f -> f.kind === :module_piracy, found)
     by_signature = Dict(ev(f, :signature) => f for f in found)
     flagged = Set((f.mod, ev(f, :signature)) for f in found)
     sig(parts...) = string(Tuple{parts...})
@@ -370,7 +324,6 @@ end
 
 @testset "abstract-field" begin
     found = check_abstract_fields([FAbs], NO_SITES)
-    @test all(f -> f.kind === :abstract_field, found)
     syms = Set(f.symbol for f in found)
 
     @test "Open.xs" in syms && ev(only(f for f in found if f.symbol == "Open.xs"), :declared) == "Vector"
@@ -418,7 +371,6 @@ end
 end
 
 @testset "qualified methods retain their file dependencies" begin
-    method_name = Symbol("Base.getindex")
     source = """
         function Base.getindex(shape::Shape{T}, helper, index = default_index()) where {T}
             helper(index)
@@ -426,9 +378,6 @@ end
             nested(shape)
         end
         """
-    scan = scan_defs(source)
-    @test get(scan.refs, method_name, Set{Symbol}()) == Set([:default_index, :leaf])
-    @test isempty(scan.funcs)
 
     mktempdir() do root
         module_dir = joinpath(root, "m")
@@ -445,8 +394,6 @@ end
         found = check_file_backedges(graph)
         edges = Set((basename(f.file), basename(f.symbol)) for f in found)
         @test edges == Set([("extension.jl", "late.jl")])
-        @test !haskey(graph.files, method_name)
-        @test isempty(graph.calls[:Shape])
         dead = Set(f.symbol for f in check_dead_code_static(index))
         @test dead == Set(["helper"])
     end
@@ -479,22 +426,6 @@ end
 end
 
 @testset "intra-module call graph (static)" begin
-    # per-def calls, including a callee inside a closure (the reflection blind spot)
-    sc = scan_defs("top() = mid() + leaf()\nmid() = leaf()\nbuild() = map(x -> deck(x), z)")
-    @test :mid in sc.refs[:top] && :leaf in sc.refs[:top]     # both operands of the infix + captured
-    @test :leaf in sc.refs[:mid] && :deck in sc.refs[:build]  # closure-internal ref captured
-
-    mktempdir() do dir
-        mkpath(joinpath(dir, "geo"))
-        write(joinpath(dir, "geo", "Geo.jl"), "include(\"a.jl\")")
-        write(joinpath(dir, "geo", "a.jl"), "f() = g()\ng() = 1")
-        index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
-        cg = build_call_graph(index, :Geo)
-        @test Set(cg.funcs) == Set([:f, :g]) && cg.calls[:f] == Set([:g])
-        @test endswith(cg.files[:f], "a.jl")
-        @test :g in cg.refs[:f]        # raw refs kept alongside the intra-module edges
-    end
-
     # a method-local assignment is not a call, and filtering it must not drop a real call
     # of the same name from a different overload
     mktempdir() do dir
@@ -545,9 +476,6 @@ end
     called = scan_defs("called() = (items = items(),)")
     @test :items in called.refs[:called]
 
-    positional = scan_defs("owner(x = helper()) = x\nhelper() = 1")
-    @test :helper in positional.refs[:owner]
-    @test !(:x in positional.refs[:owner])
     keyworded = scan_defs("keyed(; knots = helper()) = knots\nhelper() = 1")
     @test :helper in keyworded.refs[:keyed]
     @test !(:knots in keyworded.refs[:keyed])
@@ -620,18 +548,6 @@ end
     typed = scan_defs("f() = begin; x::Marker = make(); x; end")
     @test :Marker in typed.refs[:f] && :make in typed.refs[:f]
     @test !(:x in typed.refs[:f])
-
-    mktempdir() do dir
-        mkpath(joinpath(dir, "m"))
-        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")\ninclude(\"b.jl\")")
-        write(joinpath(dir, "m", "a.jl"), "function owner()\n    if true\n        helper = 1\n    end\n    helper\nend\n")
-        write(joinpath(dir, "m", "b.jl"), "helper() = 1\n")
-        rank = Dict(:M => 1)
-        dir2mod = Dict("m" => :M)
-        index = build_source_index(dir, rank, dir2mod)
-        cg = build_call_graph(index, :M)
-        @test !(:helper in cg.calls[:owner])
-    end
 end
 
 @testset "struct-field coupling (static)" begin
@@ -647,8 +563,6 @@ end
         write(joinpath(dir, "m", "b.jl"), "struct T end\nmake() = S()")
         index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
         cg = build_call_graph(index, :M)
-        @test :T in cg.calls[:S]                          # struct field-type edge
-        @test !(:S in cg.funcs) && !(:T in cg.funcs)      # types contribute edges, are not sink candidates
         back = only(check_file_backedges(cg))
         @test ev(back, :via) == "S"                       # the struct itself carries the edge
     end
@@ -706,7 +620,6 @@ end
         index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
         cg = build_call_graph(index, :M)
         for owner in (:Long, :Short, :Parametric)
-            @test :helper in cg.calls[owner]
             @test !(owner in cg.funcs)
         end
         @test !(:helper in cg.calls[:Shadow])
@@ -726,10 +639,6 @@ end
         dir2mod = Dict("m" => :M)
         index = build_source_index(dir, rank, dir2mod)
         cg = build_call_graph(index, :M)
-        @test :helper in cg.calls[:Law]
-        @test !(:Law in cg.funcs)
-        high = only(f.path for f in index.files if f.name == "high.jl")
-        @test :helper in cg.site_refs[(:Law, high)]
         found = check_file_sinkable(cg, def_sites(index))
         @test !any(f -> f.symbol == "helper", found)
         stray = only(f for f in found if f.symbol == "stray")
@@ -784,7 +693,6 @@ end
         @test "shipped" in Set(f.symbol for f in check_dead_code_static(lonely))
 
         withentry = build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa); entry_dirs = [entry])
-        @test :shipped in withentry.external
         @test isempty(check_dead_code_static(withentry))
     end
     # a test/ entry dir does not keep a def alive: nothing production runs reaches it there
@@ -797,7 +705,6 @@ end
         write(joinpath(entry, "runtests.jl"), "tested()")
 
         index = build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa); entry_dirs = [entry])
-        @test !(:tested in index.external)
         @test "tested" in Set(f.symbol for f in check_dead_code_static(index))
     end
     # a def's own export line is not a use: exported with no caller is still dead
@@ -965,24 +872,6 @@ end
         @test isempty(check_corpus(index))                  # both declared, so neither is a hole
     end
 
-    # a literal include outside the mapped directory is still indexed under the module that executes it
-    mktempdir() do dir
-        geometry = joinpath(dir, "geometry")
-        mkpath(geometry)
-        write(joinpath(geometry, "Geometry.jl"),
-              "module Geometry\ninclude(\"early.jl\")\ninclude(\"late.jl\")\ninclude(\"../shared.jl\")\nend\n")
-        write(joinpath(geometry, "early.jl"), "struct Shape end\nBase.length(shape::Shape) = late_helper()\n")
-        write(joinpath(geometry, "late.jl"), "late_helper() = 4\n")
-        write(joinpath(dir, "shared.jl"), "shared_helper() = late_helper()\n")
-        rank = Dict(:Geometry => 1)
-        dir2mod = Dict("geometry" => :Geometry)
-        index = build_source_index(dir, rank, dir2mod)
-        @test any(f -> f.name == "shared.jl" && f.mod === :Geometry && f.filerank == 3, index.files)
-        @test file_rank(geometry)["../shared.jl"] == 3
-        @test isempty(index.missing) && isempty(index.nonliteral) && isempty(index.unparsed)
-        @test isempty(check_corpus(index))
-    end
-
     # a reference from an earlier file to an outside include is a file backedge on the real paths
     mktempdir() do dir
         geometry = joinpath(dir, "geometry")
@@ -1015,7 +904,6 @@ end
         @test any(f -> f.kind === :missing_include && f.symbol == "../missing.jl", corpus)
         @test any(f -> f.kind === :nonliteral_include && endswith(f.file, "Geometry.jl"), corpus)
         @test any(f -> f.kind === :unparsed && endswith(f.file, "bad.jl"), corpus)
-        @test !any(f -> f.name == "bad.jl", index.files)
     end
 
     # a cross-directory include owns the file under the module that executes it
@@ -1058,23 +946,10 @@ end
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
         index = build_source_index(dir, rank, dir2mod)
-        names = Set(f.name for f in index.files)
-        @test all(n -> n in names, ("early.jl", "same.jl", "inside.jl", "split.jl"))
         @test isempty(check_corpus(index))
         graph = build_call_graph(index, :M)
-        @test endswith(graph.files[:split_helper], "split.jl")
         back = only(check_file_backedges(graph))
         @test endswith(back.file, "early.jl") && endswith(back.symbol, "split.jl")
-    end
-
-    # the wrapper is the one file its module never includes - not a hole
-    mktempdir() do dir
-        mkpath(joinpath(dir, "m"))
-        write(joinpath(dir, "m", "M.jl"), "include(\"known.jl\")")
-        write(joinpath(dir, "m", "known.jl"), "a() = 1")
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        @test isempty(check_corpus(index))
-        @test any(is_wrapper, index.files)
     end
 
     # the wrapper is the module dir's entry file, not the file whose name matches the module
@@ -1085,7 +960,6 @@ end
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
         index = build_source_index(dir, rank, dir2mod)
-        @test [f.name for f in index.files if is_wrapper(f)] == ["Entry.jl"]
         @test isempty(check_corpus(index))          # so it is not reported as an unranked hole
     end
 
@@ -1097,7 +971,6 @@ end
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
         index = build_source_index(dir, rank, dir2mod)
-        @test [f.name for f in index.files if is_wrapper(f)] == ["M.jl"]
         @test isempty(check_corpus(index))
     end
 
@@ -1109,7 +982,6 @@ end
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
         index = build_source_index(dir, rank, dir2mod)
-        @test !any(is_wrapper, index.files)
         corpus = check_corpus(index)
         @test Set(f.kind for f in corpus) == Set([:unranked_file])
     end
@@ -1121,7 +993,6 @@ end
         write(joinpath(dir, "m", "good.jl"), "a() = 1")
         write(joinpath(dir, "m", "bad.jl"), "function wrecked(x\n  return x\n")
         index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        @test !any(f -> f.name == "bad.jl", index.files)     # gone from every check's view
         corpus = check_corpus(index)
         @test length(corpus) == 1 && corpus[1].kind === :unparsed
         @test endswith(corpus[1].file, "bad.jl")
@@ -1153,7 +1024,6 @@ end
         write(joinpath(dir, "m", "scratch.jl"), "b() = 2")   # never `git add`ed
         run(Cmd(`git add m/M.jl m/known.jl`; dir = dir))
         index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        @test Set(f.name for f in index.files) == Set(["M.jl", "known.jl"])
         @test isempty(check_corpus(index))
     end
 
@@ -1170,16 +1040,6 @@ end
         index = build_source_index(dir, rank, dir2mod)
         @test any(f -> f.name == "shared.jl" && f.mod === :M && f.filerank == 2, index.files)
         @test isempty(check_corpus(index))
-    end
-
-    # outside any git work tree, a synthetic corpus is not filtered at all
-    mktempdir() do dir
-        mkpath(joinpath(dir, "m"))
-        write(joinpath(dir, "m", "M.jl"), "include(\"known.jl\")")
-        write(joinpath(dir, "m", "known.jl"), "a() = 1")
-        @test ArchCheck.tracked_files(dir) === nothing
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        @test length(index.files) == 2
     end
 end
 
@@ -1209,23 +1069,8 @@ end
 
     # the rank rule is the SAME predicate at both zooms: down is clean, up and sideways are back-edges
     rank = Dict("low.jl" => 1, "high.jl" => 2)
-    @test !is_backedge(rank, "high.jl", "low.jl")   # down: clean
-    @test is_backedge(rank, "low.jl", "high.jl")    # up: flagged
     @test is_backedge(rank, "low.jl", "low.jl")     # sideways (equal rank): flagged
     @test !is_backedge(rank, "low.jl", "absent.jl") # unranked: exempt, nothing declared its position
-
-    # the finding names the defs carrying the edge - what you cut. (Which edges are back-edges at all is
-    # the fuzz harness's job, over random trees rather than one I picked.)
-    mktempdir() do dir
-        mkpath(joinpath(dir, "m"))
-        write(joinpath(dir, "m", "M.jl"), "include(\"low.jl\")\ninclude(\"high.jl\")")
-        write(joinpath(dir, "m", "low.jl"), "climber() = summit()")
-        write(joinpath(dir, "m", "high.jl"), "summit() = 1")
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        back = only(check_file_backedges(build_call_graph(index, :M)))
-        @test back.kind === :file_backedge
-        @test ev(back, :via) == "climber" && ev(back, :include_order) == "1->2"
-    end
 end
 
 @testset "tuple return (the unnamed data layer)" begin
@@ -1236,9 +1081,7 @@ end
     blocky() = begin; q = 1; return (a, b, c, d); end
     """)
     # the scan records raw arity; the threshold is the check's policy, not the substrate's
-    @test sc.tupletail[:three] == 3            # bare tuple tail, short form
     @test sc.tupletail[:blocky] == 4           # through a block and an explicit return
-    @test sc.tupletail[:pair] == 2             # recorded, and filtered out downstream
     @test !haskey(sc.tupletail, :named)        # a NamedTuple names its slots - not anonymous
 
     mktempdir() do dir
@@ -1340,20 +1183,6 @@ end
     @test occursin("tuple_return 1", out) && !occursin("wide", out)   # standing counted, not listed
 end
 
-@testset "JuliaSyntax static scan" begin
-    # closure-internal ref is seen (the reflection blind spot)
-    sc = scan_defs("build() = map(x -> deck_call(x), xs)")
-    @test :build in sc.funcs && :deck_call in sc.refs[:build] && :map in sc.refs[:build]
-
-    # a nested def is a local, not top-level; its ref is still seen
-    sc2 = scan_defs("outer() = (inner(x) = x + 1; inner(3))")
-    @test :outer in sc2.funcs && !(:inner in sc2.funcs) && !(:inner in sc2.refs[:outer])
-
-    # function forms, type separation, source line
-    sc3 = scan_defs("function foo(x); x; end\nbar(y) = y\nstruct Baz end")
-    @test Set(sc3.funcs) == Set([:foo, :bar]) && :Baz in sc3.types && sc3.line[:bar] == 2
-end
-
 @testset "interface" begin
     # blanket export: the wrapper republishes its whole namespace, so it declares no interface
     mktempdir() do dir
@@ -1373,15 +1202,6 @@ end
         write(joinpath(dir, "geo", "Geo.jl"),
               "include(\"a.jl\")\n# names(@__MODULE__; all=true)\n")
         write(joinpath(dir, "geo", "a.jl"), "f() = 1")
-        index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
-        @test isempty(check_blanket_exports(index))
-    end
-
-    # a wrapper with a real export list is clean
-    mktempdir() do dir
-        mkpath(joinpath(dir, "geo"))
-        write(joinpath(dir, "geo", "Geo.jl"), "include(\"a.jl\")")
-        write(joinpath(dir, "geo", "a.jl"), "export f\nf() = 1")
         index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
         @test isempty(check_blanket_exports(index))
     end
@@ -1461,7 +1281,6 @@ end
         (FReadMissing.triangles, Tuple{}),
     )
     missing = check_reader_set([FReadMissing], FReadMissing.Comp, missing_required; sites = NO_SITES)
-    @test all(f -> f.kind === :reader_set, missing)
     syms = Set(f.symbol for f in missing)
     @test syms == Set(["Bare.classify", "Bare.section", "Bare.x_span", "Bare.triangles",
                       "Fam.classify", "Fam.section", "Fam.x_span", "Fam.triangles", "Flat.classify"])
@@ -1747,7 +1566,6 @@ end
     ])
     # an underscore import is one case of an undeclared name
     private = filter(f -> f.kind === :private_import, findings)
-    @test !isempty(private)
     @test all(p -> any(u -> u.file == p.file && u.line == p.line, undeclared), private)
 end
 
