@@ -16,10 +16,6 @@ Finding(mod, kind, file, symbol, line::Integer, detail) =
     Finding(mod, kind, file, symbol, line, detail, Pair{Symbol,String}[])
 Finding(mod, kind, file, symbol, detail) = Finding(mod, kind, file, symbol, 0, detail)
 
-# `severity` maps each kind of the run to its severity, as `severities` builds it.
-iserror(f::Finding, severity::AbstractDict{Symbol,Symbol}) = severity[f.kind] === :error
-severity_rank(f::Finding, severity) = findfirst(==(severity[f.kind]), SEVERITIES)
-
 # A finding's identity across runs. Line is excluded: it drifts with any edit above it.
 struct FindingKey
     mod::String       # module the offending code lives in
@@ -88,10 +84,10 @@ function print_findings(io::IO, findings, severity)
     end
     for m in sort!(collect(keys(by_mod)))
         fs = by_mod[m]
-        errors = count(f -> iserror(f, severity), fs)
+        errors = count(f -> severity[f.kind] === :error, fs)
         println(io, "  $m: $(length(fs)) findings, $errors errors")
         for f in fs
-            mark = iserror(f, severity) ? 'x' : ' '
+            mark = severity[f.kind] === :error ? 'x' : ' '
             println(io, "    [$mark] $(f.kind)  $(location(f))  -  $(f.detail)")
             isempty(f.evidence) || println(io, "        ", render_evidence(f))
         end
@@ -106,9 +102,10 @@ function print_architecture(io::IO, findings, new, fixed, rank, severity)
 
     if !isempty(new)
         println(io, "\n  NEW")
-        order(f) = (severity_rank(f, severity), get(rank, f.mod, Int[]), string(f.kind), f.file, f.symbol)
+        order(f) = (findfirst(==(severity[f.kind]), SEVERITIES), get(rank, f.mod, Int[]), string(f.kind), f.file,
+                    f.symbol)
         for f in sort(new, by = order)
-            mark = iserror(f, severity) ? "x" : " "
+            mark = severity[f.kind] === :error ? "x" : " "
             owner = rpad(string(f.mod), 12)
             kind = rpad(string(f.kind), 16)
             println(io, "    [$mark] ", owner, kind, location(f), "  -  ", f.detail)

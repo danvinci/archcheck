@@ -36,7 +36,7 @@ function gate(pkg::Module;
     print_architecture(io, findings, new, fixed, index.rank, severity)
     open(handle -> emit_jsonl(handle, findings, severity), report_path, "w")
 
-    errors = filter(f -> iserror(f, severity), findings)
+    errors = filter(f -> severity[f.kind] === :error, findings)
     if !isempty(errors)
         println(io, "\n  ERRORS")   # in full whether new or standing; the delta cannot hide these
         print_findings(io, errors, severity)

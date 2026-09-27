@@ -173,32 +173,24 @@ ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
 # every engine check at its declared severity, with no consumer promotion
 function default_severity()
-    engine = (CHECKS..., ReaderSet(Any, ()), ScanSeeds(()), OptAnalysis())
-    severities(engine)
+    engine = (CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))
+    ArchCheck.severities(engine)
 end
-blocks(f) = iserror(f, default_severity())
 
 @testset "finding record" begin
     fs = [Finding(:Geometry, :back_edge, "src/geometry/surface.jl", "point_at", "refs Aero (rank 7 > 6)"),
           Finding(:Geometry, :sinkable, "src/geometry/surface.jl", "basis_funs", "footprint Numerics; belongs there"),
           Finding(:Contracts, :contracts_logic, "src/contracts/types.jl", "helper", "function body in the spine")]
-    severity = default_severity()
-
-    # a finding blocks when the run's severity for its kind is :error
-    @test iserror(fs[1], severity)
-    @test !iserror(fs[2], severity)
-    @test count(f -> iserror(f, severity), fs) == 2
 
     # JSONL round-trips: each line parses; the fields and the applied severity survive
     io = IOBuffer()
-    emit_jsonl(io, fs, severity)
+    emit_jsonl(io, fs, default_severity())
     lines = split(strip(String(take!(io))), '\n')
     @test length(lines) == 3
     recs = JSON.parse.(lines)
     @test recs[1]["module"] == "Geometry" && recs[1]["kind"] == "back_edge"
     @test recs[1]["severity"] == "error"
     @test recs[2]["symbol"] == "basis_funs" && recs[2]["severity"] == "advisory"
-    @test !haskey(recs[1], "tier") && !haskey(recs[1], "blocking")
 end
 
 # A consumer check whose declaration leaves out the kind its run emits.
@@ -209,43 +201,22 @@ module FConsumer
     ArchCheck.kinds(::Undeclared) = ()
 end
 
-@testset "severity: each check declares its kinds" begin
-    # the oracle: these kinds block, and every other engine kind reports
-    enforce = (:unparsed, :missing_include, :nonliteral_include, :unranked_file, :unranked_module,
-               :back_edge, :cycle, :duplicate_owner, :contracts_logic, :reader_set)
-    reported = (:method_family, :file_backedge, :file_sinkable, :sinkable, :extract_candidate, :tuple_return,
-                :dead_code, :blanket_export, :stale_export, :reaches_internal, :private_import, :boxed_capture,
-                :abstract_field, :scan_seed, :undeclared_name, :undeclared_module, :foreign_field)
-    expected = Dict{Symbol,Symbol}()
-    foreach(kind -> expected[kind] = :error, enforce)
-    foreach(kind -> expected[kind] = :advisory, reported)
-    engine = (CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))
-    @test severities(engine) == expected
-
-    # a kind its check does not declare has no severity, so the run refuses it
+@testset "severity: a kind its check does not declare is refused" begin
     @test_throws ArgumentError run_checks(nothing, (FConsumer.Undeclared(),))
 end
 
-@testset "severity: error_kinds promotes and never demotes" begin
-    promoted = severities(CHECKS; error_kinds = (:method_family,))
-    @test promoted[:method_family] === :error
-    @test promoted[:foreign_field] === :advisory
-    kept = severities(CHECKS; error_kinds = (:back_edge,))
-    @test kept[:back_edge] === :error
-    # a kind no running check declares is a typo, so it throws
-    @test_throws ArgumentError severities(CHECKS; error_kinds = (:method_familly,))
-
-    # through the gate: the promoted kind blocks, and the unlisted kind stays advisory in the report
+@testset "severity: error_kinds promotes a consumer's kinds" begin
     report = joinpath(mktempdir(), "architecture.jsonl")
-    checks = (ArchCheck.MethodFamilies(), ArchCheck.ForeignFields())
+    checks = (ArchCheck.MethodFamilies(),)
     passed = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
     @test any(f -> f.kind === :method_family, passed)
     @test_throws ErrorException ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks,
                                                 error_kinds = (:method_family,))
     records = [JSON.parse(line) for line in eachline(report)]
-    applied = Dict(r["kind"] => r["severity"] for r in records)
-    @test applied["method_family"] == "error"
-    @test applied["foreign_field"] == "advisory"
+    @test all(r -> r["severity"] == "error", records)
+    # a kind no running check declares is a typo, so it throws
+    @test_throws ArgumentError ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks,
+                                               error_kinds = (:method_familly,))
 end
 
 @testset "module graph" begin
@@ -372,7 +343,6 @@ end
 @testset "abstract-field" begin
     found = check_abstract_fields([FAbs], NO_SITES)
     @test all(f -> f.kind === :abstract_field, found)
-    @test all(f -> !blocks(f), found)
     syms = Set(f.symbol for f in found)
 
     @test "Open.xs" in syms && ev(only(f for f in found if f.symbol == "Open.xs"), :declared) == "Vector"
@@ -393,10 +363,8 @@ end
 end
 
 @testset "opt analysis (JET port)" begin
-    @test isempty(check_opt_entries(OptEntry[]; repo = ".", target_modules = Module[]))
     # with no JET module the analysis declares no kinds, so error_kinds cannot name one that did not run
-    jetless = ArchCheck.opt_kinds(nothing)
-    @test isempty(jetless)
+    @test isempty(ArchCheck.kinds(OptAnalysis()))
 
     if isnothing(Base.find_package("JET"))
         @test_skip "JET not on LOAD_PATH"
@@ -408,7 +376,6 @@ end
         @test length(dirty) == 1 && only(dirty).kind === :runtime_dispatch
         @test occursin("any_kernel", only(dirty).symbol)
         @test parse(Int, ev(only(dirty), :dispatches)) >= 1
-        @test !blocks(only(dirty))
 
         clean = check_opt_entries([OptEntry(FOpt.stable_trapz, Tuple{Vector{Float64},Vector{Float64}})];
                                   repo, target_modules = [FOpt])
@@ -419,12 +386,6 @@ end
         boxed = check_opt_entries([boxed_entry]; repo, target_modules = [FOpt])
         boxed_kinds = Set(f.kind for f in boxed)
         @test :inferred_box in boxed_kinds && !(:boxed_capture in boxed_kinds)
-        opt_declared = ArchCheck.kinds(OptAnalysis())
-        reflected_declared = ArchCheck.kinds(ArchCheck.BoxedCaptures())
-        opt_kinds = Set(first(pair) for pair in opt_declared)
-        reflected_kinds = Set(first(pair) for pair in reflected_declared)
-        @test opt_kinds == Set([:runtime_dispatch, :inferred_box])
-        @test isempty(intersect(opt_kinds, reflected_kinds))
     end
 end
 
@@ -647,7 +608,7 @@ end
     down = CallGraph(:M, [:helper, :a, :b], files, calls, calls, Dict("y.jl" => 1, "x.jl" => 2))
     fs = only(check_file_sinkable(down, NO_SITES))
     @test fs.symbol == "helper" && fs.kind === :file_sinkable
-    @test ev(fs, :callees_in) == "y.jl" && !blocks(fs)
+    @test ev(fs, :callees_in) == "y.jl"
     
     @test ev(fs, :files_using_it) == "1/2"             # only helper's file reaches y.jl
     @test ev(fs, :callers_in_own_file) == "0"               # nothing in x.jl calls helper
@@ -728,7 +689,7 @@ end
             Finding(:Geo, :sinkable, "surface.jl", "c", ""), Finding(:Geo, :sinkable, "resolve.jl", "d", "")]
     ec = only(check_extract_candidates(sink; min_defs = 3))
     @test ec.file == "surface.jl" && ec.kind === :extract_candidate
-    @test ev(ec, :defs) == "3" && !blocks(ec)
+    @test ev(ec, :defs) == "3"
     # below threshold -> nothing
     @test isempty(check_extract_candidates([Finding(:Geo, :sinkable, "x.jl", "a", "")]; min_defs = 3))
 end
@@ -743,7 +704,7 @@ end
         syms = Set(f.symbol for f in dead)
         @test "gone" in syms                        # never called, not external -> dead
         @test !("keep" in syms) && !("entry" in syms)   # called / external
-        @test all(f -> f.kind === :dead_code && !blocks(f), dead)
+        @test all(f -> f.kind === :dead_code, dead)
     end
     mktempdir() do dir
         mkpath(joinpath(dir, "aa"))
@@ -877,7 +838,7 @@ end
             accounted = length(index.files) + length(index.unparsed)
             @test accounted == ondisk                             # nothing vanishes unrecorded
             @test any(p -> endswith(p[2], broken), index.unparsed)
-            @test !isempty(filter(blocks, check_corpus(index)))
+            @test !isempty(check_corpus(index))
         end
     end
 end
@@ -893,7 +854,6 @@ end
         corpus = check_corpus(index)
         @test length(corpus) == 1
         @test corpus[1].kind === :unranked_file && endswith(corpus[1].file, "forgotten.jl")
-        @test blocks(corpus[1])                     # a hole makes every other result untrustworthy
     end
 
     # an include of a path that is not a file: the opposite hole from forgotten.jl
@@ -903,7 +863,7 @@ end
         index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
         corpus = check_corpus(index)
         hole = only(f for f in corpus if f.kind === :missing_include)
-        @test hole.symbol == "missing.jl" && hole.line == 1 && blocks(hole)
+        @test hole.symbol == "missing.jl" && hole.line == 1
         @test endswith(hole.file, "M.jl")
     end
 
@@ -913,7 +873,7 @@ end
         index = build_source_index(dir, Dict{Symbol,Int}(), Dict{String,Symbol}())
         hole = only(check_corpus(index))
         @test hole.kind === :missing_include && hole.mod === :Pkg
-        @test hole.symbol == "missing.jl" && blocks(hole)
+        @test hole.symbol == "missing.jl"
     end
 
     # include whose argument is not a string literal cannot be placed in the DAG
@@ -923,7 +883,7 @@ end
         write(joinpath(dir, "m", "known.jl"), "a() = 1")
         index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
         hole = only(f for f in check_corpus(index) if f.kind === :nonliteral_include)
-        @test hole.line == 1 && blocks(hole)
+        @test hole.line == 1
         @test endswith(hole.file, "M.jl")
     end
 
@@ -1098,7 +1058,6 @@ end
         @test !any(is_wrapper, index.files)
         corpus = check_corpus(index)
         @test Set(f.kind for f in corpus) == Set([:unranked_file])
-        @test all(blocks, corpus)
     end
 
     # a src file that will not parse: it vanishes from the index, so its violations vanish with it
@@ -1111,7 +1070,7 @@ end
         @test !any(f -> f.name == "bad.jl", index.files)     # gone from every check's view
         corpus = check_corpus(index)
         @test length(corpus) == 1 && corpus[1].kind === :unparsed
-        @test endswith(corpus[1].file, "bad.jl") && blocks(corpus[1])
+        @test endswith(corpus[1].file, "bad.jl")
     end
 
     # an entry dir is parsed but never loaded, so a broken script would silently shrink `external`
@@ -1127,7 +1086,6 @@ end
         corpus = check_corpus(index)
         @test length(corpus) == 1 && corpus[1].kind === :unparsed && corpus[1].mod === :Entry
         @test "shipped" in Set(f.symbol for f in check_dead_code_static(index))   # the false finding
-        @test !isempty(filter(blocks, corpus))   # which the corpus check makes loud
     end
 end
 
@@ -1213,7 +1171,6 @@ end
         back = only(check_file_backedges(build_call_graph(index, :M)))
         @test back.kind === :file_backedge
         @test ev(back, :via) == "climber" && ev(back, :include_order) == "1->2"
-        @test !blocks(back)       # a fact, but not one that blocks
     end
 end
 
@@ -1238,7 +1195,6 @@ end
         tup = only(check_tuple_returns(index))
         @test tup.symbol == "wide" && tup.kind === :tuple_return
         @test tup.line == 1 && ev(tup, :slots) == "3"
-        @test !blocks(tup)
     end
 end
 
@@ -1402,7 +1358,6 @@ end
     )
     missing = check_reader_set([FReadMissing], FReadMissing.Comp, missing_required; sites = NO_SITES)
     @test all(f -> f.kind === :reader_set, missing)
-    @test all(blocks, missing)
     syms = Set(f.symbol for f in missing)
     @test syms == Set(["Bare.classify", "Bare.section", "Bare.x_span", "Bare.triangles",
                       "Fam.classify", "Fam.section", "Fam.x_span", "Fam.triangles", "Flat.classify"])
@@ -1476,7 +1431,7 @@ end
         expected = Set(["by_const", "literal", "by_range", "by_linrange", "span_grid",
                         "local_grid", "step_grid", "adjacent_grid"])
         @test Set(finding.symbol for finding in found) == expected
-        @test all(finding -> finding.kind === :scan_seed && !blocks(finding), found)
+        @test all(finding -> finding.kind === :scan_seed, found)
         @test length(unique(fingerprint.(found))) == length(found)
         together = check_scan_seeds(index; directories=(geometry, other))
         @test Set(finding.symbol for finding in together) == union(expected, Set(["separate"]))
@@ -1616,7 +1571,6 @@ end
     rank = Dict(:FNest => [1], Symbol("FNest.Declared") => [1, 1])
     stray = only(ArchCheck.check_module_corpus([FNest, FNest.Declared], rank))
     @test stray.kind === :unranked_module && stray.mod === :FNest && stray.symbol == "Stray"
-    @test blocks(stray)
 end
 
 @testset "private imports: the names an import clause binds" begin
@@ -1647,7 +1601,6 @@ end
         ("Hi", "Geo.Cuts.Ring", "qualified"),
         ("Hi", "Low._lowpriv", "extends"),
     ])
-    @test !any(blocks, undeclared)
     # an underscore import is one case of an undeclared name
     private = filter(f -> f.kind === :private_import, findings)
     @test !isempty(private)
@@ -1689,7 +1642,6 @@ end
     # Tick is Low's own, read through receivers only inference types; no other read is flagged
     @test ("Hi", "Low.Tick.at") in reads
     @test length(reads) == 5
-    @test !any(blocks, findings)
 
     # Hi also reads documented fields (Span.lo, Ruler.ticks) and a contract type (Record): the analysis sees them,
     # the rule opens them

@@ -16,8 +16,7 @@ include("registry.jl")
 include("checks_opt.jl")
 include("gate.jl")
 
-export Finding, iserror, emit_jsonl, print_findings, print_architecture
-export SEVERITIES, severities, render_evidence
+export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
 public kinds
 export FindingKey, fingerprint, previous_fingerprints, new_findings
 export ModRef, ModuleGraph, build_module_graph, scan_modrefs
