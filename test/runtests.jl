@@ -734,6 +734,20 @@ end
         index = build_source_index(dir, Dict(:Bb => 1), Dict("bb" => :Bb))
         @test "uncalled" in Set(f.symbol for f in check_dead_code_static(index))
     end
+    # a qualified call from another module counts as the use dead-code looks for
+    mktempdir() do dir
+        mkpath(joinpath(dir, "aa"))
+        mkpath(joinpath(dir, "cc"))
+        write(joinpath(dir, "aa", "Aa.jl"), "include(\"defs.jl\")")
+        write(joinpath(dir, "aa", "defs.jl"), "helper() = 1")
+        write(joinpath(dir, "cc", "Cc.jl"), "include(\"caller.jl\")")
+        write(joinpath(dir, "cc", "caller.jl"), "user() = Aa.helper()")
+        rank = Dict(:Aa => 1, :Cc => 2)
+        dir2mod = Dict("aa" => :Aa, "cc" => :Cc)
+        index = build_source_index(dir, rank, dir2mod)
+        dead = Set(f.symbol for f in check_dead_code_static(index))
+        @test !("helper" in dead)
+    end
 end
 
 # Build a random module: n files, each with a few defs, referencing defs in other files at random, and a

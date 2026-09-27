@@ -279,9 +279,10 @@ function walk_scoped!(fs, n, depth, target, bound, on_qualified = nothing)
     if k == K"quote" && !isnothing(on_qualified)
         return
     elseif k == K"." && walk_dot_base!(c -> walk_scoped!(fs, c, depth, target, bound, on_qualified), n)
-        if !isnothing(on_qualified)
-            member = kids[2].val
-            if member isa Symbol
+        member = kids[2].val
+        if member isa Symbol
+            push!(fs.refs[target], member)
+            if !isnothing(on_qualified)
                 line = Int(JS.source_location(n)[1])
                 on_qualified(kids[1], member, line, bound)
             end
@@ -491,6 +492,8 @@ function walk_defs!(fs, n, depth, current)
     kids = child_nodes(n); kids === nothing && return
     k = JS.kind(n)
     if k == K"." && walk_dot_base!(c -> walk_defs!(fs, c, depth, current), n)
+        member = kids[2].val
+        member isa Symbol && push!(current === nothing ? fs.modrefs : fs.refs[current], member)
         return
     elseif k == K"export" || k == K"public"
         return   # a listed name, not a call, a value read, or a qualified access
