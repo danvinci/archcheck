@@ -29,8 +29,9 @@ function build_call_graph(index, mod::Symbol)
     home!(name, f) = (!haskey(files, name) || f.filerank < rank[files[name]]) && (files[name] = f.path)
     members = files_of(index, mod)
     # An imported function's home is the module or package that declares it, so a method this module adds
-    # gives it no file here.
+    # gives it no file here; its body's calls are still this module's own for caller analysis.
     imported = union(Set{Symbol}(), (f.scan.imports for f in members)...)
+    owned_funcs = union(Set{Symbol}(), (Set(f.scan.funcs) for f in members)...)
     for f in members
         rank[f.path] = f.filerank
         for name in f.scan.funcs
@@ -43,14 +44,15 @@ function build_call_graph(index, mod::Symbol)
         end
     end
     known = Set(keys(files))
-    refs = Dict(name => Set{Symbol}() for name in known)
+    owned = union(known, owned_funcs)
+    refs = Dict(name => Set{Symbol}() for name in owned)
     site_refs = Dict{Tuple{Symbol,String},Set{Symbol}}()
     for f in members, (name, used) in f.scan.refs
         union!(get!(site_refs, (name, f.path), Set{Symbol}()), used)
-        name in known || continue
+        name in owned || continue
         union!(refs[name], used)
     end
-    calls = Dict(n => Set(c for c in refs[n] if c in known && c != n) for n in keys(refs))
-    funcs = [n for n in keys(refs) if !(n in types)]
+    calls = Dict(n => Set(c for c in refs[n] if c in known && c != n) for n in known)
+    funcs = [n for n in known if !(n in types)]
     CallGraph(mod, funcs, files, calls, refs, rank, site_refs)
 end
