@@ -13,15 +13,17 @@ const NO_SITES = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
 # synthetic modules for the reflection checks (duplicate-owner/sinkable), so their logic tests with no package load
 module FakeLo
     struct LowType end
+    const LowRun = Union{LowType,Int}
     pure_in_low(x::Int) = x + 1
 end
 module FakeMid
     struct MidType end
 end
 module FakeHi
-    using ..FakeLo: LowType
+    using ..FakeLo: LowType, LowRun
     using ..FakeMid: MidType
     struct OwnType end
+    uses_run() = LowRun
     sig_own(v::OwnType) = v
     pure_in_high(y::Float64) = y
     body_own() = sig_own(OwnType())
@@ -252,7 +254,9 @@ end
     # sinkable on the synthetic hierarchy: a def whose whole footprint is one lower module is the
     # candidate. Callers place a def, so one its own module calls stays; a Base-only def names no
     # module at all, so it carries no evidence either way.
-    bc = Dict(:FakeHi => Dict(:body_own => Set([:sig_own]), :calls_helper => Set([:helper_low])))
+    high_calls = Dict(:body_own => Set([:sig_own]), :calls_helper => Set([:helper_low]))
+    high_calls[:uses_run] = Set([:LowRun])
+    bc = Dict(:FakeHi => high_calls)
     repo = normpath(joinpath(@__DIR__, "..", ".."))
     sink = check_sinkable([FakeLo, FakeHi], Dict(:FakeLo => [1], :FakeHi => [2]), bc, NO_SITES; repo)
     syms = Set(f.symbol for f in sink)
@@ -268,6 +272,9 @@ end
     # no indexed site here, so this is the reflected fallback - it must carry a repo-relative path,
     # since `file` is part of the fingerprint that suppression and the new/fixed delta key on
     @test flagged.file == relpath(@__FILE__, repo)
+    # a Union alias has no parentmodule: the module owning its binding is the one the body touches
+    run_user = only(f for f in sink if f.symbol == "uses_run")
+    @test ev(run_user, :sinks_to) == "FakeLo"
     # a footprint spanning two modules names no destination: the def may belong in a shared module
     # nobody has written yet
     wide = check_sinkable([FakeLo, FakeMid, FakeHi], Dict(:FakeLo => [1], :FakeMid => [2], :FakeHi => [3]), bc, NO_SITES; repo)

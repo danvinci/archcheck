@@ -331,7 +331,12 @@ function check_sinkable(mods, rank, body_calls, sites; repo)
             for cn in get(dc, n, ())
                 isdefined(M, cn) || continue
                 o = getproperty(M, cn); o isa Module && continue
-                owner = parentmodule(o isa Function || o isa Type ? o : typeof(o))
+                if Base.unwrap_unionall(o) isa Union
+                    # A Union has no parentmodule; the module owning the alias binding stands for it.
+                    owner = Base.binding_module(M, cn)
+                else
+                    owner = parentmodule(o isa Function || o isa Type ? o : typeof(o))
+                end
                 haskey(proj, owner) && push!(foot, proj[owner])
             end
             isempty(foot) && continue
