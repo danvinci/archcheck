@@ -238,12 +238,19 @@ function is_closed_type_object(@nospecialize(T))
     p isa Type && isconcretetype(p)
 end
 
-# Open when the stored type, the container wrapper, or a Dict/Set payload is not concrete.
-# A Union stays: lowering splits a small one into branches. Dict eltype is Pair, so Dict{Int,Any} would look closed.
-function is_open_field(@nospecialize(declared))
-    declared isa TypeVar && return true
+# Open when the stored type, the container wrapper, or a Dict/Set payload is not concrete; a struct's own parameter
+# is fixed per instance. A Union stays: lowering splits a small one. Dict eltype is Pair, so its parts are read apart.
+function is_open_field(@nospecialize(declared), vars = TypeVar[])
+    declared isa TypeVar && return !(declared in vars)
     declared isa Union && return false
     is_closed_type_object(declared) && return false
+    if uses_struct_params(declared, vars)
+        # Around the parameter, a position holding a family over another variable or an abstract type stays open.
+        is_open_position(position) = position isa Core.TypeofVararg || position isa UnionAll ||
+            (position isa TypeVar && !(position in vars)) ||
+            (position isa DataType && (isabstracttype(position) || any(is_open_position, position.parameters)))
+        return is_open_position(declared)
+    end
     if declared <: AbstractDict || declared <: AbstractArray || declared <: AbstractSet
         U = Base.unwrap_unionall(declared)
         isconcretetype(U) || return true
@@ -255,8 +262,8 @@ function is_open_field(@nospecialize(declared))
     !isconcretetype(Base.unwrap_unionall(declared))
 end
 
-# abstract-field: a field whose type leaves dispatch open. A field naming a type parameter closes on use.
-# Vector / Real / an unparametrized UnionAll spec is open on every instantiation.
+# abstract-field: a field whose type leaves dispatch open. A field naming a type parameter closes on use only where
+# nothing around the parameter stays abstract; Vector / Real / an unparametrized UnionAll are open on every instance.
 function check_abstract_fields(mods, sites)
     findings = Finding[]
     for M in mods, n in names(M; all = true)
@@ -269,8 +276,7 @@ function check_abstract_fields(mods, sites)
         S isa DataType || continue
         (isstructtype(S) && parentmodule(S) === M) || continue
         for (field, declared) in zip(fieldnames(S), fieldtypes(S))
-            uses_struct_params(declared, vars) && continue
-            is_open_field(declared) || continue
+            is_open_field(declared, vars) || continue
             owner = module_key(M)
             file, line = site_of(sites, owner, n, ("", 0))
             push!(findings, Finding(owner, :abstract_field, file, "$n.$field", line,

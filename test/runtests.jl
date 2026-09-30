@@ -83,6 +83,7 @@ module FAbs
         ys::Vector
         zs::Vector{T}
         r::Real
+        ws::Vector{Pair{K,T} where K}   # names T, and each element is still a family over K
     end
 end
 module FOpt
@@ -341,6 +342,7 @@ end
 
     @test !("Param.x" in syms) && !("Param.zs" in syms)   # names the parameter, closes on use
     @test "Param.ys" in syms && "Param.r" in syms         # independent of T, open on every instantiation
+    @test "Param.ws" in syms                              # names T, yet each element is a family no T fixes
 end
 
 @testset "opt analysis (JET port)" begin
