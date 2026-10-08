@@ -288,47 +288,6 @@ function collect_modules(f, ctx)
     findings
 end
 
-const CHECKS = (
-    Corpus(),
-    ModuleBackEdges(),
-    ModuleCycles(),
-    ContractsPurity(),
-    OwnerUniqueness(),
-    ModulePiracy(),
-    FileBackEdges(),
-    FileSinkable(),
-    Sinkable(),
-    TupleReturns(),
-    DeadCode(),
-    BlanketExports(),
-    StaleExports(),
-    ReachesInternal(),
-    PrivateImports(),
-    DeclaredNames(),
-    DeclaredModules(),
-    DeclaredExtensions(),
-    ForeignFields(),
-    BoxedCaptures(),
-    AbstractFields(),
-    TypeBranches(),
-)
-
-# A finding's kind must be one its check declares, or the gate has no severity for it.
-function run_checks(ctx, checks = CHECKS)
-    findings = Finding[]
-    for check in checks
-        found = run(check, ctx)
-        declared = Set(first(pair) for pair in kinds(check))
-        stray = Set(f.kind for f in found if !(f.kind in declared))
-        if !isempty(stray)
-            listed = sort!(collect(stray))
-            throw(ArgumentError("$(typeof(check)) emits undeclared kinds $listed"))
-        end
-        append!(findings, found)
-    end
-    findings
-end
-
 # Each kind the checks declare, at its severity. `error_kinds` promotes kinds to :error and cannot demote one;
 # naming a kind no check declares throws, so a typo cannot pass as a promotion.
 function severities(checks; error_kinds = ())

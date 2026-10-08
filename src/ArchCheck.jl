@@ -20,6 +20,7 @@ include("checks_project.jl")
 include("checks_overloads.jl")
 include("checks_clones.jl")
 include("checks_opt.jl")
+include("catalog.jl")
 include("gate.jl")
 
 export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
