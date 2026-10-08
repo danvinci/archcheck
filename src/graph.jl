@@ -109,6 +109,10 @@ function package_layout(spine_path::AbstractString, root::Symbol)
     Dict(root => 1), Dict(SINGLE_MODULE_DIR => root)
 end
 
+# The root once with every loaded module: a single-module package's root is also its one module.
+package_modules(root::Module, mods) = unique!([root; mods])
+package_modules(ctx) = package_modules(ctx.root, ctx.mods)
+
 # Each wrapper declares its nested modules by the package spine's rule. A nested module is keyed by its dotted
 # path; its rank is its parent's plus its position in the parent wrapper's include order.
 function nest_modules(src_root, rank, dir2mod)

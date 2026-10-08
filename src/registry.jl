@@ -25,10 +25,6 @@ end
 Context(ctx::Context; observed::Observation) = Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites,
                                                       ctx.callgraphs, ctx.entry_dirs, ctx.methods, observed)
 
-# The root once with every loaded module: a single-module package's root is also its one module.
-package_modules(root::Module, mods) = unique!([root; mods])
-package_modules(ctx) = package_modules(ctx.root, ctx.mods)
-
 abstract type Check end
 
 # Required of every check, with no fallback: a check that declares nothing cannot run.
