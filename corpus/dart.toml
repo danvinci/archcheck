@@ -1,0 +1,277 @@
+# Dart pins and the evidence-table rows. Kind names follow the plan's check names.
+module = "Dart"
+repo = "/home/dan/lab/projects/dart"
+
+[states.stack]
+commit = "88db4a8ee69023e23fad4e2b42cd17cc84c41392"
+
+[states.stack.workload]
+file = "workloads/dart_build.jl"
+call = "corpus_build"
+
+[states.builders]
+commit = "bdb133c611f7b6934cec9dcaa218e92dacfde6d7"
+
+[states.builders.workload]
+file = "workloads/dart_build.jl"
+call = "corpus_build"
+
+[mutants.kernels]
+base = "builders"
+source = "stack"
+script = "mutants/vector_kernels.jl"
+
+[mutants.kernels.workload]
+file = "workloads/dart_build.jl"
+call = "corpus_build"
+
+[checks.StorageOverloads]
+
+[checks.OverlappingCalls]
+
+[checks.KeptBuilders]
+
+[checks.ExpressionClones]
+min_nodes = 20
+
+[checks.ToleranceSearch]
+args = ["GEOM_EPS", "RESOLUTION_M", "LOFT_GEO_M"]
+
+[checks.UnreachedMethods]
+
+[checks.Rebuilds]
+
+[checks.TwoNames]
+
+[checks.Waits]
+
+[probes]
+functions = ["offset", "duct_flow_section", "Shape", "_filled", "emit_artifacts", "write_renders", "_emit_component"]
+ambient = ["_session"]
+slow_s = 0.005
+
+[[expectations]]
+case = "1"
+check = "Rebuilds"
+state = "stack"
+expect = "fire"
+kind = "rebuild"
+file = "shapes/contour.jl"
+symbol = "offset"
+
+[[expectations]]
+case = "1"
+check = "Rebuilds"
+state = "builders"
+expect = "quiet"
+kind = "rebuild"
+file = "shapes/contour.jl"
+symbol = "offset"
+
+[[expectations]]
+case = "1"
+check = "Rebuilds"
+state = "stack"
+expect = "fire"
+kind = "rebuild"
+file = "airframe/queries.jl"
+symbol = "duct_flow_section"
+
+[[expectations]]
+case = "1"
+check = "Rebuilds"
+state = "builders"
+expect = "quiet"
+kind = "rebuild"
+file = "airframe/queries.jl"
+symbol = "duct_flow_section"
+
+[[expectations]]
+case = "1"
+check = "KeptBuilders"
+state = "stack"
+expect = "fire"
+kind = "kept_builder"
+file = "lofts/brep.jl"
+symbol = "Shape"
+
+[[expectations]]
+case = "1"
+check = "KeptBuilders"
+state = "builders"
+expect = "fire"
+kind = "kept_builder"
+file = "lofts/brep.jl"
+symbol = "Shape"
+
+[[expectations]]
+case = "1"
+check = "KeptBuilders"
+state = "stack"
+expect = "fire"
+kind = "kept_builder"
+file = "shapes/component.jl"
+symbol = "Shape"
+
+[[expectations]]
+case = "1"
+check = "KeptBuilders"
+state = "builders"
+expect = "quiet"
+kind = "kept_builder"
+file = "shapes/component.jl"
+symbol = "Shape"
+
+[[expectations]]
+case = "2"
+check = "OverlappingCalls"
+state = "stack"
+expect = "fire"
+kind = "overlapping_call"
+file = "shapes/region.jl"
+symbol = "classify"
+
+[[expectations]]
+case = "2"
+check = "OverlappingCalls"
+state = "builders"
+expect = "quiet"
+kind = "overlapping_call"
+file = "shapes/region.jl"
+symbol = "classify"
+
+[[expectations]]
+case = "3"
+check = "ToleranceSearch"
+state = "stack"
+expect = "fire"
+kind = "tolerance_search"
+file = "lofts/fit.jl"
+symbol = "_symmetry_pairs"
+
+[[expectations]]
+case = "3"
+check = "ToleranceSearch"
+state = "builders"
+expect = "fire"
+kind = "tolerance_search"
+file = "lofts/fit.jl"
+symbol = "_symmetry_pairs"
+
+[[expectations]]
+case = "3"
+check = "ToleranceSearch"
+state = "stack"
+expect = "fire"
+kind = "tolerance_search"
+file = "lofts/fit.jl"
+symbol = "_add_laminate_rows!"
+
+[[expectations]]
+case = "3"
+check = "ToleranceSearch"
+state = "builders"
+expect = "fire"
+kind = "tolerance_search"
+file = "lofts/fit.jl"
+symbol = "_add_laminate_rows!"
+
+# The direction computed in three functions: one group, reported at its first site in include order.
+[[expectations]]
+case = "4"
+check = "ExpressionClones"
+state = "stack"
+expect = "fire"
+kind = "expression_clone"
+file = "lofts/containment.jl"
+symbol = "_wall_bends"
+
+[[expectations]]
+case = "4"
+check = "ExpressionClones"
+state = "builders"
+expect = "fire"
+kind = "expression_clone"
+file = "lofts/containment.jl"
+symbol = "_wall_bends"
+
+[[expectations]]
+case = "5"
+check = "UnreachedMethods"
+state = "stack"
+expect = "fire"
+kind = "unreached_method"
+file = "shapes/curve.jl"
+symbol = "classify"
+
+[[expectations]]
+case = "5"
+check = "UnreachedMethods"
+state = "builders"
+expect = "quiet"
+kind = "unreached_method"
+file = "shapes/curve.jl"
+symbol = "classify"
+
+[[expectations]]
+case = "6"
+check = "Waits"
+state = "stack"
+expect = "fire"
+kind = "wait"
+file = "export/emit.jl"
+symbol = "write_renders"
+
+[[expectations]]
+case = "6"
+check = "Waits"
+state = "builders"
+expect = "quiet"
+kind = "wait"
+file = "export/emit.jl"
+symbol = "write_renders"
+
+[[expectations]]
+case = "7"
+check = "StorageOverloads"
+state = "stack"
+expect = "quiet"
+kind = "storage_overload"
+file = "numerics/kernels.jl"
+symbol = "poly_mul"
+
+[[expectations]]
+case = "7"
+check = "StorageOverloads"
+state = "builders"
+expect = "quiet"
+kind = "storage_overload"
+file = "numerics/kernels.jl"
+symbol = "poly_mul"
+
+[[expectations]]
+case = "7"
+check = "StorageOverloads"
+state = "kernels"
+expect = "fire"
+kind = "storage_overload"
+file = "numerics/kernels.jl"
+symbol = "poly_mul"
+
+[[expectations]]
+case = "names"
+check = "TwoNames"
+state = "stack"
+expect = "fire"
+kind = "two_names"
+file = "lofts/brep.jl"
+symbol = "_filled"
+
+[[expectations]]
+case = "names"
+check = "TwoNames"
+state = "builders"
+expect = "fire"
+kind = "two_names"
+file = "lofts/brep.jl"
+symbol = "_filled"
