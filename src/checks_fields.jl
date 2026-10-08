@@ -532,11 +532,8 @@ function check_foreign_fields(index::SourceIndex, mods)
     for file in index.files
         M = get(by_key, file.mod, nothing)
         isnothing(M) && continue
-        path = joinpath(index.repo, file.path)
-        tree = parse_file(read(path, String), file.path)
-        isnothing(tree) && continue
         # a read through a Union reads the field on each member
-        for access in field_reads(tree, M).reads, member in Base.uniontypes(access.type)
+        for access in field_reads(file.tree, M).reads, member in Base.uniontypes(access.type)
             S = Base.unwrap_unionall(member)
             S isa DataType || continue
             owner = get(key_of, parentmodule(S), nothing)

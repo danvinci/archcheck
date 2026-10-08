@@ -40,11 +40,7 @@ function check_blanket_exports(index::SourceIndex)
     findings = Finding[]
     for f in index.files
         is_wrapper(f) || continue
-        path = resolve_scan_path(index, f.path)
-        isfile(path) || continue
-        tree = parse_file(read(path, String), f.path)
-        tree === nothing && continue
-        hit = find_blanket_names(tree)
+        hit = find_blanket_names(f.tree)
         isnothing(hit) && continue
         line = Int(JS.source_location(hit)[1])
         detail = "module exports its whole namespace, so it declares no interface"
@@ -132,27 +128,33 @@ function collect_const_aliases!(aliases, n, known)
     end
 end
 
-function scanned_paths(index::SourceIndex, entry_dirs)
-    paths = String[f.path for f in index.files]
+# Each scanned file's path and parse: the index's own trees, then the entry-dir scripts, which the index reads
+# only for names and so parses here.
+function scanned_trees(index::SourceIndex, entry_dirs)
+    trees = Pair{String,JS.SyntaxNode}[f.path => f.tree for f in index.files]
+    seen = Set(resolve_scan_path(index, f.path) for f in index.files)
     for d in entry_dirs
         isdir(d) || continue   # a missing entry dir contributes nothing, as in the index
         for (root, _, files) in walkdir(d), f in files
             endswith(f, ".jl") || continue
-            push!(paths, joinpath(root, f))
+            path = joinpath(root, f)
+            absolute = resolve_scan_path(index, path)
+            absolute in seen && continue
+            push!(seen, absolute)
+            source = read(absolute, String)
+            tree = parse_file(source, path)
+            isnothing(tree) && continue
+            push!(trees, path => tree)
         end
     end
-    unique(path -> resolve_scan_path(index, path), paths)
+    trees
 end
 
 function check_reaches_internal(index::SourceIndex, mods; entry_dirs)
     known = loaded_modules(mods)
     tracked = Set(mods)
     findings = Finding[]
-    for path in scanned_paths(index, entry_dirs)
-        abs = resolve_scan_path(index, path)
-        isfile(abs) || continue
-        tree = parse_file(read(abs, String), path)
-        tree === nothing && continue
+    for (path, tree) in scanned_trees(index, entry_dirs)
         aliases = Dict{Symbol,Module}()
         collect_const_aliases!(aliases, tree, known)
         fs = empty_scan()

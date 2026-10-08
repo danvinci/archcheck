@@ -280,12 +280,9 @@ function check_scan_seeds(index::SourceIndex; directories)
     groups = Dict{String,Dict{Symbol,Vector{JS.SyntaxNode}}}()
     constants = Dict{Symbol,Dict{Symbol,Int}}()
     for file in files
-        path = joinpath(index.repo, file.path)
-        tree = parse_file(read(path, String), file.path)
-        isnothing(tree) && continue
         owners = Dict{Symbol,Vector{JS.SyntaxNode}}()
         module_constants = get!(Dict{Symbol,Int}, constants, file.mod)
-        walk_with_enclosing(tree) do node, owner
+        walk_with_enclosing(file.tree) do node, owner
             owner_nodes = get!(Vector{JS.SyntaxNode}, owners, owner)
             push!(owner_nodes, node)
             isempty(string(owner)) && JS.kind(node) == K"const" || return
