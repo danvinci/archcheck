@@ -17,6 +17,7 @@ include("checks_fields.jl")
 include("checks_interface.jl")
 include("registry.jl")
 include("checks_project.jl")
+include("checks_overloads.jl")
 include("checks_opt.jl")
 include("gate.jl")
 
@@ -30,6 +31,7 @@ export FileNode, SourceIndex, build_source_index, files_of, file_rank, include_p
 export def_sites, site_of
 export Check, Context, CHECKS, run_checks, ReaderSet, ScanSeeds
 export CallerWhitelist, SentinelReturns, StringPayloads
+export StorageOverloads
 export Independent
 export check_corpus, check_backedges, is_backedge, is_downrank, find_cycles, check_cycles
 export check_contracts_logic
@@ -43,6 +45,7 @@ export check_private_imports, check_module_corpus, check_declared_names, check_d
 export check_declared_extensions
 export check_foreign_fields
 export check_abstract_fields, check_boxed_captures, is_open_field
+export check_storage_overloads
 export OptEntry, OptAnalysis, check_opt_entries, jet_loaded
 
 end # module ArchCheck
