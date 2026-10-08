@@ -169,7 +169,8 @@ function check_reaches_internal(index::SourceIndex, mods; entry_dirs)
             detail = "reference to a name its module does not declare public"
             push!(findings, Finding(mod_name, :reaches_internal, path, symbol, line, detail))
         end
-        walk_scoped!(fs, tree, 0, placeholder, Set{Symbol}(), on_qualified)
+        scope = ScanScope(placeholder, Set{Symbol}(), 0, 0, nothing)
+        walk_scoped!(fs, tree, scope, on_qualified)
     end
     findings
 end
