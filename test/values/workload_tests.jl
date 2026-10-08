@@ -30,6 +30,14 @@ module FWorkload
     end
     ArchCheck.kinds(::SeesReached) = (:seen_reached => :advisory,)
     ArchCheck.phase(::SeesReached) = :workload
+    struct SeesRecords <: ArchCheck.Check end
+    const RECORDS = Ref{Union{Nothing,Vector{ProbeRecord}}}(nothing)
+    function ArchCheck.run(::SeesRecords, ctx)
+        RECORDS[] = ctx.observed.records
+        Finding[]
+    end
+    ArchCheck.kinds(::SeesRecords) = (:seen_records => :advisory,)
+    ArchCheck.phase(::SeesRecords) = :workload
 end
 
 function workload_context(root::Module)
@@ -100,4 +108,34 @@ end
     ArchCheck.gate(Nested; report_path = report, io = quiet, checks, workload = () -> Nested.root_measure(1))
     seen = FWorkload.REACHED[]
     @test target in seen
+end
+
+@testset "a workload check reads the probed call, the restored method keeps its file, and the probe is gone afterwards" begin
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    squared = Nested.Geo.Cuts.squared
+    probes = Probes(functions = (squared,), slow_s = 0.0)
+    checks = (FWorkload.SeesRecords(),)
+    before = which(squared, (Int,))
+    quiet = IOBuffer()
+    ArchCheck.gate(Nested; report_path = report, io = quiet, checks, probes, workload = () -> squared(3))
+    records = FWorkload.RECORDS[]
+    @test only(records).name === :squared
+    @test only(records).caller === Symbol("")
+    after = which(squared, (Int,))
+    @test after.file === before.file
+    lowered = only(code_lowered(squared, (Int,)))
+    printed = string(lowered)
+    @test !occursin("probe_enter", printed)
+end
+
+@testset "a probed method counts as reached after its methods are restored" begin
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    squared = Nested.Geo.Cuts.squared
+    probes = Probes(functions = (squared,), slow_s = 0.0)
+    checks = (FWorkload.SeesReached(),)
+    quiet = IOBuffer()
+    ArchCheck.gate(Nested; report_path = report, io = quiet, checks, probes, workload = () -> squared(3))
+    restored = which(squared, (Int,))
+    # Restoring defines a new Method that nothing compiled; the unreached-methods lane settles method identity.
+    @test_broken restored in FWorkload.REACHED[]
 end

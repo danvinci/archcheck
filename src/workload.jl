@@ -71,9 +71,10 @@ function observe(workload, probes, ctx)
         elapsed = @elapsed workload()
     else
         armed = arm!(probes, ctx)
+        # arm! defines the probed methods after the caller's world began, so the workload runs in the latest one.
         # disarm! still runs when the workload throws, and that exception propagates.
         try
-            elapsed = @elapsed workload()
+            elapsed = @elapsed Base.invokelatest(workload)
         finally
             records = disarm!(armed)
         end
