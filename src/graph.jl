@@ -157,26 +157,38 @@ function wrapper_of(module_dir::AbstractString)
     length(entries) == 1 ? only(entries) : nothing
 end
 
+function skips_nested(target, nested)
+    for dir in nested
+        is_within(target, dir) && return true
+    end
+    false
+end
+
+# Depth-first. `position` is how many files are already ranked; the return is the count after `file`.
+function rank_includes!(order, module_dir, nested, file, position)
+    here = dirname(file)          # an include resolves against its includer, apart from the module root
+    for included in include_paths(file)
+        joined = joinpath(here, included)
+        target = normpath(joined)
+        skips_nested(target, nested) && continue   # a nested module ranks its own files
+        rel = relpath(target, module_dir)
+        haskey(order, rel) && continue     # also the cycle guard: a revisit leaves the walk
+        position += 1
+        order[rel] = position
+        if isfile(target)
+            position = rank_includes!(order, module_dir, nested, target, position)
+        end
+    end
+    position
+end
+
 # A module wrapper's include order is the declared file DAG within that module: path in module -> position.
 # Depth-first, so a nested include takes its position from where its includer reaches it - Julia's load order.
 function file_rank(module_dir::AbstractString; nested = String[])
     entry = wrapper_of(module_dir)
     isnothing(entry) && return Dict{String,Int}()
     order = Dict{String,Int}()
-    position = 0
-    function rank_includes_of(file)
-        here = dirname(file)          # an include resolves against its includer, not the module root
-        for included in include_paths(file)
-            target = normpath(joinpath(here, included))
-            any(dir -> is_within(target, dir), nested) && continue   # a nested module ranks its own files
-            rel = relpath(target, module_dir)
-            haskey(order, rel) && continue     # also the cycle guard: a revisit never recurses
-            position += 1
-            order[rel] = position
-            isfile(target) && rank_includes_of(target)
-        end
-    end
-    rank_includes_of(entry)
+    rank_includes!(order, module_dir, nested, entry, 0)
     order
 end
 

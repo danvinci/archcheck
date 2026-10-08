@@ -1,8 +1,31 @@
 # Checks over the static index: corpus, dead code, and the module-zoom rank rules.
 
-# dead-code: a top-level def with no call site in src and not named in scripts/.
-# JuliaSyntax sees closure-internal calls, so deck-wrapped functions are not dead.
-function check_dead_code_static(index, external = index.external)
+# Names an `export` or `public` statement lists. Those lines are declarations, so the def walk skips them.
+function collect_published!(names, node)
+    kids = child_nodes(node)
+    kids === nothing && return
+    k = JS.kind(node)
+    k == K"quote" && return
+    if k == K"export" || k == K"public"
+        for child in kids
+            child.val isa Symbol && push!(names, child.val)
+        end
+        return
+    end
+    for child in kids
+        collect_published!(names, child)
+    end
+end
+
+function published_names(index)
+    names = Set{Symbol}()
+    for file in index.files
+        collect_published!(names, file.tree)
+    end
+    names
+end
+
+function dead_code_findings(index, entries)
     defs = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
     referenced = Set{Symbol}()
     for f in index.files
@@ -15,7 +38,17 @@ function check_dead_code_static(index, external = index.external)
         end
     end
     [Finding(m, :dead_code, file, string(nm), line, "no reference in src or scripts")
-     for ((m, nm), (file, line)) in defs if !(nm in referenced) && !(nm in external)]
+     for ((m, nm), (file, line)) in defs if !(nm in referenced) && !(nm in entries)]
+end
+
+# dead-code: a top-level def with no call site in src and not named in scripts/.
+# JuliaSyntax sees closure-internal calls, so deck-wrapped functions are not dead.
+function check_dead_code_static(index; public_is_entry::Bool = false)
+    entries = index.external
+    if public_is_entry
+        entries = union(index.external, published_names(index))
+    end
+    dead_code_findings(index, entries)
 end
 
 # corpus: every .jl the tool touches is a ranked member, a module wrapper, or a hole. A hole makes the
@@ -78,25 +111,42 @@ function check_backedges(g::ModuleGraph)
     findings
 end
 
+# Index of `node` on `stack`; a gray node sits on it.
+function cycle_start(stack, node)
+    index = lastindex(stack)
+    while index >= firstindex(stack)
+        stack[index] === node && return index
+        index -= 1
+    end
+    firstindex(stack)
+end
+
+function walk_cycle!(color, stack, cycles, adj, node)
+    color[node] = :gray
+    push!(stack, node)
+    for next in get(adj, node, ())
+        haskey(color, next) || continue
+        if color[next] === :gray
+            start = cycle_start(stack, next)
+            loop = stack[start:end]
+            push!(cycles, loop)
+        elseif color[next] === :white
+            walk_cycle!(color, stack, cycles, adj, next)
+        end
+    end
+    pop!(stack)
+    color[node] = :black
+    return
+end
+
 # DFS three-colour cycle detection; each cycle returned as its node loop.
 function find_cycles(nodes, adj::AbstractDict)
     color = Dict(n => :white for n in nodes)
     stack = eltype(nodes)[]
     cycles = Vector{Vector{eltype(nodes)}}()
-    function visit(u)
-        color[u] = :gray; push!(stack, u)
-        for v in get(adj, u, ())
-            haskey(color, v) || continue
-            if color[v] === :gray
-                push!(cycles, stack[findlast(==(v), stack):end])
-            elseif color[v] === :white
-                visit(v)
-            end
-        end
-        pop!(stack); color[u] = :black
-    end
-    for n in nodes
-        color[n] === :white && visit(n)
+    for node in nodes
+        color[node] === :white || continue
+        walk_cycle!(color, stack, cycles, adj, node)
     end
     cycles
 end

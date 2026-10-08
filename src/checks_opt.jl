@@ -1,8 +1,8 @@
 # Opt-analysis port: a corpus of concrete calls run through JET.report_opt. No-op until JET is loaded.
 
-struct OptEntry
-    f::Function                         # the function the corpus names
-    argtypes::Type{<:Tuple}             # concrete argument types, one specialization
+struct OptEntry{F<:Function, A<:Tuple}
+    f::F                                # the function the corpus names
+    argtypes::Type{A}                   # concrete argument types, one specialization
     symbol::String                      # Finding.symbol; includes the signature so Dual and Float64 stay distinct
 end
 
@@ -11,10 +11,13 @@ function entry_symbol(f, ::Type{T}) where {T <: Tuple}
     "$(nameof(f))($args)"
 end
 
-OptEntry(f::Function, argtypes::Type{<:Tuple}) = OptEntry(f, argtypes, entry_symbol(f, argtypes))
+function OptEntry(f::F, argtypes::Type{A}) where {F<:Function, A<:Tuple}
+    symbol = entry_symbol(f, argtypes)
+    OptEntry{F,A}(f, argtypes, symbol)
+end
 
-struct OptAnalysis <: Check
-    entries::Vector{OptEntry}
+struct OptAnalysis{E} <: Check
+    entries::Vector{E}                  # corpus calls, each one specialization
 end
 OptAnalysis() = OptAnalysis(OptEntry[])
 
@@ -27,7 +30,11 @@ end
 
 function entry_location(entry::OptEntry, repo)
     m = which(entry.f, entry.argtypes)
-    (module_key(m.module), relpath(string(m.file), repo), Int(m.line))
+    mod = module_key(m.module)
+    method_file = string(m.file)
+    file = relpath(method_file, repo)
+    line = Int(m.line)
+    (mod = mod, file = file, line = line)
 end
 
 function analyze_entries(jet::Module, entries, repo, target_modules)

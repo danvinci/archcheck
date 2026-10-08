@@ -1,22 +1,83 @@
 # foreign-field: a field read on another module's struct, unless it is a contract type or a public type documenting
 # the field. Receivers are typed by annotations, aliases, field chains, and inference when it gives one concrete type.
 
+# Whether `vars` holds this type variable by identity.
+function contains_typevar(vars, var)
+    for seen in vars
+        seen === var && return true
+    end
+    false
+end
+
+# Free type variables of a receiver type, skipping any an enclosing union-all binds.
+function collect_free_typevars!(found, bound, @nospecialize(receiver_type))
+    if receiver_type isa TypeVar
+        contains_typevar(bound, receiver_type) && return
+        contains_typevar(found, receiver_type) && return
+        push!(found, receiver_type)
+        return
+    end
+    if receiver_type isa Union
+        collect_free_typevars!(found, bound, receiver_type.a)
+        collect_free_typevars!(found, bound, receiver_type.b)
+        return
+    end
+    if receiver_type isa UnionAll
+        push!(bound, receiver_type.var)
+        collect_free_typevars!(found, bound, receiver_type.body)
+        pop!(bound)
+        return
+    end
+    if receiver_type isa Core.TypeofVararg
+        collect_free_typevars!(found, bound, receiver_type.T)
+        isdefined(receiver_type, :N) || return
+        collect_free_typevars!(found, bound, receiver_type.N)
+        return
+    end
+    receiver_type isa DataType || return
+    for parameter in receiver_type.parameters
+        collect_free_typevars!(found, bound, parameter)
+    end
+end
+
+# A datatype whose parameters are still free is a union-all body. Binding those parameters yields the
+# union-all whose unwrap is this same datatype.
+function bind_free_parameters(@nospecialize(receiver_type))
+    receiver_type isa TypeVar && return receiver_type
+    Base.has_free_typevars(receiver_type) || return receiver_type
+    found = TypeVar[]
+    bound = TypeVar[]
+    collect_free_typevars!(found, bound, receiver_type)
+    wrapped = receiver_type
+    for parameter in reverse(found)
+        wrapped = UnionAll(parameter, wrapped)
+    end
+    wrapped
+end
+
 # One field read on a typed receiver.
-struct FieldRead
-    type::Type          # the receiver's declared type, or the concrete type inferred for it
-    field::Symbol       # the name read
-    line::Int           # source line
-    receiver::String    # the receiver expression as written
+struct FieldRead{T}
+    type::Type{T}               # the receiver's declared type, or the concrete type inferred for it
+    field::Symbol               # the name read
+    line::Int                   # source line
+    receiver::String            # the receiver expression as written
+    function FieldRead(receiver_type::Type, field::Symbol, line::Int, receiver::AbstractString)
+        text = String(receiver)
+        parameter = bind_free_parameters(receiver_type)
+        new{parameter}(parameter, field, line, text)
+    end
 end
 
 # A bound value's type, computed on the first read that needs it, so inference runs only for values read through.
-mutable struct Deferred
-    const compute::Function     # computes the type, or nothing, from `arguments`
-    const arguments::Tuple      # what compute reads, captured when the binding is walked
+mutable struct Deferred{F<:Function, A<:Tuple}
+    const compute::F            # computes the type, or nothing, from `arguments`
+    const arguments::A          # what compute reads, captured when the binding is walked
     type::Union{Type,Nothing}   # the result, once computed
     is_computed::Bool           # whether compute has run
 end
-Deferred(compute, arguments) = Deferred(compute, arguments, nothing, false)
+function Deferred(compute::F, arguments::A) where {F<:Function, A<:Tuple}
+    Deferred{F,A}(compute, arguments, nothing, false)
+end
 
 # A binding's type: a declared type as it is, a deferred one computed on first use.
 resolved(::Nothing) = nothing
@@ -41,9 +102,9 @@ function Base.copy(scope::Scope)
 end
 
 # One file's reads, walked in the namespace of the module that owns the file.
-struct ReadState
+struct ReadState{E}
     mod::Module                      # the file's module, where annotations and callees resolve
-    reads::Vector{FieldRead}         # reads on typed receivers
+    reads::Vector{E}                 # reads on typed receivers
 end
 
 # The value a dotted path binds in M when every binding along it is constant; nothing otherwise.
@@ -388,7 +449,9 @@ function walk_field_reads!(state, scope, node)
         inner = copy(scope)
         params = Symbol[]
         _argname!(params, kids[1])
-        foreach(name -> delete!(inner.types, name), params)
+        for name in params
+            delete!(inner.types, name)
+        end
         union!(inner.locals, params)
         bound_names!(inner.locals, kids[2])
         walk_field_reads!(state, inner, kids[2])

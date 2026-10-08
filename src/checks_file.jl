@@ -76,6 +76,9 @@ function check_file_sinkable(cg::CallGraph, sites)
         home = cg.files[f]
         target == home && continue
         is_downrank(cg.rank, home, target) || continue
+        reached = get(reach, target, 0)
+        # more than half the module's files reach this one: shared vocabulary, wherever its callers sit
+        2 * reached > nfiles && continue
         _, line = site_of(sites, cg.mod, f, (home, 0))
         athome = get(callers, (f, home), 0)
         athome > 0 && continue          # callers at home place it: what it calls does not move it

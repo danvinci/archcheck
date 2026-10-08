@@ -226,6 +226,12 @@ function uses_struct_params(@nospecialize(F), vars)
     F isa TypeVar && return F in vars
     F isa Union && return uses_struct_params(F.a, vars) || uses_struct_params(F.b, vars)
     F isa UnionAll && return uses_struct_params(F.body, vars)
+    if F isa Core.TypeofVararg
+        element_uses = uses_struct_params(F.T, vars)
+        element_uses && return true
+        isdefined(F, :N) || return false
+        return uses_struct_params(F.N, vars)
+    end
     F isa DataType && return any(p -> uses_struct_params(p, vars), F.parameters)
     false
 end
@@ -238,6 +244,35 @@ function is_closed_type_object(@nospecialize(T))
     p isa Type && isconcretetype(p)
 end
 
+# A vararg with no length parameter, or whose element stays open, stays open.
+function vararg_is_open(@nospecialize(position), vars)
+    held = position.T
+    is_open_position(held, vars) && return true
+    isdefined(position, :N) || return true
+    length_param = position.N
+    length_param isa Int && return false
+    length_param isa TypeVar || return true
+    !(length_param in vars)
+end
+
+# Type{T} and NTuple{N,T} name one type on each instance when T and N are this struct's parameters.
+# A free variable, an abstract parameter, or a family over some other variable stays open.
+function is_open_position(@nospecialize(position), vars)
+    position isa Core.TypeofVararg && return vararg_is_open(position, vars)
+    position isa UnionAll && return true
+    position isa Union && return false
+    position isa TypeVar && return !(position in vars)
+    position isa DataType || return false
+    if Base.isType(position)
+        held = only(position.parameters)
+        return is_open_position(held, vars)
+    end
+    for param in position.parameters
+        is_open_position(param, vars) && return true
+    end
+    isabstracttype(position)
+end
+
 # Open when the stored type, the container wrapper, or a Dict/Set payload is not concrete; a struct's own parameter
 # is fixed per instance. A Union stays: lowering splits a small one. Dict eltype is Pair, so its parts are read apart.
 function is_open_field(@nospecialize(declared), vars = TypeVar[])
@@ -245,11 +280,7 @@ function is_open_field(@nospecialize(declared), vars = TypeVar[])
     declared isa Union && return false
     is_closed_type_object(declared) && return false
     if uses_struct_params(declared, vars)
-        # Around the parameter, a position holding a family over another variable or an abstract type stays open.
-        is_open_position(position) = position isa Core.TypeofVararg || position isa UnionAll ||
-            (position isa TypeVar && !(position in vars)) ||
-            (position isa DataType && (isabstracttype(position) || any(is_open_position, position.parameters)))
-        return is_open_position(declared)
+        return is_open_position(declared, vars)
     end
     if declared <: AbstractDict || declared <: AbstractArray || declared <: AbstractSet
         U = Base.unwrap_unionall(declared)

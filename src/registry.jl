@@ -48,24 +48,27 @@ struct FileBackEdges <: Check end
 struct FileSinkable <: Check end
 struct Sinkable <: Check end
 struct TupleReturns <: Check end
-struct DeadCode <: Check end
+struct DeadCode <: Check
+    public_is_entry::Bool   # an exported or public name counts as an entry point
+end
+DeadCode(; public_is_entry::Bool = false) = DeadCode(public_is_entry)
 struct BlanketExports <: Check end
 struct StaleExports <: Check end
 struct ReachesInternal <: Check end
 struct PrivateImports <: Check end
 struct BoxedCaptures <: Check end
 struct AbstractFields <: Check end
-struct ReaderSet <: Check
-    super::Type     # concrete subtypes of this type must answer each reader
-    required::Tuple # (reader, extra argument types after the subject) pairs
+struct ReaderSet{S, R<:Tuple} <: Check
+    super::Type{S}  # concrete subtypes of this type must answer each reader
+    required::R     # (reader, extra argument types after the subject) pairs
 end
-struct ScanSeeds <: Check
-    directories::Tuple # source directories relative to the repository root, or absolute paths
+struct ScanSeeds{D<:Tuple} <: Check
+    directories::D  # source directories relative to the repository root, or absolute paths
 end
 # Modules that do not reference one another, each counted with the modules nested in it; import-linter's
 # `independence` contract is the precedent. The constructor refuses a set of one and a member inside another.
-struct Independent <: Check
-    modules::Tuple{Vararg{Symbol}}   # dotted module keys below the package
+struct Independent{N} <: Check
+    modules::NTuple{N,Symbol}   # dotted module keys below the package
     function Independent(modules::Symbol...)
         length(modules) >= 2 || throw(ArgumentError("Independent needs two or more modules, got $modules"))
         allunique(modules) || throw(ArgumentError("Independent names a module twice: $modules"))
@@ -73,7 +76,7 @@ struct Independent <: Check
             outer !== inner && is_within_module(inner, outer) &&
                 throw(ArgumentError("Independent names $inner, which is nested in $outer"))
         end
-        new(modules)
+        new{length(modules)}(modules)
     end
 end
 struct DeclaredNames <: Check end
@@ -109,7 +112,7 @@ kinds(::ModulePiracy) = (:module_piracy => :error,)
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
 kinds(::TupleReturns) = (:tuple_return => :advisory,)
 
-run(::DeadCode, ctx) = check_dead_code_static(ctx.index)
+run(check::DeadCode, ctx) = check_dead_code_static(ctx.index; public_is_entry = check.public_is_entry)
 kinds(::DeadCode) = (:dead_code => :advisory,)
 
 run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)
@@ -154,102 +157,114 @@ kinds(::ForeignFields) = (:foreign_field => :advisory,)
 
 # type-branch: an `isa` or `typeof` test on the method's own parameter picks a path that dispatch should pick.
 # A throw-only branch validates input; lambda parameters, loop targets and destructured names are not the method's.
+function visit_type_branch!(findings, discarded, file, node, owner, params)
+    kids = child_nodes(node)
+    kids === nothing && return
+    k = JS.kind(node)
+    is_statement = node in discarded
+    if k == K"block"
+        union!(discarded, is_statement ? kids : kids[1:end-1])
+    elseif k == K"for" || k == K"while"
+        push!(discarded, last(kids))
+    elseif is_statement && k in (K"if", K"elseif", K"let", K"&&", K"||")
+        union!(discarded, kids[2:end])
+    elseif is_statement && k in (K"try", K"catch", K"finally")
+        union!(discarded, kids)
+    end
+    is_method = is_method_form(node)
+    call = is_method ? signature_call(kids[1]) : nothing
+    if k == K"->" || k == K"do" || (is_method && isnothing(call))
+        for part in kids
+            visit_type_branch!(findings, discarded, file, part, "", Symbol[])
+        end
+        return
+    elseif is_method
+        head, arguments... = child_nodes(call)
+        items = JS.SyntaxNode[]
+        for argument in arguments
+            if JS.kind(argument) == K"parameters"
+                append!(items, child_nodes(argument))
+            else
+                push!(items, argument)
+            end
+        end
+        own = Symbol[]
+        for item in items
+            names = Symbol[]
+            _argname!(names, item)
+            bound = item
+            while JS.kind(bound) in (K"=", K"...", K"::")
+                bound = first(child_nodes(bound))
+            end
+            JS.kind(bound) == K"tuple" || append!(own, names)
+        end
+        name = JS.sourcetext(head)
+        for body in kids[2:end]
+            visit_type_branch!(findings, discarded, file, body, name, own)
+        end
+        return
+    elseif k == K"for" || k == K"generator"
+        body = k == K"for" ? last(kids) : first(kids)
+        specs = k == K"for" ? kids[1:end-1] : kids[2:end]
+        targets = Symbol[]
+        for spec in specs
+            bound_names!(targets, spec)
+        end
+        for spec in specs
+            visit_type_branch!(findings, discarded, file, spec, owner, params)
+        end
+        kept = setdiff(params, targets)
+        visit_type_branch!(findings, discarded, file, body, owner, kept)
+        return
+    end
+    is_logical = k == K"&&" || k == K"||"
+    if k == K"if" || k == K"elseif" || k == K"?" || (is_logical && is_statement)
+        test = kids[1]
+        branch = kids[2]
+        statements = JS.kind(branch) == K"block" ? child_nodes(branch) : [branch]
+        is_guard = false
+        if length(statements) == 1 && JS.kind(only(statements)) == K"call"
+            callee = first(child_nodes(only(statements)))
+            is_guard = callee.val === :throw
+        end
+        parts = child_nodes(test)
+        operator = nothing
+        operands = parts
+        if JS.kind(test) == K"<:"
+            operator = :(<:)
+        elseif JS.kind(test) == K"call"
+            is_infix = JS.is_infix_op_call(test)
+            operator = is_infix ? parts[2].val : parts[1].val
+            operands = is_infix ? parts[[1, 3]] : parts[2:end]
+        end
+        subjects = JS.SyntaxNode[]
+        if operator === :isa
+            push!(subjects, first(operands))
+        elseif operator in (:(==), :(===), :(!=), :(!==), :(<:))
+            for operand in operands
+                inner = child_nodes(operand)
+                is_typeof = JS.kind(operand) == K"call" && length(inner) == 2 && first(inner).val === :typeof
+                is_typeof && push!(subjects, last(inner))
+            end
+        end
+        tested = findfirst(subject -> subject.val in params, subjects)
+        if !is_guard && !isnothing(tested)
+            parameter = subjects[tested].val
+            line = Int(JS.source_location(test)[1])
+            detail = "a runtime type test on the method's own parameter picks the path"
+            push!(findings, Finding(file.mod, :type_branch, file.path, "$owner:$parameter", line, detail))
+        end
+    end
+    for child in kids
+        visit_type_branch!(findings, discarded, file, child, owner, params)
+    end
+end
+
 function run(::TypeBranches, ctx)
     findings = Finding[]
     discarded = IdSet{JS.SyntaxNode}()   # nodes whose value is discarded; only there do `&&` and `||` pick a path
-    function visit(file, node, owner, params)
-        kids = child_nodes(node)
-        kids === nothing && return
-        k = JS.kind(node)
-        is_statement = node in discarded
-        if k == K"block"
-            union!(discarded, is_statement ? kids : kids[1:end-1])
-        elseif k == K"for" || k == K"while"
-            push!(discarded, last(kids))
-        elseif is_statement && k in (K"if", K"elseif", K"let", K"&&", K"||")
-            union!(discarded, kids[2:end])
-        elseif is_statement && k in (K"try", K"catch", K"finally")
-            union!(discarded, kids)
-        end
-        is_method = is_method_form(node)
-        call = is_method ? signature_call(kids[1]) : nothing
-        if k == K"->" || k == K"do" || (is_method && isnothing(call))
-            foreach(part -> visit(file, part, "", Symbol[]), kids)
-            return
-        elseif is_method
-            head, arguments... = child_nodes(call)
-            items = JS.SyntaxNode[]
-            for argument in arguments
-                if JS.kind(argument) == K"parameters"
-                    append!(items, child_nodes(argument))
-                else
-                    push!(items, argument)
-                end
-            end
-            own = Symbol[]
-            for item in items
-                names = Symbol[]
-                _argname!(names, item)
-                bound = item
-                while JS.kind(bound) in (K"=", K"...", K"::")
-                    bound = first(child_nodes(bound))
-                end
-                JS.kind(bound) == K"tuple" || append!(own, names)
-            end
-            name = JS.sourcetext(head)
-            foreach(body -> visit(file, body, name, own), kids[2:end])
-            return
-        elseif k == K"for" || k == K"generator"
-            body = k == K"for" ? last(kids) : first(kids)
-            specs = k == K"for" ? kids[1:end-1] : kids[2:end]
-            targets = Symbol[]
-            foreach(spec -> bound_names!(targets, spec), specs)
-            foreach(spec -> visit(file, spec, owner, params), specs)
-            visit(file, body, owner, setdiff(params, targets))
-            return
-        end
-        is_logical = k == K"&&" || k == K"||"
-        if k == K"if" || k == K"elseif" || k == K"?" || (is_logical && is_statement)
-            test = kids[1]
-            branch = kids[2]
-            statements = JS.kind(branch) == K"block" ? child_nodes(branch) : [branch]
-            is_guard = false
-            if length(statements) == 1 && JS.kind(only(statements)) == K"call"
-                callee = first(child_nodes(only(statements)))
-                is_guard = callee.val === :throw
-            end
-            parts = child_nodes(test)
-            operator = nothing
-            operands = parts
-            if JS.kind(test) == K"<:"
-                operator = :(<:)
-            elseif JS.kind(test) == K"call"
-                is_infix = JS.is_infix_op_call(test)
-                operator = is_infix ? parts[2].val : parts[1].val
-                operands = is_infix ? parts[[1, 3]] : parts[2:end]
-            end
-            subjects = JS.SyntaxNode[]
-            if operator === :isa
-                push!(subjects, first(operands))
-            elseif operator in (:(==), :(===), :(!=), :(!==), :(<:))
-                for operand in operands
-                    inner = child_nodes(operand)
-                    is_typeof = JS.kind(operand) == K"call" && length(inner) == 2 && first(inner).val === :typeof
-                    is_typeof && push!(subjects, last(inner))
-                end
-            end
-            tested = findfirst(subject -> subject.val in params, subjects)
-            if !is_guard && !isnothing(tested)
-                parameter = subjects[tested].val
-                line = Int(JS.source_location(test)[1])
-                detail = "a runtime type test on the method's own parameter picks the path"
-                push!(findings, Finding(file.mod, :type_branch, file.path, "$owner:$parameter", line, detail))
-            end
-        end
-        foreach(child -> visit(file, child, owner, params), kids)
-    end
     for file in ctx.index.files
-        visit(file, file.tree, "", Symbol[])
+        visit_type_branch!(findings, discarded, file, file.tree, "", Symbol[])
     end
     findings
 end

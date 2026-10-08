@@ -669,10 +669,15 @@ end
 @testset "dead-code (static, JuliaSyntax)" begin
     mktempdir() do dir
         mkpath(joinpath(dir, "aa"))
+        mkpath(joinpath(dir, "scripts"))
         write(joinpath(dir, "aa", "Aa.jl"), "include(\"aa.jl\")")
         write(joinpath(dir, "aa", "aa.jl"), "keep() = 1\ngone() = 2\nentry() = keep()")
-        index = build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa))
-        dead = check_dead_code_static(index, Set([:entry]))
+        entry_dir = joinpath(dir, "scripts")
+        write(joinpath(entry_dir, "run.jl"), "entry()")
+        rank = Dict(:Aa => 1)
+        dirs = Dict("aa" => :Aa)
+        index = build_source_index(dir, rank, dirs; entry_dirs = [entry_dir])
+        dead = check_dead_code_static(index)
         syms = Set(f.symbol for f in dead)
         @test "gone" in syms                        # never called, not external -> dead
         @test !("keep" in syms) && !("entry" in syms)   # called / external

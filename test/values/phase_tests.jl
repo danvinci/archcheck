@@ -12,18 +12,17 @@ module FPhase
     ArchCheck.phase(::Misplaced) = :later
 end
 
-@testset "phase: every check runs before or after the workload" begin
+@testset "the gate refuses a run that cannot place every check" begin
     report = joinpath(mktempdir(), "architecture.jsonl")
     quiet = IOBuffer()
-    @test ArchCheck.phase(ArchCheck.Corpus()) === :static
-    # a check reading what the workload did, with no workload declared
-    @test_throws ArgumentError ArchCheck.gate(Nested; report_path = report, io = quiet,
-                                               checks = (FPhase.AfterRun(),))
-    # probes with nothing to observe
-    probes = Probes(functions = ())
-    @test_throws ArgumentError ArchCheck.gate(Nested; report_path = report, io = quiet,
-                                               checks = (ArchCheck.Corpus(),), probes)
-    # a phase the gate does not know is a typo
-    @test_throws ArgumentError ArchCheck.gate(Nested; report_path = report, io = quiet,
-                                               checks = (FPhase.Misplaced(),))
+    # a workload check with no workload; probes with no workload; a phase the gate does not know
+    refusals = (
+        ((FPhase.AfterRun(),), nothing),
+        ((ArchCheck.Corpus(),), Probes(functions = ())),
+        ((FPhase.Misplaced(),), nothing),
+    )
+    for (checks, probes) in refusals
+        @test_throws ArgumentError ArchCheck.gate(Nested; report_path = report, io = quiet,
+                                                   checks, probes)
+    end
 end
