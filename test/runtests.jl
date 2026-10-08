@@ -1673,3 +1673,11 @@ end
     @test !haskey(typed, "face")
     @test !haskey(typed, "either")
 end
+
+# The value model's tests, one file per substrate or check, sharing this file's fixtures and helpers.
+const VALUE_TESTS = joinpath(@__DIR__, "values")
+for name in sort(readdir(VALUE_TESTS))
+    endswith(name, ".jl") || continue
+    path = joinpath(VALUE_TESTS, name)
+    include(path)
+end

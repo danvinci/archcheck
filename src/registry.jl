@@ -5,24 +5,38 @@
 struct Context
     index::SourceIndex                      # the one parse of src/ and the entry dirs
     graph::ModuleGraph                      # module rank + cross-module references
-    root::Module                            # the package module itself; it has no rank, so it is not in mods
+    root::Module                            # the package module itself; in mods only when it is the package's one module
     mods::Vector{Module}                    # loaded modules at every depth, rank order; reflection checks only
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
     entry_dirs::Vector{String}              # tested/scripted entry points; interface checks scan them too
+    methods::Union{Nothing,MethodGraph}     # calls between methods from the declared entries; nothing when none is declared
+    observed::Union{Nothing,Observation}    # what the workload did; nothing before it runs, or with no workload
 end
 
-function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[])
+function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[], methods = nothing)
     graph = build_module_graph(index)
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
-    Context(index, graph, root, mods, sites, callgraphs, entry_dirs)
+    Context(index, graph, root, mods, sites, callgraphs, entry_dirs, methods, nothing)
 end
+
+# The same context once the workload has run.
+Context(ctx::Context; observed::Observation) = Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites,
+                                                      ctx.callgraphs, ctx.entry_dirs, ctx.methods, observed)
+
+# The root once with every loaded module: a single-module package's root is also its one module.
+package_modules(root::Module, mods) = unique!([root; mods])
+package_modules(ctx) = package_modules(ctx.root, ctx.mods)
 
 abstract type Check end
 
 # Required of every check, with no fallback: a check that declares nothing cannot run.
 function kinds end
+
+# When a check runs: `:static` reads the source and the loaded modules, before the workload; `:workload` reads
+# what the workload did, so it runs after it.
+phase(::Check) = :static
 
 struct Corpus <: Check end
 struct ModuleBackEdges <: Check end
@@ -89,7 +103,7 @@ kinds(::ContractsPurity) = (:contracts_logic => :error,)
 run(::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
 
-run(::ModulePiracy, ctx) = check_module_piracy([ctx.root; ctx.mods]; repo = ctx.index.repo)
+run(::ModulePiracy, ctx) = check_module_piracy(package_modules(ctx); repo = ctx.index.repo)
 kinds(::ModulePiracy) = (:module_piracy => :error,)
 
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
@@ -132,7 +146,7 @@ kinds(::DeclaredNames) = (:undeclared_name => :advisory,)
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
 kinds(::DeclaredModules) = (:undeclared_module => :advisory,)
 
-run(::DeclaredExtensions, ctx) = check_declared_extensions([ctx.root; ctx.mods]; repo = ctx.index.repo)
+run(::DeclaredExtensions, ctx) = check_declared_extensions(package_modules(ctx); repo = ctx.index.repo)
 kinds(::DeclaredExtensions) = (:private_extension => :error,)
 
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
@@ -235,9 +249,7 @@ function run(::TypeBranches, ctx)
         foreach(child -> visit(file, child, owner, params), kids)
     end
     for file in ctx.index.files
-        path = joinpath(ctx.index.repo, file.path)
-        tree = parse_file(read(path, String), file.path)
-        isnothing(tree) || visit(file, tree, "", Symbol[])
+        visit(file, file.tree, "", Symbol[])
     end
     findings
 end

@@ -65,6 +65,23 @@ function callable_receiver(sig)
     type_name(last(hk))
 end
 
+"One method's definition in its file: the name it defines, as `FileScan.refs` keys it, and the line it starts on."
+struct MethodSite
+    name::Symbol   # the def name, a qualified method name (`Base.show`) or a callable's receiver type
+    line::Int      # source line of the definition
+end
+
+"""One call written in a method's body, closures and comprehensions included. Two calls with equal text in one
+method ask one question: the text is the source as written, whitespace collapsed, with no name resolved."""
+struct CallSite
+    callee::Symbol       # the called name: `f` in `f(x)`, `g` in `M.g(x)`
+    qualifier::String    # the module path written before the name, `M` in `M.g(x)`; "" for a bare call
+    arguments::String    # positional argument source text in order, whitespace collapsed
+    keywords::String     # keyword argument source text sorted by name, whitespace collapsed
+    line::Int            # source line of the call
+    loop_depth::Int      # loops, comprehensions and generators enclosing the call within its method
+end
+
 # One file's top-level defs and, per def, the names its body references - closures included.
 struct FileScan
     funcs::Vector{Symbol}
@@ -75,6 +92,7 @@ struct FileScan
     argtypes::Dict{Symbol,Vector{Union{Symbol,Nothing}}}   # function -> positional arg declared-types (last method wins)
     tupletail::Dict{Symbol,Int}      # function -> slot count when its body ends in a bare tuple; absent otherwise
     imports::Set{Symbol}             # names this file's `import` clauses bind: a path's last name, or its `as` alias
+    callsites::Dict{MethodSite,Vector{CallSite}}   # each method -> the calls its body writes, in source order
 end
 
 # a type name, unwrapping `<:` (supertype) and `{}` (parameters) to the bare Identifier.
@@ -564,7 +582,8 @@ function walk_defs!(fs, n, depth, current)
 end
 
 empty_scan() = FileScan(Symbol[], Symbol[], Dict{Symbol,Set{Symbol}}(), Set{Symbol}(), Dict{Symbol,Int}(),
-                        Dict{Symbol,Vector{Union{Symbol,Nothing}}}(), Dict{Symbol,Int}(), Set{Symbol}())
+                        Dict{Symbol,Vector{Union{Symbol,Nothing}}}(), Dict{Symbol,Int}(), Set{Symbol}(),
+                        Dict{MethodSite,Vector{CallSite}}())
 
 # The walk, over an already-parsed tree.
 function scan_tree(tree)

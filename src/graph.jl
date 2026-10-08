@@ -98,6 +98,17 @@ function parse_spine_order(spine_path::AbstractString)
     rank, dir2mod
 end
 
+# The directory key of a single-module package: src/ itself.
+const SINGLE_MODULE_DIR = "."
+
+# The package's modules and their directories. A spine that declares no module (no `include` followed by
+# `using .X`) makes the package one module: the root, keyed by its own name, owning src/ and ranked by the spine.
+function package_layout(spine_path::AbstractString, root::Symbol)
+    rank, dir2mod = parse_spine_order(spine_path)
+    isempty(rank) || return rank, dir2mod
+    Dict(root => 1), Dict(SINGLE_MODULE_DIR => root)
+end
+
 # Each wrapper declares its nested modules by the package spine's rule. A nested module is keyed by its dotted
 # path; its rank is its parent's plus its position in the parent wrapper's include order.
 function nest_modules(src_root, rank, dir2mod)
@@ -169,15 +180,15 @@ function file_rank(module_dir::AbstractString; nested = String[])
     order
 end
 
-# Owning module for a source path: the longest directory prefix dir2mod declares. A flat layout has only
-# a one-segment prefix to try, so this matches a first-segment lookup; a nested module resolves to itself.
+# Owning module for a source path: the longest directory prefix dir2mod declares; a nested module resolves to
+# itself. Past every prefix, a single-module package's root owns the path.
 function module_of(path, src_root, dir2mod)
     parts = splitpath(relpath(path, src_root))
     for depth in (length(parts) - 1):-1:1
         dir = joinpath(parts[1:depth]...)
         haskey(dir2mod, dir) && return dir2mod[dir]
     end
-    nothing
+    get(dir2mod, SINGLE_MODULE_DIR, nothing)
 end
 
 # The names module paths resolve against.
@@ -358,6 +369,7 @@ struct FileNode
     filerank::Int     # file position in the wrapper's depth-first include order; 0 when nothing includes it
     iswrapper::Bool   # this module's entry file, resolved from its directory rather than by name
     scan::FileScan    # this file's defs and the names each references
+    tree::JS.SyntaxNode   # the file's one parse, kept so no check reads the file again
 end
 
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
@@ -451,7 +463,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
         modrank = get(ranks, owner, Int[])
         name = basename(path)
         scan = scan_tree(tree)
-        push!(nodes, FileNode(owner, rel, name, modrank, filerank, iswrapper, scan))
+        push!(nodes, FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, tree))
     end
     # Ranked includes are module-owned even when they sit outside the mapped directory or git tree.
     for (mod, order) in franks

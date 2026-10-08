@@ -9,6 +9,9 @@ include("graph.jl")
 include("checks_ast.jl")
 include("checks_reflect.jl")
 include("callgraph.jl")
+include("methodgraph.jl")
+include("probe.jl")
+include("workload.jl")
 include("checks_file.jl")
 include("checks_interface.jl")
 include("checks_fields.jl")
@@ -17,7 +20,9 @@ include("checks_opt.jl")
 include("gate.jl")
 
 export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
-public kinds
+public kinds, phase
+export MethodSite, CallSite, MethodGraph, Probes, ProbeRecord, Observation
+public method_graph, arm!, disarm!, observe, package_layout
 export FindingKey, fingerprint, previous_fingerprints, new_findings
 export ModRef, ModuleGraph, build_module_graph, scan_modrefs
 export FileNode, SourceIndex, build_source_index, files_of, file_rank, include_paths, is_wrapper
