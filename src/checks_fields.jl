@@ -466,7 +466,7 @@ function walk_field_reads!(state, scope, node)
         walk_field_reads!(state, scope, kids[2])
         source = value_source(state, scope, kids[2])
         bind_target!(state, scope, kids[1], source)
-    elseif k == K"call" || k == K"parameters" || k == K"tuple"
+    elseif holds_values(k)
         walk_value_children!(c -> walk_field_reads!(state, scope, c), node)
     elseif k == K"." && length(kids) == 2 && kids[2].val isa Symbol
         record_read!(state, scope, node)

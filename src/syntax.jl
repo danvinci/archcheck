@@ -153,6 +153,12 @@ function where_vars!(names, sig)
     for v in kids[2:end]; _argname!(names, v); end
 end
 
+# A callable's receiver, `(x::T)(...)`, binds `x` the way an argument does.
+function bind_receiver!(names, head)
+    JS.kind(head) == K"::" || return
+    _argname!(names, head)
+end
+
 function sig_argnames(sig)
     names = Symbol[]
     where_vars!(names, sig)
@@ -164,7 +170,7 @@ function sig_argnames(sig)
     kd == K"call" || return names
     kids = child_nodes(sig)
     kids === nothing && return names
-    JS.kind(kids[1]) == K"::" && _argname!(names, kids[1])
+    bind_receiver!(names, kids[1])
     for a in kids[2:end]; _argname!(names, a); end
     names
 end
@@ -175,6 +181,11 @@ function is_method_form(n)
     k == K"=" || return false
     kids = child_nodes(n)
     kids !== nothing && !isempty(kids) && is_sig(kids[1])
+end
+
+# A node whose children are values: a call's arguments, a parameter list's defaults, a tuple's members.
+function holds_values(kind)
+    kind == K"call" || kind == K"parameters" || kind == K"tuple"
 end
 
 function is_nested_scope(n)
@@ -202,7 +213,7 @@ function collect_scope_assigns!(bound, n)
         kids === nothing && return
         for c in kids; _argname!(bound, c); end
         return
-    elseif k == K"call" || k == K"parameters" || k == K"tuple"
+    elseif holds_values(k)
         walk_value_children!(c -> collect_scope_assigns!(bound, c), n)
         return
     end
@@ -793,7 +804,7 @@ function absorb_defaults!(fs, sig, scope, on_qualified = nothing)
     if !isnothing(on_qualified)
         walk_scoped!(fs, kids[1], noted, on_qualified)
     end
-    JS.kind(kids[1]) == K"::" && _argname!(prefix, kids[1])
+    bind_receiver!(prefix, kids[1])
     for a in kids[2:end]
         args = JS.kind(a) == K"parameters" ? child_nodes(a) : (a,)
         args === nothing && continue
@@ -913,7 +924,7 @@ function walk_defs!(fs, n, depth, current)
         end
     elseif k == K"->"
         for c in kids; walk_defs!(fs, c, depth + 1, current); end
-    elseif k == K"call" || k == K"parameters" || k == K"tuple"
+    elseif holds_values(k)
         walk_value_children!(c -> walk_defs!(fs, c, depth, current), n)
     else
         for c in kids; walk_defs!(fs, c, depth, current); end

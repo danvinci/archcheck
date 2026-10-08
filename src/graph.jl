@@ -56,7 +56,7 @@ end
 function walk_include_calls!(visit, n)
     kids = child_nodes(n)
     if JS.kind(n) == K"call" && kids !== nothing && !isempty(kids) && kids[1].val === :include
-        args = [c for c in kids[2:end] if JS.kind(c) != K"parameters"]
+        args = call_args(n)
         if !isempty(args)
             visit(args[1], Int(JS.source_location(n)[1]))
         end
