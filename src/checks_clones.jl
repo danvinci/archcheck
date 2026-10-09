@@ -1,19 +1,12 @@
-# Expression clones and tolerance searches over the index's syntax trees.
+# Expression clones: one syntax tree, locals renamed in order of appearance.
 
 Base.@kwdef struct ExpressionClones <: Check
     min_nodes::Int = 20   # smallest subtree that can form a group, in syntax nodes
 end
 
-struct ToleranceSearch{N} <: Check
-    tolerances::NTuple{N,Symbol}   # constants a search predicate may measure against
-end
-
 kinds(::ExpressionClones) = (:expression_clone => :advisory,)
-kinds(::ToleranceSearch) = (:tolerance_search => :advisory,)
 
 const MIX_SALT = 0x9e3779b97f4a7c15
-const SEARCH_HEADS = (:findfirst, :findlast, :findall)
-const RANGE_OPS = (:<, :<=, :>, :>=, :≈, :isapprox)
 
 struct CloneDigest
     primary::UInt64     # first 64-bit mix of this subtree
@@ -52,17 +45,6 @@ struct MethodBody
     bound::Set{Symbol}    # names this body binds
 end
 
-struct LocalPredicate
-    name::Symbol          # local function name
-    body::JS.SyntaxNode   # body syntax
-    bound::Set{Symbol}    # names the local function binds
-end
-
-struct SearchHit
-    head::Symbol             # called search name
-    predicate::JS.SyntaxNode # expression the call tests
-end
-
 function absorb!(state, token)
     state.primary = hash(token, state.primary)
     state.secondary = hash(token, state.secondary)
@@ -81,18 +63,7 @@ function local_slot!(state, name)
     state.next_local
 end
 
-function emit_leaf!(state, node, bound, role)
-    value = node.val
-    if value isa Symbol && role === :value && value in bound
-        absorb!(state, :local)
-        slot = local_slot!(state, value)
-        absorb!(state, slot)
-        return
-    end
-    absorb!(state, value)
-end
-
-function call_child_role(node, index)
+function call_child_place(node, index)
     if JS.is_infix_op_call(node)
         index == 2 && return :head
         return :value
@@ -108,7 +79,8 @@ function call_child_role(node, index)
     :value
 end
 
-function name_role(node, index)
+# Where a child sits: a callee or operator, a field name, or a value.
+function name_place(node, index)
     kind = JS.kind(node)
     if kind == K"."
         index == 2 && return :field
@@ -119,46 +91,50 @@ function name_role(node, index)
         return :value
     end
     if kind == K"call" || kind == K"dotcall" || kind == K"macrocall"
-        return call_child_role(node, index)
+        return call_child_place(node, index)
     end
     :value
+end
+
+function emit_leaf!(state, node, bound, place)
+    value = node.val
+    if value isa Symbol && place === :value && value in bound
+        absorb!(state, :local)
+        slot = local_slot!(state, value)
+        absorb!(state, slot)
+        return
+    end
+    absorb!(state, value)
+end
+
+# A quote hides the surrounding names. Interpolation reads them.
+function scoped_bound(node, index, bound, child)
+    if JS.kind(node) != K"quote"
+        return child_locals(node, index, bound)
+    end
+    if JS.kind(child) == K"$"
+        return bound
+    end
+    Set{Symbol}()
 end
 
 function absorb_children!(state, node, kids, bound)
     for index in eachindex(kids)
         child = kids[index]
-        role = name_role(node, index)
-        absorb!(state, role)
-        inner = child_locals(node, index, bound)
-        absorb_tree!(state, child, inner, role)
+        place = name_place(node, index)
+        absorb!(state, place)
+        inner = scoped_bound(node, index, bound, child)
+        absorb_tree!(state, child, inner, place)
     end
 end
 
-function absorb_quoted!(state, node, kids, bound)
-    quoted = Set{Symbol}()
-    for index in eachindex(kids)
-        child = kids[index]
-        role = name_role(node, index)
-        absorb!(state, role)
-        if JS.kind(child) == K"$"
-            absorb_tree!(state, child, bound, role)
-        else
-            absorb_tree!(state, child, quoted, role)
-        end
-    end
-end
-
-function absorb_tree!(state, node, bound, role)
+function absorb_tree!(state, node, bound, place)
     state.nodes += 1
     kind = JS.kind(node)
     absorb!(state, kind)
     kids = child_nodes(node)
     if isnothing(kids) || isempty(kids)
-        emit_leaf!(state, node, bound, role)
-        return
-    end
-    if kind == K"quote"
-        absorb_quoted!(state, node, kids, bound)
+        emit_leaf!(state, node, bound, place)
         return
     end
     absorb_children!(state, node, kids, bound)
@@ -168,6 +144,88 @@ function digest_of(node, bound)
     state = empty_mix()
     absorb_tree!(state, node, bound, :value)
     CloneDigest(state.primary, state.secondary, state.nodes)
+end
+
+function child_index(parent, node)
+    kids = child_nodes(parent)
+    isnothing(kids) && return nothing
+    for index in eachindex(kids)
+        kids[index] === node && return index
+    end
+    nothing
+end
+
+function node_inside(node, ancestor)
+    current = node
+    while !isnothing(current)
+        current === ancestor && return true
+        current = current.parent
+    end
+    false
+end
+
+function bound_of(node, root, root_bound, memo)
+    haskey(memo, node) && return memo[node]
+    if node === root || isnothing(node.parent)
+        memo[node] = root_bound
+        return root_bound
+    end
+    parent = node.parent
+    parent_bound = bound_of(parent, root, root_bound, memo)
+    index = child_index(parent, node)
+    if isnothing(index)
+        memo[node] = parent_bound
+        return parent_bound
+    end
+    inner = child_locals(parent, index, parent_bound)
+    memo[node] = inner
+    inner
+end
+
+# A method written in a default argument sits in the signature, outside the body.
+function in_method_body(node, root)
+    current = node.parent
+    while !isnothing(current) && current !== root
+        if is_method_form(current)
+            body = method_body(current)
+            isnothing(body) && return false
+            return node_inside(node, body)
+        end
+        current = current.parent
+    end
+    true
+end
+
+function method_name_of(sig)
+    named = sig_name(sig)
+    isnothing(named) || return named
+    qualified = qualified_method_name(sig)
+    isnothing(qualified) || return qualified
+    callable_receiver(sig)
+end
+
+function file_methods(file)
+    found = MethodBody[]
+    root = file.tree
+    root_bound = Set{Symbol}()
+    memo = IdDict{JS.SyntaxNode,Set{Symbol}}()
+    memo[root] = root_bound
+    for node in walk_nodes(root)
+        is_method_form(node) || continue
+        in_method_body(node, root) || continue
+        body = method_body(node)
+        isnothing(body) && continue
+        kids = child_nodes(node)
+        signature = kids[1]
+        name = method_name_of(signature)
+        isnothing(name) && continue
+        enclosing = bound_of(node, root, root_bound, memo)
+        bound = body_locals(signature, body, enclosing)
+        line = source_line(node)
+        record = MethodBody(name, line, file.path, file.mod, body, bound)
+        push!(found, record)
+    end
+    found
 end
 
 function count_nodes!(counts, node)
@@ -183,43 +241,10 @@ function count_nodes!(counts, node)
     total
 end
 
-function method_name_of(sig)
-    named = sig_name(sig)
-    isnothing(named) || return named
-    qualified = qualified_method_name(sig)
-    isnothing(qualified) || return qualified
-    callable_receiver(sig)
-end
-
-function collect_methods!(found, node, enclosing, file)
-    if JS.kind(node) == K"quote"
-        return
-    end
-    kids = child_nodes(node)
-    if is_method_form(node) && !isnothing(kids) && length(kids) >= 2
-        name = method_name_of(kids[1])
-        if !isnothing(name)
-            body = kids[2]
-            bound = body_locals(kids[1], body, enclosing)
-            line = source_line(node)
-            record = MethodBody(name, line, file.path, file.mod, body, bound)
-            push!(found, record)
-            collect_methods!(found, body, bound, file)
-            return
-        end
-    end
-    isnothing(kids) && return
-    for index in eachindex(kids)
-        child = kids[index]
-        inner = child_locals(node, index, enclosing)
-        collect_methods!(found, child, inner, file)
-    end
-end
-
 function push_site!(grouped, digest, method, node, path)
     line = source_line(node)
-    copied = copy(path)
-    site = CloneSite(method.file, method.mod, method.name, method.line, line, copied)
+    owned = copy(path)
+    site = CloneSite(method.file, method.mod, method.name, method.line, line, owned)
     push!(get!(Vector{CloneSite}, grouped, digest), site)
 end
 
@@ -258,13 +283,25 @@ function sort_sites(sites, order)
     sort(sites; by = site -> (site_rank(order, site.file), site.line, site.path))
 end
 
-function method_count(sites)
+function method_keys(sites)
     seen = Set{Tuple{String,Symbol,Int}}()
+    keys = Tuple{String,Symbol,Int}[]
     for site in sites
         key = (site.file, site.method, site.method_line)
+        key in seen && continue
         push!(seen, key)
+        push!(keys, key)
     end
-    length(seen)
+    keys
+end
+
+function joined_labels(keys)
+    parts = String[]
+    for key in keys
+        label = key[1] * ":" * string(key[2])
+        push!(parts, label)
+    end
+    join(parts, " ")
 end
 
 function is_path_prefix(outer, inner)
@@ -305,7 +342,7 @@ function keep_groups(grouped)
     for digest in digests
         sites = grouped[digest]
         length(sites) < 2 && continue
-        seen = method_count(sites)
+        seen = length(method_keys(sites))
         seen < 2 && continue
         group_covered(sites, kept) && continue
         push!(kept, CloneGroup(digest.nodes, sites))
@@ -313,24 +350,12 @@ function keep_groups(grouped)
     kept
 end
 
-function method_labels(sites)
-    parts = String[]
-    seen = Set{Tuple{String,Symbol,Int}}()
-    for site in sites
-        key = (site.file, site.method, site.method_line)
-        key in seen && continue
-        push!(seen, key)
-        label = site.file * ":" * string(site.method)
-        push!(parts, label)
-    end
-    join(parts, " ")
-end
-
 function clone_finding(group, order)
     ranked = sort_sites(group.sites, order)
+    keys = method_keys(ranked)
     first_site = first(ranked)
-    labels = method_labels(ranked)
-    seen = method_count(ranked)
+    labels = joined_labels(keys)
+    seen = length(keys)
     detail = "the same expression is written in " * string(seen) * " methods"
     nodes = string(group.nodes)
     site_count = string(length(ranked))
@@ -346,12 +371,10 @@ end
 function expression_clone_findings(index, min_nodes)
     grouped = Dict{CloneDigest,Vector{CloneSite}}()
     order = file_order(index)
-    empty_bound = Set{Symbol}()
     for file in index.files
         counts = IdDict{JS.SyntaxNode,Int}()
         count_nodes!(counts, file.tree)
-        methods = MethodBody[]
-        collect_methods!(methods, file.tree, empty_bound, file)
+        methods = file_methods(file)
         for method in methods
             root_path = Int[]
             walk_sites!(grouped, counts, method.body, method, root_path, min_nodes, method.bound)
@@ -365,271 +388,6 @@ function expression_clone_findings(index, min_nodes)
     found
 end
 
-function operator_of(node)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
-    kind = JS.kind(node)
-    if kind == K"comparison"
-        return kids[2].val
-    end
-    if JS.is_infix_op_call(node)
-        return kids[2].val
-    end
-    if JS.is_postfix_op_call(node)
-        return last(kids).val
-    end
-    if kind == K"call" || kind == K"dotcall"
-        return kids[1].val
-    end
-    nothing
-end
-
-function is_range_compare(node)
-    op = operator_of(node)
-    op isa Symbol || return false
-    op in RANGE_OPS
-end
-
-function is_tolerance_use(node, bound, tolerances, role)
-    role === :value || return false
-    value = node.val
-    value isa Symbol || return false
-    value in bound && return false
-    value in tolerances
-end
-
-function call_head_symbol(node)
-    kind = JS.kind(node)
-    if kind != K"call" && kind != K"dotcall"
-        return nothing
-    end
-    if JS.is_infix_op_call(node)
-        return nothing
-    end
-    if JS.is_postfix_op_call(node)
-        return nothing
-    end
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
-    head = kids[1].val
-    head isa Symbol || return nothing
-    head
-end
-
-function collect_predicates!(found, node, enclosing)
-    if JS.kind(node) == K"quote"
-        return
-    end
-    kids = child_nodes(node)
-    if is_method_form(node) && !isnothing(kids) && length(kids) >= 2
-        name = sig_name(kids[1])
-        if !isnothing(name)
-            body = kids[2]
-            bound = body_locals(kids[1], body, enclosing)
-            push!(found, LocalPredicate(name, body, bound))
-            collect_predicates!(found, body, bound)
-            return
-        end
-    end
-    isnothing(kids) && return
-    for index in eachindex(kids)
-        child = kids[index]
-        inner = child_locals(node, index, enclosing)
-        collect_predicates!(found, child, inner)
-    end
-end
-
-function note_uses!(used, called, node, bound, tolerances, known, role, inside)
-    if JS.kind(node) == K"quote"
-        return
-    end
-    if inside && is_tolerance_use(node, bound, tolerances, role)
-        push!(used, node.val)
-    end
-    if role === :value
-        value = node.val
-        if value isa Symbol && value in known
-            push!(called, value)
-        end
-    end
-    head = call_head_symbol(node)
-    if !isnothing(head) && head in known
-        push!(called, head)
-    end
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    comparing = inside || is_range_compare(node)
-    for index in eachindex(kids)
-        child = kids[index]
-        child_role = name_role(node, index)
-        inner = child_locals(node, index, bound)
-        note_uses!(used, called, child, inner, tolerances, known, child_role, comparing)
-    end
-end
-
-function merge_uses!(table, name, incoming)
-    if haskey(table, name)
-        union!(table[name], incoming)
-        return
-    end
-    table[name] = incoming
-end
-
-function note_predicate!(direct, calls, predicate, tolerances, known)
-    used = Set{Symbol}()
-    called = Set{Symbol}()
-    note_uses!(used, called, predicate.body, predicate.bound, tolerances, known, :value, false)
-    merge_uses!(direct, predicate.name, used)
-    merge_uses!(calls, predicate.name, called)
-end
-
-function spread_reached!(reached, calls, limit)
-    steps = 0
-    while steps < limit
-        steps += 1
-        grew = false
-        for name in keys(calls)
-            bag = reached[name]
-            before = length(bag)
-            callees = calls[name]
-            for callee in callees
-                if haskey(reached, callee)
-                    union!(bag, reached[callee])
-                end
-            end
-            if length(bag) != before
-                grew = true
-            end
-        end
-        grew || break
-    end
-end
-
-function reached_tolerances(predicates, tolerances)
-    known = Set{Symbol}()
-    for predicate in predicates
-        push!(known, predicate.name)
-    end
-    direct = Dict{Symbol,Set{Symbol}}()
-    calls = Dict{Symbol,Set{Symbol}}()
-    for predicate in predicates
-        note_predicate!(direct, calls, predicate, tolerances, known)
-    end
-    reached = Dict{Symbol,Set{Symbol}}()
-    for name in keys(direct)
-        bag = direct[name]
-        reached[name] = copy(bag)
-    end
-    limit = length(predicates)
-    spread_reached!(reached, calls, limit)
-    hot = Dict{Symbol,Set{Symbol}}()
-    for name in keys(reached)
-        bag = reached[name]
-        if !isempty(bag)
-            hot[name] = bag
-        end
-    end
-    hot
-end
-
-function search_tolerances(node, bound, tolerances, reached)
-    hot_names = keys(reached)
-    known = Set(hot_names)
-    used = Set{Symbol}()
-    called = Set{Symbol}()
-    note_uses!(used, called, node, bound, tolerances, known, :value, false)
-    for name in called
-        if haskey(reached, name)
-            union!(used, reached[name])
-        end
-    end
-    names = collect(used)
-    sort!(names)
-    names
-end
-
-function do_child(kids)
-    for child in kids
-        if JS.kind(child) == K"do"
-            return child
-        end
-    end
-    nothing
-end
-
-function search_parts(node)
-    JS.kind(node) == K"call" || return nothing
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
-    head = kids[1].val
-    head isa Symbol || return nothing
-    head in SEARCH_HEADS || return nothing
-    block = do_child(kids)
-    if !isnothing(block)
-        return SearchHit(head, block)
-    end
-    length(kids) < 2 && return nothing
-    SearchHit(head, kids[2])
-end
-
-function push_search!(found, method, node, head, names)
-    label = join(names, " ")
-    search = string(head)
-    evidence = Pair{Symbol,String}[
-        :search => search,
-        :tolerance => label,
-    ]
-    line = source_line(node)
-    detail = "a search compares within a tolerance"
-    symbol = string(method.name)
-    finding = Finding(method.mod, :tolerance_search, method.file, symbol, line, detail, evidence)
-    push!(found, finding)
-end
-
-function walk_searches!(found, node, method, bound, tolerances, reached)
-    if JS.kind(node) == K"quote"
-        return
-    end
-    if is_method_form(node)
-        return
-    end
-    parts = search_parts(node)
-    if !isnothing(parts)
-        names = search_tolerances(parts.predicate, bound, tolerances, reached)
-        if !isempty(names)
-            push_search!(found, method, node, parts.head, names)
-        end
-    end
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    for index in eachindex(kids)
-        child = kids[index]
-        inner = child_locals(node, index, bound)
-        walk_searches!(found, child, method, inner, tolerances, reached)
-    end
-end
-
-function tolerance_findings(index, tolerances)
-    names = Set(tolerances)
-    found = Finding[]
-    empty_bound = Set{Symbol}()
-    for file in index.files
-        methods = MethodBody[]
-        collect_methods!(methods, file.tree, empty_bound, file)
-        for method in methods
-            predicates = LocalPredicate[]
-            collect_predicates!(predicates, method.body, method.bound)
-            reached = reached_tolerances(predicates, names)
-            walk_searches!(found, method.body, method, method.bound, names, reached)
-        end
-    end
-    found
-end
-
 function run(check::ExpressionClones, ctx)
     expression_clone_findings(ctx.index, check.min_nodes)
-end
-
-function run(check::ToleranceSearch, ctx)
-    tolerance_findings(ctx.index, check.tolerances)
 end
