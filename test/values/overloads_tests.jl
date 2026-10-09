@@ -165,6 +165,12 @@ wide_bound(xs::T) where {T<:AbstractVector{Float64}} = xs
 wide_bound(xs::Vector{Float64}) = xs
 kw(xs::Vector{Float64}; tol = 0) = xs
 kw(xs::Fix{N,Float64}; tol = 0) where {N} = xs
+struct Box{K} end
+struct Tag{K} end
+held(xs::Vector{Box{K}}) where {K} = xs
+held(xs::Matrix{Tag{K}}) where {K} = xs
+boxed(xs::Vector{Box{K}}) where {K} = xs
+boxed(xs::Matrix{Box{L}}) where {L} = xs
 """
 
 const STORE_HEAP = load_package("StoreHeap", STORE_SPINE)
@@ -218,6 +224,8 @@ end
         (name = "tri", count = 1, storage = nothing, methods = nothing),
         (name = "kw", count = 1, storage = nothing, methods = nothing),
         (name = "wide_bound", count = 0, storage = nothing, methods = nothing),
+        (name = "held", count = 0, storage = nothing, methods = nothing),
+        (name = "boxed", count = 1, storage = nothing, methods = nothing),
     )
     for case in cases
         hits = filter(f -> f.symbol == case.name, store_found)
