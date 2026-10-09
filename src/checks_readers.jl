@@ -168,9 +168,7 @@ function read_args!(item, code, args, seen, method, repo)
     push_finding!(owner, file, symbol, line, item.label, callee, "code_typed", detail, item.findings)
 end
 
-skipped_callee(@nospecialize(value)) = false
-skipped_callee(::Core.Builtin) = true
-skipped_callee(::Core.IntrinsicFunction) = true
+skipped_callee(::Union{Core.Builtin,Core.IntrinsicFunction}) = true
 skipped_callee(value::Function) = nameof(value) in MOVED_CALLEES
 
 function skipped_callee(@nospecialize(value::Type))
@@ -198,9 +196,7 @@ listed_type(types::Vector, index) = index in eachindex(types) ? types[index] : A
 listed_type(@nospecialize(types), index) = Any
 slot_type(code, index) = isdefined(code, :slottypes) ? listed_type(code.slottypes, index) : Any
 value_type_of(code, value::Core.SSAValue) = listed_type(code.ssavaluetypes, value.id)
-value_type_of(code, value::Core.Argument) = slot_type(code, value.n)
 value_type_of(code, value::Core.SlotNumber) = slot_type(code, value.id)
-value_type_of(code, value::Core.Const) = typeof(value.val)
 value_type_of(code, value::QuoteNode) = typeof(value.value)
 value_type_of(code, @nospecialize(value)) = typeof(value)
 
@@ -210,10 +206,6 @@ function resolve_callee(code, head::Core.SSAValue)
 end
 
 resolve_callee(code, head::GlobalRef) = isdefined(head.mod, head.name) ? getfield(head.mod, head.name) : nothing
-resolve_callee(code, head::Core.Const) = head.val
-resolve_callee(code, head::QuoteNode) = head.value
-resolve_callee(code, head::Function) = head
-resolve_callee(code, head::Type) = head
 resolve_callee(code, @nospecialize(head)) = nothing
 
 callee_name(value::Function) = string(nameof(value))

@@ -140,17 +140,16 @@ function constant_value(mod::Module, path)
     value
 end
 
-type_application_failed(::TypeError) = true
-type_application_failed(::MethodError) = true
-type_application_failed(::ArgumentError) = true
-type_application_failed(::Any) = false
+# Julia reports a rejected type application as one of these two errors.
+const FailedApplication = Union{TypeError,ErrorException}
 
 function apply_parameters(head, parameters)
     try
         return head{parameters...}
     catch err
-        type_application_failed(err) || rethrow()
-        return nothing
+        rejected = err isa FailedApplication
+        rejected && return nothing
+        rethrow()
     end
 end
 

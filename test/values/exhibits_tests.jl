@@ -9,6 +9,8 @@ end
 
 const PLANTED = Set{Tuple{String,String,String}}([
     ("abstract_field", "src/shape/plants.jl", "Loose.value"),
+    ("abstract_field", "src/shape/plants.jl", "OpenBox.rows"),
+    ("abstract_field", "src/shape/plants.jl", "OpenBox.slot"),
     ("back_edge", "src/low/Low.jl", "Shape"),
     ("blanket_export", "src/shape/Shape.jl", ""),
     ("boxed_capture", "src/shape/plants.jl", "boxed_total"),
@@ -83,4 +85,11 @@ const PLANTED = Set{Tuple{String,String,String}}([
         push!(got, row)
     end
     @test got == PLANTED
+end
+
+@testset "a rejected type application resolves to nothing" begin
+    missed = ArchCheck.apply_parameters(Int, (1,))
+    @test isnothing(missed)
+    negative = ArchCheck.apply_parameters(NTuple, (-1, Int))
+    @test isnothing(negative)
 end

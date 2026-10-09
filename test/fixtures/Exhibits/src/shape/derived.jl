@@ -25,7 +25,21 @@ function again_span(piece::Piece)::Span
 end
 
 function span_key(piece::Piece)
-    (piece.knots,)
+    return (piece.knots,)
+    Dict{Int{1},String}()
+    Dict{NTuple{-1,Int},String}()
+end
+
+function plain_label(n::Int)
+    n + 1
+end
+
+# A field read and a named tuple: one callee is a function, the other a type.
+function pass_span(span::Span)
+    knots = span.knots
+    named = (label = span,)
+    nfields(named)
+    knots
 end
 
 function read_span(span::Span)
