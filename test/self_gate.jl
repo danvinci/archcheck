@@ -15,6 +15,7 @@ const NOT_APPLICABLE = (
     (KeptBuilders, "no constructor result is kept for its caller with get!"),
     (CallerWhitelist, "no function has a closed list of callers"),
     (Independent, "the package is one module, so no pair of modules is independent"),
+    (DeclaredExtensions, "the package is one module, so no module extends another's function"),
     (Rebuilds, "one probe session runs at a time, and this gate arms none"),
     (TwoNames, "one probe session runs at a time, and this gate arms none"),
     (Waits, "one probe session runs at a time, and this gate arms none"),
@@ -81,6 +82,7 @@ function exhibit_checks()
     push!(active, ToleranceSearch((:GAP,)))
     push!(active, KeptBuilders(:(Shape.build_shape)))
     push!(active, Independent(:Low, :Shape))
+    push!(active, DeclaredExtensions())
     readers = ((Exhibits.Shape.read_item, Tuple{}),)
     push!(active, ReaderSet(Exhibits.Shape.Item, readers))
     push!(active, ScanSeeds(("src/shape/seeds.jl",)))

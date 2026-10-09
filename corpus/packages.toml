@@ -11,7 +11,8 @@ DataStructures = { version = "0.19.6", errors = [] }
 FillArrays = { version = "1.17.1", errors = [] }
 ForwardDiff = { version = "1.4.6", errors = [] }
 JSON = { version = "1.10.0", errors = [] }
-JuliaSyntax = { version = "1.0.2", errors = [] }
+# The root and its Tokenize module each export `tokenize` and `untokenize`, bound to different functions.
+JuliaSyntax = { version = "1.0.2", errors = ["duplicate_owner"] }
 
 # Layouts the rows above lack.
 # src/precompile.jl sits outside the spine: its include is commented out.
@@ -20,7 +21,8 @@ ColorTypes = { version = "0.12.3", errors = ["unranked_file"] }
 Compat = { version = "4.18.1", errors = [] }
 # A Clang-generated C wrapper (src/gen/libhighs.jl) over a binary package.
 HiGHS = { version = "1.26.0", errors = [] }
-# Directory submodules with their own spines, files included by a readdir loop, a code generator left in src/.
-MathOptInterface = { version = "1.54.0", errors = ["nonliteral_include", "unranked_file"] }
+# Directory submodules with their own spines, a code generator left in src/, and FileFormats' readers (CBF, LP,
+# MOF, ...) included by a readdir loop, so no file places their modules.
+MathOptInterface = { version = "1.54.0", errors = ["nonliteral_include", "unranked_file", "unranked_module"] }
 # @generated kernels on types StaticArraysCore owns; its own Aqua run marks the piracy test broken.
 StaticArrays = { version = "1.9.23", errors = ["module_piracy"] }
