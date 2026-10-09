@@ -5,6 +5,8 @@ using JSON
 
 include("finding.jl")
 include("syntax.jl")
+include("layout.jl")
+include("modrefs.jl")
 include("graph.jl")
 include("checks_ast.jl")
 include("checks_reflect.jl")
