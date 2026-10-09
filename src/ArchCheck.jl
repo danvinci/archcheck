@@ -52,7 +52,6 @@ include("catalog.jl")
 include("gate.jl")
 
 # A name a caller writes is exported. A verb the caller qualifies stays public.
-# A name whose other methods the package reaches stays public when a test-only method would otherwise read as unreached.
 export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
 export Check, Context
 export Corpus, ModuleBackEdges, ModuleCycles, ContractsPurity, OwnerUniqueness, ModulePiracy
@@ -67,6 +66,5 @@ export Derived, Probes
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation, ProbeRecord, WaitRecord
 public gate, run, kinds, phase, CHECKS
-public scan_defs, scan_modrefs, CallGraph, ModRef, build_module_graph
 
 end # module ArchCheck

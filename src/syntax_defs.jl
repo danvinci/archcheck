@@ -224,15 +224,9 @@ function walk_defs!(scan, node, depth, current)
     end
 end
 
-# The walk, over an already-parsed tree.
+# The walk, over a file's one parse.
 function scan_tree(tree)
     scan = empty_scan()
     walk_defs!(scan, tree, 0, nothing)
     scan
-end
-
-function scan_defs(src::AbstractString, filename = "none")
-    tree = parse_file(src, filename)
-    isnothing(tree) && return empty_scan()
-    scan_tree(tree)
 end

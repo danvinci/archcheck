@@ -10,14 +10,6 @@ struct CallGraph
     site_refs::Dict{Tuple{Symbol,String},Set{Symbol}}   # (def, the file THAT method lives in) -> its own refs
 end
 
-# rank-free: adjacency is enough for callers that never compare positions.
-CallGraph(mod, funcs, files, calls) = CallGraph(mod, funcs, files, calls, calls, Dict{String,Int}())
-
-# One definition site per name: the per-site view collapses to the per-name one.
-CallGraph(mod, funcs, files, calls, refs, rank) =
-    CallGraph(mod, funcs, files, calls, refs, rank,
-              Dict{Tuple{Symbol,String},Set{Symbol}}((n, get(files, n, "")) => r for (n, r) in refs))
-
 # One module's graph from the index. Types carry refs (field + supertype coupling), so a struct embedding
 # another file's type is an edge; only functions relocate, so funcs excludes them.
 function build_call_graph(index, mod::Symbol)

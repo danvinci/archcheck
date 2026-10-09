@@ -8,7 +8,6 @@ struct ModRef
     via::Symbol           # :using | :import | :qualified | :extends (a method on `to`'s function)
     names::Vector{Symbol} # names reached in `to`: an import list, or the name after a qualified path; empty for a whole module
 end
-ModRef(from, to, file, line, via) = ModRef(from, to, file, line, via, Symbol[])
 
 # A module's dotted key from the package root, split: `Outer.Inner` -> [:Outer, :Inner].
 function key_segments(key::Symbol)
@@ -217,15 +216,4 @@ function walk_modrefs!(refs, from, scope, file, modules, node)
     for child in kids
         walk_modrefs!(refs, from, scope, file, modules, child)
     end
-end
-
-function scan_modrefs(src::AbstractString, from, file, known; root = nothing)
-    refs = ModRef[]
-    tree = parse_file(src, file)
-    isnothing(tree) && return refs
-    known_set = Set{Symbol}(known)
-    modules = ModuleNames(known_set, root)
-    scope = key_segments(from)
-    walk_modrefs!(refs, from, scope, file, modules, tree)
-    refs
 end
