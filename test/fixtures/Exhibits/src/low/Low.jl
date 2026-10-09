@@ -33,6 +33,13 @@ function pull_shape()
     brick
 end
 
+# back_edge when strict: a module block in the wrapper's own code reaching the module that encloses it
+module Inner
+using ..Low: helper
+public reach
+reach() = helper()
+end
+
 # unranked_module: a submodule evaluated from an expression, which no file places
 Core.eval(@__MODULE__, :(module Hidden end))
 

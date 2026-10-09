@@ -71,8 +71,18 @@ function exhibit_derived()
     (declared, plain)
 end
 
+# The exhibits keep their modules apart, so the module rules run strict there.
+const STRICT_RULES = (ModuleBackEdges, ModuleCycles, OwnerUniqueness, ModulePiracy)
+
 function exhibit_checks()
-    active = collect(Check, ArchCheck.CHECKS)
+    active = Check[]
+    for check in ArchCheck.CHECKS
+        is_strict_rule = any(rule -> check isa rule, STRICT_RULES)
+        is_strict_rule || push!(active, check)
+    end
+    for rule in STRICT_RULES
+        push!(active, rule(strict = true))
+    end
     allowed = (("src/shape/plants.jl", :allowed_call),)
     whitelist = CallerWhitelist((:guarded,), allowed)
     push!(active, whitelist)
