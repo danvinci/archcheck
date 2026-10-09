@@ -11,6 +11,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("abstract_field", "src/shape/plants.jl", "Loose.value"),
     ("abstract_field", "src/shape/plants.jl", "OpenBox.rows"),
     ("abstract_field", "src/shape/plants.jl", "OpenBox.slot"),
+    ("back_edge", "src/low/Low.jl", "Low"),
     ("back_edge", "src/low/Low.jl", "Shape"),
     ("blanket_export", "src/shape/Shape.jl", ""),
     ("boxed_capture", "src/shape/plants.jl", "boxed_total"),
