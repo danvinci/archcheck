@@ -128,22 +128,11 @@ function check_file_sinkable(cg::CallGraph, sites)
     findings
 end
 
-function graph_methods(methods::MethodGraph)
-    callers = Set{Method}()
-    for caller in keys(methods.edges)
-        push!(callers, caller)
-    end
-    for caller in keys(methods.unresolved)
-        push!(callers, caller)
-    end
-    callers
-end
-
 # Methods of this module's functions, each at the file and line the loader recorded.
 function judged_methods(cg, methods, repo)
     owned = Set(cg.funcs)
     judged = Tuple{Method,String,Int}[]
-    for caller in graph_methods(methods)
+    for caller in keys(methods.edges)
         caller.name in owned || continue
         located = method_site(caller, repo)
         home = located[1]
@@ -163,14 +152,6 @@ function covered_names(judged)
     names
 end
 
-function add_unresolved_targets!(targets, cg, caller_name, pending)
-    for called in pending
-        called === caller_name && continue
-        path = get(cg.files, called, nothing)
-        isnothing(path) || push!(targets, path)
-    end
-end
-
 # A callee with no top-level name is a closure. Its body's callee files belong to the caller.
 function add_callee_target!(targets, cg, caller_name, callee, methods, repo, seen)
     if !haskey(cg.files, callee.name)
@@ -188,14 +169,10 @@ function add_body_targets!(targets, cg, caller_name, method, methods, repo, seen
     method in seen && return
     push!(seen, method)
     callees = get(methods.edges, method, nothing)
-    if !isnothing(callees)
-        for callee in callees
-            add_callee_target!(targets, cg, caller_name, callee, methods, repo, seen)
-        end
+    isnothing(callees) && return
+    for callee in callees
+        add_callee_target!(targets, cg, caller_name, callee, methods, repo, seen)
     end
-    pending = get(methods.unresolved, method, nothing)
-    isnothing(pending) && return
-    add_unresolved_targets!(targets, cg, caller_name, pending)
 end
 
 function add_method_targets!(targets, cg, method, methods, repo)
@@ -224,7 +201,7 @@ function method_findings(cg, methods, judged, repo)
     findings
 end
 
-# With a method graph, each method is judged on the callees inference resolved for it.
+# With a method graph, each method is judged on the methods its calls can land on.
 # A function with no method in the graph keeps the name-level verdict.
 function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, repo)
     judged = judged_methods(cg, methods, repo)

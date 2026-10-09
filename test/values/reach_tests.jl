@@ -1,4 +1,4 @@
-# A method the workload left uncompiled stays a finding. A call the method graph names accounts for one the run skipped.
+# A method the workload left uncompiled stays a finding. A call in the method graph that can land on it accounts for it.
 
 const LEFT_UNCALLED = load_package("LeftUncalled", """
     called(x::Int) = x + 1
@@ -29,6 +29,19 @@ const PARAMETRIC_BOX = load_package("ParametricBox", """
     spare(x::Int) = x + 1
     """)
 
+# Four methods take an Int second, so inference leaves the router's call to runtime dispatch, and one of them alone
+# calls the helper. The method taking two Strings fits no call.
+const DYNAMIC_PLACE = load_package("DynamicPlace", """
+    place(x::Int, n::Int) = deeper(x)
+    place(x::Float64, n::Int) = x
+    place(x::Symbol, n::Int) = x
+    place(x::Char, n::Int) = x
+    place(x::String, n::String) = x
+    deeper(x::Int) = x + 1
+    route(items::Vector{Any}) = place(items[1], 1)
+    ready() = 0
+    """)
+
 const EXPORTED_SPARE = load_package("ExportedSpare", """
     export spare
     called(x::Int) = x + 1
@@ -36,7 +49,7 @@ const EXPORTED_SPARE = load_package("ExportedSpare", """
     hidden(x::Int) = x + 3
     """)
 
-@testset "only the method nobody called and no graph name accounts for is unreached" begin
+@testset "only the method nobody called and no graph call lands on is unreached" begin
     pkg = LEFT_UNCALLED.pkg
     entry = (pkg.route, Tuple{Int,Any})
     reach_workload = function ()
@@ -53,6 +66,17 @@ const EXPORTED_SPARE = load_package("ExportedSpare", """
     rows = evidence_rows(found, :module, :signature)
     signature = string(uncalled.sig)
     @test rows == [(:unreached_method, "uncalled", "LeftUncalled", signature)]
+end
+
+@testset "a dynamic call reaches only the methods its types match, and the methods those call" begin
+    pkg = DYNAMIC_PLACE.pkg
+    entry = (pkg.route, Tuple{Vector{Any}})
+    entries = (entry,)
+    workload = () -> pkg.ready()
+    found = gate_findings(pkg; checks = (UnreachedMethods(),), workload, entries)
+    unmatched = which(pkg.place, Tuple{String,String})
+    rows = evidence_rows(found, :signature)
+    @test rows == [(:unreached_method, "place", string(unmatched.sig))]
 end
 
 @testset "a compiler Any constructor beside a typed one stays quiet" begin

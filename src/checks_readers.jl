@@ -93,7 +93,6 @@ function reached_methods(graph)
         push!(methods, caller)
         union!(methods, callees)
     end
-    union!(methods, keys(graph.unresolved))
     methods
 end
 
