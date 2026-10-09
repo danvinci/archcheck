@@ -158,8 +158,6 @@ function wait_probe(name::Symbol)
     GlobalRef(@__MODULE__, :probe_wait)
 end
 
-is_sync_macro(::Any) = false
-
 function is_sync_macro(node::Expr)
     node.head === :macrocall || return false
     isempty(node.args) && return false

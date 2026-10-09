@@ -39,5 +39,10 @@ function exercise()
     Loose(1.0)
     Base.identity("a", 1)
     near_gap([0.0, 1.0])
+    numbers = [1, 2, 3]
+    held = Set([1])
+    pairs = Dict(1 => 2)
+    viewed = view(numbers, 1:1)
+    hold_inputs(held, pairs, viewed, numbers, Shape)
     0
 end

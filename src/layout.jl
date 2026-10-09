@@ -39,7 +39,9 @@ function static_string(node)
     parts = String[]
     for child in kids
         JS.kind(child) == K"String" || return nothing
-        push!(parts, string(child.val))
+        value = child.val
+        value isa String || return nothing
+        push!(parts, value)
     end
     join(parts)
 end

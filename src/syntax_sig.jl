@@ -50,8 +50,9 @@ function is_inner_constructor(node)
 end
 
 # A type name, unwrapping `<:` and `{}` to the bare identifier.
-function type_name(node)
-    node.val isa Symbol && return node.val
+function type_name(node)::Union{Nothing,Symbol}
+    named = node_symbol(node)
+    isnothing(named) || return named
     children = child_nodes(node)
     missing = isnothing(children) || isempty(children)
     missing && return nothing
@@ -62,13 +63,14 @@ end
 
 # The name a signature defines. A dotted head (`M.getindex`) is a method on another module's generic:
 # the dispatch that reaches it belongs to that module, so this module does not own the name.
-function sig_name(signature)
+function sig_name(signature)::Union{Nothing,Symbol}
     parts = call_parts(signature)
     isnothing(parts) && return nothing
     head = parts.head
-    head.val isa Symbol && return head.val
-    JS.kind(head) == K"curly" && return type_name(head)
-    nothing
+    named = node_symbol(head)
+    isnothing(named) || return named
+    JS.kind(head) == K"curly" || return nothing
+    type_name(head)
 end
 
 # A qualified generic identifies a method site without declaring a locally owned function.

@@ -84,15 +84,21 @@ function importpath_parts(path)
 end
 
 # The identifiers of a pure dotted name, `A.B.c` -> [:A, :B, :c]; nothing when any part is an expression.
-function dotted_names(node)
-    node.val isa Symbol && return [node.val]
+function dotted_names(node)::Union{Nothing,Vector{Symbol}}
+    named = node_symbol(node)
+    if !isnothing(named)
+        names = Symbol[named]
+        return names
+    end
     JS.kind(node) == K"." || return nothing
     kids = child_nodes(node)
     (isnothing(kids) || length(kids) != 2) && return nothing
     head = dotted_names(kids[1])
-    member = kids[2].val
-    (isnothing(head) || !(member isa Symbol)) && return nothing
+    member = node_symbol(kids[2])
+    isnothing(head) && return nothing
+    isnothing(member) && return nothing
     push!(head, member)
+    head
 end
 
 function clause_source(item)

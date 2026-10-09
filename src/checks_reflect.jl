@@ -4,9 +4,16 @@
 # A loaded module's key, as the source index names it: its path below the package root, `Geometry.Meshes`.
 # The root has no path below it, so it is keyed by its own name.
 function module_key(mod::Module)
-    below = fullname(mod)[2:end]
-    isempty(below) && return nameof(mod)
-    Symbol(join(below, "."))
+    parts = fullname(mod)
+    texts = String[]
+    for part in parts
+        piece = string(part)
+        push!(texts, piece)
+    end
+    length(texts) < 2 && return nameof(mod)
+    rest = texts[2:end]
+    text = join(rest, ".")
+    Symbol(text)
 end
 
 # The module's wrapper path by layout convention, for a finding with no single source line:

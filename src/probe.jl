@@ -199,6 +199,18 @@ function function_body(definition::Expr)
     definition.args[2]
 end
 
+# The body method that exists after the replacement is evaluated. The table changed, so the earlier read does not name it.
+function install_keyword_body!(body::Function, target::Method, original::Expr, replacement::Expr, home::Module)
+    Base.delete_method(target)
+    try
+        Core.eval(home, replacement)
+    catch
+        Core.eval(home, original)
+        rethrow()
+    end
+    newest_method(body)
+end
+
 function keyword_source(method::Method, saved::Expr, probed::Expr, home::Module)
     probed.head === :function || return nothing
     body = defined_body(method)
@@ -213,14 +225,7 @@ function keyword_source(method::Method, saved::Expr, probed::Expr, home::Module)
     original = Expr(:function, copied_call, copied_inner)
     probed_inner = probed.args[2]
     replacement = Expr(:function, call, probed_inner)
-    Base.delete_method(target)
-    try
-        Core.eval(home, replacement)
-    catch
-        Core.eval(home, original)
-        rethrow()
-    end
-    installed = newest_method(body)
+    installed = install_keyword_body!(body, target, original, replacement, home)
     label = string(installed.sig)
     body_name = nameof(body)
     MethodSource(home, original, body_name, label)

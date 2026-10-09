@@ -125,3 +125,23 @@ end
 function never_called()
     1
 end
+
+# A probed call receives a set, a dict, a view, a vector, and a module, and waits on a non-task.
+function hold_inputs(held::Set{Int}, pairs::Dict{Int,Int}, viewed, rows::Vector{Int}, owner::Module)
+    try
+        fetch(0)
+    catch
+    end
+    try
+        wait(0)
+    catch
+    end
+    child = @async 1
+    wait(child)
+    @sync begin
+        @async 1
+    end
+    named = nameof(owner)
+    label = string(named)
+    length(held) + length(pairs) + length(viewed) + length(rows) + length(label)
+end
