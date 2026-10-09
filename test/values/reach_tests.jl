@@ -123,17 +123,17 @@ end
     @test rows == [(:unreached_method, "spare")]
 end
 
-@testset "an exported uncalled method stays quiet when a public name is an entry" begin
+@testset "an exported uncalled method stays quiet unless the package turns public entries off" begin
     pkg = EXPORTED_SPARE.pkg
     entry = (pkg.called, Tuple{Int})
     workload = () -> pkg.called(1)
     entries = (entry,)
-    open_check = UnreachedMethods()
-    closed_check = UnreachedMethods(public_is_entry = true)
-    open_found = gate_findings(pkg; checks = (open_check,), workload, entries)
-    closed_found = gate_findings(pkg; checks = (closed_check,), workload, entries)
-    open_rows = evidence_rows(open_found)
-    closed_rows = evidence_rows(closed_found)
-    @test open_rows == [(:unreached_method, "hidden"), (:unreached_method, "spare")]
-    @test closed_rows == [(:unreached_method, "hidden")]
+    library_check = UnreachedMethods()
+    application_check = UnreachedMethods(public_is_entry = false)
+    library_found = gate_findings(pkg; checks = (library_check,), workload, entries)
+    application_found = gate_findings(pkg; checks = (application_check,), workload, entries)
+    library_rows = evidence_rows(library_found)
+    application_rows = evidence_rows(application_found)
+    @test library_rows == [(:unreached_method, "hidden")]
+    @test application_rows == [(:unreached_method, "hidden"), (:unreached_method, "spare")]
 end

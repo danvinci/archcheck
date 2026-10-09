@@ -1,11 +1,11 @@
 # Methods the workload left uncompiled. A call in the method graph that can land on one accounts for it.
 
-"""Configured through `gate(...; checks)` beside a workload. A method the workload left uncompiled, and that no call in the method graph can land on, is a finding. `public_is_entry` counts an exported or public name as reached."""
+"""Configured through `gate(...; checks)` beside a workload. A method the workload left uncompiled, and that no call in the method graph can land on, is a finding. `public_is_entry`, on by default as for `DeadCode`, counts an exported or public name as reached; an application turns it off."""
 struct UnreachedMethods <: Check
     public_is_entry::Bool   # an exported or public name counts as an entry point
 end
 
-UnreachedMethods(; public_is_entry::Bool = false) = UnreachedMethods(public_is_entry)
+UnreachedMethods(; public_is_entry::Bool = true) = UnreachedMethods(public_is_entry)
 
 kinds(::UnreachedMethods) = (:unreached_method => :advisory,)
 
