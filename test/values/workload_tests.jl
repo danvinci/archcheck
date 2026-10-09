@@ -140,15 +140,13 @@ end
 end
 
 @testset "a probed keyword method counts as reached after its methods are restored" begin
-    source = """
-    function scaled(xs; scale = 2)
-        xs .* scale
-    end
-    """
-    loaded = indexed_module(:ScaledReach, source)
-    scaled = loaded.mod.scaled
-    probes = Probes(functions = (scaled,), slow_s = 0.0)
-    observed = ArchCheck.observe(() -> scaled([1]; scale = 3), probes, loaded.ctx)
-    restored = only(Base.invokelatest(methods, scaled))
-    @test restored in observed.reached
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    keyed = Probed.keyed
+    probes = Probes(functions = (keyed,), slow_s = 0.0)
+    checks = (FWorkload.SeesReached(), UnreachedMethods())
+    workload = () -> keyed(3; scale = 4)
+    quiet = IOBuffer()
+    ArchCheck.gate(Probed; report_path = report, io = quiet, checks, probes, workload)
+    restored = only(Base.invokelatest(methods, keyed))
+    @test restored in FWorkload.REACHED[]
 end

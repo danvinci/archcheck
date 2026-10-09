@@ -53,7 +53,9 @@ function gate(pkg::Module;
     if !isnothing(workload)
         observed = observe(workload, probes, ctx)
         after_workload = Context(ctx; observed)
-        append!(findings, run_checks(after_workload, observing))
+        # Restored probes define methods and keyword bodies after this call's world began.
+        observed_findings = Base.invokelatest(run_checks, after_workload, observing)
+        append!(findings, observed_findings)
     end
 
     mkpath(dirname(report_path))
