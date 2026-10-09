@@ -737,26 +737,43 @@ function keyword_name(node)
     keyword_name(kids[1])
 end
 
-function arguments_text(kids, op_form::Bool)
+# The positional arguments a call passes; its callee, its keyword block and an operator token are left out.
+function positional_arguments(call)
+    is_operator = is_operator_call(call)
+    found = JS.SyntaxNode[]
+    for (index, child) in enumerate(child_nodes(call))
+        JS.kind(child) == K"parameters" && continue
+        if is_operator ? !operator_token(child) : index > 1
+            push!(found, child)
+        end
+    end
+    found
+end
+
+keyword_value(param) = JS.kind(param) == K"=" ? child_nodes(param)[2] : param
+
+# Every value a call passes: its positional arguments, then each keyword's value.
+function passed_values(call)
+    passed = positional_arguments(call)
+    for child in child_nodes(call)
+        JS.kind(child) == K"parameters" || continue
+        params = child_nodes(child)
+        isnothing(params) || append!(passed, keyword_value.(params))
+    end
+    passed
+end
+
+function arguments_text(call)
     parts = String[]
-    for index in eachindex(kids)
-        child = kids[index]
-        if index == 1 && !op_form
-            continue
-        end
-        if JS.kind(child) == K"parameters"
-            continue
-        end
-        if op_form && operator_token(child)
-            continue
-        end
-        raw = JS.sourcetext(child)
+    for argument in positional_arguments(call)
+        raw = JS.sourcetext(argument)
         push!(parts, collapse_source(raw))
     end
     join(parts, ", ")
 end
 
-function keywords_text(kids)
+function keywords_text(call)
+    kids = child_nodes(call)
     index = findfirst(child -> JS.kind(child) == K"parameters", kids)
     isnothing(index) && return ""
     params = kids[index]
@@ -799,9 +816,9 @@ function push_call!(callsites, site, call)
     push!(calls, call)
 end
 
-function record_written!(fs, callee::Symbol, qualifier::String, kids, op_form::Bool, node, scope)
-    arguments = arguments_text(kids, op_form)
-    keywords = keywords_text(kids)
+function record_written!(fs, callee::Symbol, qualifier::String, node, scope)
+    arguments = arguments_text(node)
+    keywords = keywords_text(node)
     line = source_line(node)
     is_used = !scope.discarded
     call = CallSite(callee, qualifier, arguments, keywords, line, scope.loop_depth, is_used)
@@ -811,17 +828,15 @@ end
 function record_operator!(fs, node, scope)
     callee = operator_callee(node)
     isnothing(callee) && return
-    kids = child_nodes(node)
-    kids === nothing && return
-    record_written!(fs, callee, "", kids, true, node, scope)
+    record_written!(fs, callee, "", node, scope)
 end
 
 function record_named!(fs, node, scope)
     kids = child_nodes(node)
-    (kids === nothing || isempty(kids)) && return
+    (isnothing(kids) || isempty(kids)) && return
     naming = name_of_head(kids[1])
     isnothing(naming) && return
-    record_written!(fs, naming.callee, naming.qualifier, kids, false, node, scope)
+    record_written!(fs, naming.callee, naming.qualifier, node, scope)
 end
 
 function record_call!(fs, node, scope)
