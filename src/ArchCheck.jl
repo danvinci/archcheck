@@ -61,7 +61,7 @@ export ReachesInternal, PrivateImports, DeclaredNames, DeclaredModules, Declared
 export ForeignFields, BoxedCaptures, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders
-export Independent, ReaderSet, ScanSeeds, OverlappingCalls, OptAnalysis
+export Independent, ReaderSet, ScanSeeds, OverlappingCalls, OptAnalysis, OptEntry
 export UnreachedMethods, Rebuilds, TwoNames, Waits, UnreadWaits
 export Derived, Probes
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
