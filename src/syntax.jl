@@ -1240,3 +1240,27 @@ function walk_with_enclosing(visit, n, current = Symbol(""))
         walk_with_enclosing(visit, c, current)
     end
 end
+
+# Preorder over one subtree, leaving quote blocks out.
+struct NodeWalk
+    root::JS.SyntaxNode   # subtree the walk starts at
+end
+
+walk_nodes(root) = NodeWalk(root)
+
+Base.eltype(::Type{NodeWalk}) = JS.SyntaxNode
+Base.IteratorSize(::Type{NodeWalk}) = Base.SizeUnknown()
+
+Base.iterate(walk::NodeWalk) = iterate(walk, JS.SyntaxNode[walk.root])
+
+# Children go on the stack last first, so the first child comes off next.
+function Base.iterate(::NodeWalk, pending)
+    while !isempty(pending)
+        node = pop!(pending)
+        JS.kind(node) == K"quote" && continue
+        kids = child_nodes(node)
+        isnothing(kids) || append!(pending, Iterators.reverse(kids))
+        return (node, pending)
+    end
+    nothing
+end

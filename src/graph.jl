@@ -18,6 +18,15 @@ end
 # A module's dotted key from the package root, split: `Geometry.Meshes` -> [:Geometry, :Meshes].
 key_segments(key::Symbol) = Symbol.(split(string(key), '.'))
 
+# The loaded module a dotted key names below the package.
+function loaded_module(pkg::Module, key::Symbol)
+    found = pkg
+    for segment in key_segments(key)
+        found = getfield(found, segment)
+    end
+    found
+end
+
 # Whether `path` lies inside directory `dir`.
 function is_within(path, dir)
     relative = relpath(path, dir)
