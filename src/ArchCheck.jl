@@ -20,6 +20,7 @@ include("checks_project.jl")
 include("checks_calls.jl")
 include("checks_overloads.jl")
 include("checks_clones.jl")
+include("checks_reach.jl")
 include("checks_opt.jl")
 include("catalog.jl")
 include("gate.jl")
@@ -36,6 +37,7 @@ export Check, Context, CHECKS, run_checks, ReaderSet, ScanSeeds
 export CallerWhitelist, SentinelReturns, StringPayloads
 export StorageOverloads, ExpressionClones, ToleranceSearch
 export OverlappingCalls, KeptBuilders
+export UnreachedMethods
 export Independent
 export check_corpus, check_backedges, is_backedge, is_downrank, find_cycles, check_cycles
 export check_contracts_logic

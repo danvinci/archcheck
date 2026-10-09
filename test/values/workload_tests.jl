@@ -136,6 +136,5 @@ end
     quiet = IOBuffer()
     ArchCheck.gate(Nested; report_path = report, io = quiet, checks, probes, workload = () -> squared(3))
     restored = which(squared, (Int,))
-    # Restoring defines a new Method that nothing compiled; the unreached-methods lane settles method identity.
-    @test_broken restored in FWorkload.REACHED[]
+    @test restored in FWorkload.REACHED[]
 end
