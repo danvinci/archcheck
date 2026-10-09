@@ -29,7 +29,11 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     rank, dir2mod = package_layout(spine, root)
     index = build_source_index(src, rank, dir2mod; entry_dirs, root)
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
-    mods = Module[loaded_module(pkg, m) for m in ordered]
+    mods = Module[]
+    for key in ordered
+        loaded = loaded_module(pkg, key)
+        isnothing(loaded) || push!(mods, loaded)
+    end
     project = package_modules(pkg, mods)
     methods = isempty(entries) ? nothing : method_graph(entries, project, value_names(index))
     Context(index, pkg, mods; entry_dirs, methods, derived)

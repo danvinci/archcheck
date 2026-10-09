@@ -16,10 +16,12 @@ function key_segments(key::Symbol)
     Symbol.(parts)
 end
 
-# The loaded module a dotted key names below the package.
-function loaded_module(pkg::Module, key::Symbol)
+# The loaded module a dotted key names below the package; nothing when the package did not load it, as for a file
+# included under a version check that fails on this Julia.
+function loaded_module(pkg::Module, key::Symbol)::Union{Nothing,Module}
     found = pkg
     for segment in key_segments(key)
+        isdefined(found, segment) || return nothing
         found = getfield(found, segment)
     end
     found
