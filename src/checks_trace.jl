@@ -39,12 +39,6 @@ function trace_records(ctx)
     observed.records
 end
 
-function trace_waits(ctx)
-    observed = ctx.observed
-    isnothing(observed) && return WaitRecord[]
-    observed.waits
-end
-
 # A probed method is one `arm!` found in the index, so its file is indexed.
 function module_at(index, path::String)
     file = indexed_file(index, path)
@@ -86,13 +80,9 @@ function enclosed_by(records, slot, others)
     false
 end
 
-function ordered_records(records)
-    sort(records; by = record -> record.start_s)
-end
-
 function plain_ordered(records)
     kept = ProbeRecord[]
-    ordered = ordered_records(records)
+    ordered = sort(records; by = record -> record.start_s)
     for record in ordered
         is_plain_call(record) || continue
         push!(kept, record)
@@ -122,15 +112,13 @@ function repeat_key(record)
 end
 
 function group_repeats(records, slots)
-    grouped = Dict{RepeatKey,Vector{ProbeRecord}}()
+    kept = ProbeRecord[]
     for slot in slots
         enclosed_by(records, slot, slots) && continue
         record = records[slot]
-        key = repeat_key(record)
-        bucket = get!(Vector{ProbeRecord}, grouped, key)
-        push!(bucket, record)
+        push!(kept, record)
     end
-    grouped
+    group_by(kept, RepeatKey, repeat_key)
 end
 
 function total_seconds(records)
@@ -202,15 +190,17 @@ function outermost_records(records)
     kept
 end
 
+function result_key(record)
+    record.result
+end
+
 function result_groups(records)
-    grouped = Dict{UInt,Vector{ProbeRecord}}()
+    kept = ProbeRecord[]
     for record in records
         record.result_id == UInt(0) && continue
-        key = record.result
-        bucket = get!(Vector{ProbeRecord}, grouped, key)
-        push!(bucket, record)
+        push!(kept, record)
     end
-    grouped
+    group_by(kept, UInt, result_key)
 end
 
 function two_name_finding(index, record, functions, values)
@@ -370,6 +360,10 @@ end
 
 function run(::Waits, ctx)
     records = trace_records(ctx)
-    waits = trace_waits(ctx)
+    observed = ctx.observed
+    waits = WaitRecord[]
+    if !isnothing(observed)
+        waits = observed.waits
+    end
     wait_findings(ctx.index, records, waits)
 end

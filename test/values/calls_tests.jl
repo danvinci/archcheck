@@ -110,8 +110,58 @@ module CallProbe
     ask_far(xs::Vector{Int}) = upper(xs) + upper(xs)
     ask_sum(xs::Vector{Int}) = sum(xs) + sum(xs)
     ask_map(xs::Vector{Int}) = map!(identity, xs, xs) + map!(identity, xs, xs)
+    function while_child(kids::Vector{Int}, index::Int, outer::Int)
+        total = 0
+        for k in 1:index
+            total += outer
+        end
+        total
+    end
+    for_child(kids::Vector{Int}, index::Int, outer::Int) = while_child(kids, index, outer)
+    function child_locals(kind::Int, kids::Vector{Int}, index::Int, outer::Int)
+        if kind == 1
+            return for_child(kids, index, outer)
+        end
+        if kind == 2
+            return while_child(kids, index, outer)
+        end
+        outer
+    end
+    function arm_pair(kind::Int, kids::Vector{Int}, index::Int, outer::Int)
+        if kind == 1
+            for_child(kids, index, outer)
+        elseif kind == 2
+            while_child(kids, index, outer)
+        else
+            outer
+        end
+    end
+    function returned_twice(kind::Int, kids::Vector{Int}, index::Int, outer::Int)
+        if kind == 1
+            return while_child(kids, index, outer)
+        end
+        if kind == 2
+            return while_child(kids, index, outer)
+        end
+        outer
+    end
+    function same_arm(kind::Int, kids::Vector{Int}, index::Int, outer::Int)
+        if kind == 1
+            return for_child(kids, index, outer) + while_child(kids, index, outer)
+        end
+        outer
+    end
+    function falls_through(kind::Int, kids::Vector{Int}, index::Int, outer::Int)
+        if kind == 1
+            for_child(kids, index, outer)
+        end
+        while_child(kids, index, outer)
+    end
 end
 """
+
+const BRANCH_ARGUMENTS = Tuple{Int,Vector{Int},Int,Int}
+const BRANCH_NAMES = (:child_locals, :arm_pair, :returned_twice, :same_arm, :falls_through)
 
 const CALL_DIR = mktempdir()
 const CALL_SPINE = write_tree(CALL_DIR, (("CallProbe.jl", CALL_SOURCE),))
@@ -137,6 +187,10 @@ function call_entries()
     entries = Tuple[]
     for (name, argument) in rows
         push!(entries, typed_entry(CallProbe, name, argument))
+    end
+    for name in BRANCH_NAMES
+        func = getfield(CallProbe, name)
+        push!(entries, (func, BRANCH_ARGUMENTS))
     end
     entries
 end
@@ -475,6 +529,17 @@ end
         @test summed in got
         @test near in got
         @test !("ask_far" in symbols)
+    end
+
+    @testset "calls in exclusive branches stay quiet, and calls on one path overlap" begin
+        got = overlap_records(call_findings())
+        symbols = record_symbols(got)
+        for symbol in ("child_locals", "arm_pair", "returned_twice")
+            @test !(symbol in symbols)
+        end
+        helpers = "for_child(kids, index, outer) while_child(kids, index, outer)"
+        @test ("same_arm", helpers, "for_child while_child") in got
+        @test ("falls_through", helpers, "for_child while_child") in got
     end
 
     @testset "overlapping calls need entries" begin
