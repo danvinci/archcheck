@@ -2,9 +2,11 @@
 using Test, JSON, Random
 using ArchCheck
 
-# The nested fixture loads as a package, so its modules carry the dotted names its source spine declares.
+# The fixtures load as packages, so `gate` finds their `src/` and their modules carry the dotted names their spines
+# declare: Nested is a module tree, Probed the methods the probe tests arm.
 pushfirst!(LOAD_PATH, joinpath(@__DIR__, "fixtures"))
 using Nested
+using Probed
 popfirst!(LOAD_PATH)
 
 # A synthetic tree has no parsed def index, so these tests declare its absence rather than omit it.
@@ -41,6 +43,33 @@ function load_package(name::AbstractString, spine::AbstractString, files = Pair{
 end
 
 case_context(case; options...) = Context(case.pkg; src = case.src, options...)
+
+# `gate` with a throwaway report and no output, returning its findings.
+function gate_findings(pkg; options...)
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    ArchCheck.gate(pkg; report_path = report, io = devnull, options...)
+end
+
+# A workload check that keeps what the run observed, read the way a check author reads it.
+module Observed
+    using ArchCheck
+    struct Keep <: Check end
+    const LAST = Ref{Union{Nothing,Observation}}(nothing)
+    function ArchCheck.run(::Keep, ctx)
+        LAST[] = ctx.observed
+        Finding[]
+    end
+    ArchCheck.kinds(::Keep) = (:kept_observation => :advisory,)
+    ArchCheck.phase(::Keep) = :workload
+end
+
+# `gate` over a workload, returning its findings and what the workload observed.
+function observed_gate(pkg; checks = (), options...)
+    kept = (checks..., Observed.Keep())
+    findings = gate_findings(pkg; checks = kept, options...)
+    observed = Observed.LAST[]
+    (; findings, observed)
+end
 
 # Findings as sorted rows of kind, symbol, and the named evidence values.
 function evidence_rows(found, keys::Symbol...)
