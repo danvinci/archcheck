@@ -11,8 +11,8 @@ Base.@kwdef struct Probes{F<:Tuple,A<:Tuple}
     slow_s::Float64 = 0.005   # a call shorter than this leaves no record (s)
 end
 
-"""One probed call that ran at least the probes' slow threshold. Hashes are of content, so equal values hash equal
-whatever object holds them; identities are `objectid`s, so they match the same object only."""
+"""One probed call that ran at least the probes' slow threshold. `arguments` is `hash` of the declared key when the
+producer declares one, and the content hash of the arguments otherwise. Identities are `objectid`s."""
 struct ProbeRecord
     name::Symbol                 # the probed function
     site::Tuple{String,Int}      # its method's file, repo-relative, and line
@@ -21,7 +21,7 @@ struct ProbeRecord
     task::UInt                   # objectid of the task that ran the call
     start_s::Float64             # time() at entry (s)
     stop_s::Float64              # time() at exit (s)
-    arguments::UInt              # content hash of the argument tuple, keywords included
+    arguments::UInt              # hash of the declared key, or the content hash of the arguments
     result::UInt                 # content hash of the returned value
     result_id::UInt              # objectid of a non-bits result; 0 for a bits value
     reads::Vector{UInt}          # objectids of the non-bits objects the arguments reach within three container levels
@@ -75,8 +75,9 @@ struct OpenFrame
     started::Float64             # entry time (s)
     caller::Symbol               # nearest recorded caller at entry
     enclosing::Vector{Symbol}    # calls already open, outermost first
-    is_probed::Bool              # true when this call was asked for
-    is_ambient::Bool             # this call is a non-probed function, or one encloses it
+    is_probed::Bool                    # true when this call was asked for
+    is_ambient::Bool                   # this call is a non-probed function, or one encloses it
+    key_hash::Union{Nothing,UInt}      # hash of the declared key; nothing when the producer declares none
 end
 
 mutable struct ProbeSession
@@ -288,7 +289,8 @@ function caller_of(frames)
     PARENT_CALL[]
 end
 
-function probe_enter(name::Symbol, file::String, line::Int, arguments::Tuple, is_probed::Bool)
+function probe_enter(name::Symbol, file::String, line::Int, arguments::Tuple,
+        key_hash::Union{Nothing,UInt}, is_probed::Bool)
     session = ACTIVE[]
     isnothing(session) && return false
     frames = current_frames()
@@ -297,7 +299,7 @@ function probe_enter(name::Symbol, file::String, line::Int, arguments::Tuple, is
     caller = caller_of(frames)
     covered = ambient_call(frames, is_probed)
     started = time()
-    entered = OpenFrame(name, file, line, started, caller, names, is_probed, covered)
+    entered = OpenFrame(name, file, line, started, caller, names, is_probed, covered, key_hash)
     push!(frames, entered)
     push!(held, arguments)
     true
@@ -305,6 +307,10 @@ end
 
 function make_record(frame::OpenFrame, arguments, result, stopped::Float64)
     argument_hash = content_hash(arguments)
+    keyed = frame.key_hash
+    if !isnothing(keyed)
+        argument_hash = keyed
+    end
     result_hash = content_hash(result)
     identity = result_identity(result)
     reached = read_ids(arguments)
@@ -523,43 +529,112 @@ function push_plain!(names, bare::Symbol)
     nothing
 end
 
-collect_argument_names!(names, argument::Symbol) = push_plain!(names, argument)
-collect_argument_names!(names, ::Any) = nothing
+struct ArgumentShape
+    positional::Vector{Symbol}   # positional parameter names, in order
+    splats::Vector{Bool}         # the positional parameter at that index is a varargs
+    keywords::Vector{Symbol}     # keyword parameter names, in order
+end
 
-function collect_argument_names!(names, argument::Expr)
-    if argument.head === :parameters || argument.head === :tuple
-        for child in argument.args
-            collect_argument_names!(names, child)
-        end
-        return nothing
+parameter_name(name::Symbol) = name
+parameter_name(::Any) = nothing
+
+function parameter_name(argument::Expr)
+    if argument.head === :macrocall
+        isempty(argument.args) && return nothing
+        return parameter_name(last(argument.args))
     end
     if argument.head === :(::)
         length(argument.args) == 2 || return nothing
-        return collect_argument_names!(names, argument.args[1])
+        return parameter_name(argument.args[1])
     end
     head = argument.head
     if head === :kw || head === :... || head === :(=) || head === :<:
-        return collect_argument_names!(names, argument.args[1])
-    end
-    if head === :macrocall
-        return collect_argument_names!(names, last(argument.args))
+        isempty(argument.args) && return nothing
+        return parameter_name(argument.args[1])
     end
     nothing
 end
 
-function argument_names(signature::Expr)
+add_keyword!(names, name::Symbol) = push_plain!(names, name)
+add_keyword!(names, ::Any) = nothing
+
+function add_keyword!(names, argument::Expr)
+    if argument.head === :parameters || argument.head === :tuple
+        for child in argument.args
+            add_keyword!(names, child)
+        end
+        return nothing
+    end
+    found = parameter_name(argument)
+    isnothing(found) && return nothing
+    push_plain!(names, found)
+    nothing
+end
+
+function remember!(names, splats, found::Symbol, is_splat::Bool)
+    before = length(names)
+    push_plain!(names, found)
+    length(names) == before && return nothing
+    push!(splats, is_splat)
+    nothing
+end
+
+remember!(names, splats, ::Any, ::Bool) = nothing
+
+add_positional!(names, splats, name::Symbol) = remember!(names, splats, name, false)
+add_positional!(names, splats, ::Any) = nothing
+
+function add_positional!(names, splats, argument::Expr)
+    if argument.head === :...
+        isempty(argument.args) && return nothing
+        found = parameter_name(argument.args[1])
+        return remember!(names, splats, found, true)
+    end
+    found = parameter_name(argument)
+    remember!(names, splats, found, false)
+end
+
+function argument_shape(signature::Expr)
+    positional = Symbol[]
+    splats = Bool[]
+    keywords = Symbol[]
     call = unwrap_signature(signature)
-    call isa Expr || return Symbol[]
-    call.head === :call || return Symbol[]
-    names = Symbol[]
+    call isa Expr || return ArgumentShape(positional, splats, keywords)
+    call.head === :call || return ArgumentShape(positional, splats, keywords)
     head = call.args[1]
     if head isa Expr && head.head === :(::)
-        collect_argument_names!(names, head)
+        add_positional!(positional, splats, head)
     end
     for argument in call.args[2:end]
-        collect_argument_names!(names, argument)
+        if argument isa Expr && argument.head === :parameters
+            add_keyword!(keywords, argument)
+        else
+            add_positional!(positional, splats, argument)
+        end
     end
-    names
+    ArgumentShape(positional, splats, keywords)
+end
+
+function positionals_expr(names::Vector{Symbol}, splats::Vector{Bool})
+    args = Any[]
+    for index in eachindex(names)
+        name = names[index]
+        if splats[index]
+            push!(args, Expr(:..., name))
+        else
+            push!(args, name)
+        end
+    end
+    Expr(:tuple, args...)
+end
+
+function keywords_expr(names::Vector{Symbol})
+    pairs = Any[]
+    for name in names
+        push!(pairs, Expr(:kw, name, name))
+    end
+    parameters = Expr(:parameters, pairs...)
+    Expr(:tuple, parameters)
 end
 
 function is_wait_name(name)
@@ -660,13 +735,40 @@ function rewrite_waits(node::Expr)
     Expr(node.head, args...)
 end
 
-function probe_body(name::Symbol, file::String, line::Int, arg_names::Vector{Symbol}, is_probed::Bool, body)
+function arguments_expr(shape::ArgumentShape)
+    arguments = Expr(:tuple)
+    for name in shape.positional
+        push!(arguments.args, name)
+    end
+    for name in shape.keywords
+        push!(arguments.args, name)
+    end
+    arguments
+end
+
+function key_hash_expr(key, positional, keywords, producer::Symbol)
+    isnothing(key) && return nothing
+    key_name = string(nameof(key))
+    producer_name = string(producer)
+    quote
+        try
+            value = $key($positional...; $keywords...)
+            hash(value)
+        catch cause
+            shown = sprint(showerror, cause)
+            message = "key " * $key_name * " of producer " * $producer_name * " failed: " * shown
+            throw(ArgumentError(message))
+        end
+    end
+end
+
+function probe_body(name::Symbol, file::String, line::Int, shape::ArgumentShape, key, is_probed::Bool, body)
     session_active = gensym(:session_active)
     result = gensym(:probe_result)
-    arguments = Expr(:tuple)
-    for arg_name in arg_names
-        push!(arguments.args, arg_name)
-    end
+    arguments = arguments_expr(shape)
+    positional = positionals_expr(shape.positional, shape.splats)
+    keywords = keywords_expr(shape.keywords)
+    hashed = key_hash_expr(key, positional, keywords, name)
     rewritten = rewrite_waits(body)
     enter = GlobalRef(@__MODULE__, :probe_enter)
     leave = GlobalRef(@__MODULE__, :probe_leave)
@@ -675,28 +777,24 @@ function probe_body(name::Symbol, file::String, line::Int, arg_names::Vector{Sym
     scope = GlobalRef(Base.ScopedValues, :with)
     parent = GlobalRef(@__MODULE__, :PARENT_CALL)
     parent_pair = gensym(:parent_pair)
+    entered = :($enter($quoted_name, $file, $line, $arguments, $hashed, $is_probed))
     if is_probed
-        return quote
-            $session_active = $enter($quoted_name, $file, $line, $arguments, $is_probed)
-            local $result
-            try
-                $parent_pair = $parent => $quoted_name
-                $result = $scope($parent_pair) do
-                    (() -> $rewritten)()
-                end
-            catch
-                $abort($session_active)
-                rethrow()
+        run = quote
+            $parent_pair = $parent => $quoted_name
+            $scope($parent_pair) do
+                (() -> $rewritten)()
             end
-            $leave($session_active, $result)
-            $result
+        end
+    else
+        run = quote
+            (() -> $rewritten)()
         end
     end
     quote
-        $session_active = $enter($quoted_name, $file, $line, $arguments, $is_probed)
+        $session_active = $entered
         local $result
         try
-            $result = (() -> $rewritten)()
+            $result = $run
         catch
             $abort($session_active)
             rethrow()
@@ -714,13 +812,13 @@ function is_short_method(definition::Expr)
     signature.head === :call || signature.head === :where || signature.head === :(::)
 end
 
-function rewrite_macro(definition::Expr, name::Symbol, file::String, line::Int, is_probed::Bool)
+function rewrite_macro(definition::Expr, name::Symbol, file::String, line::Int, is_probed::Bool, key)
     macro_name = macro_symbol(definition.args[1])
     macro_name in SKIPPED_MACROS && return nothing
     inner_index = findlast(arg -> arg isa Expr, definition.args)
     isnothing(inner_index) && return nothing
     inner = definition.args[inner_index]
-    rewritten = rewrite_definition(inner, name, file, line, is_probed)
+    rewritten = rewrite_definition(inner, name, file, line, is_probed, key)
     isnothing(rewritten) && return nothing
     macro_name === Symbol("@doc") && return rewritten
     args = Vector{Any}(undef, length(definition.args))
@@ -731,17 +829,17 @@ function rewrite_macro(definition::Expr, name::Symbol, file::String, line::Int, 
     Expr(:macrocall, args...)
 end
 
-function rewrite_definition(definition::Expr, name::Symbol, file::String, line::Int, is_probed::Bool)
+function rewrite_definition(definition::Expr, name::Symbol, file::String, line::Int, is_probed::Bool, key)
     if definition.head === :macrocall
-        return rewrite_macro(definition, name, file, line, is_probed)
+        return rewrite_macro(definition, name, file, line, is_probed, key)
     end
     long_form = definition.head === :function && length(definition.args) == 2
     short_form = is_short_method(definition)
     long_form || short_form || return nothing
     signature = definition.args[1]
-    names = argument_names(signature)
+    shape = argument_shape(signature)
     body = deepcopy(definition.args[2])
-    probed = probe_body(name, file, line, names, is_probed, body)
+    probed = probe_body(name, file, line, shape, key, is_probed, body)
     copied = deepcopy(signature)
     Expr(:function, copied, probed)
 end
@@ -836,7 +934,16 @@ function lookup_method(source)
     nothing
 end
 
-function install_method!(method, located, is_probed::Bool, originals, skipped)
+function key_for(derived, method)
+    for declared in derived
+        isnothing(declared.key) && continue
+        table = methods(declared.producer)
+        method in table && return declared.key
+    end
+    nothing
+end
+
+function install_method!(method, located, is_probed::Bool, originals, skipped, key)
     if isdefined(method, :generator)
         note_skip!(skipped, method, "generated")
         return nothing
@@ -849,7 +956,7 @@ function install_method!(method, located, is_probed::Bool, originals, skipped)
     saved = Expr(statement)
     retag_lines!(saved, method.file)
     line = Int(method.line)
-    probed = rewrite_definition(saved, method.name, located.file.path, line, is_probed)
+    probed = rewrite_definition(saved, method.name, located.file.path, line, is_probed, key)
     if isnothing(probed)
         note_skip!(skipped, method, "a form the rewrite does not take")
         return nothing
@@ -878,7 +985,8 @@ function install!(functions, is_probed::Bool, ctx, originals, skipped)
             home in modules || continue
             located = method_form(ctx.index, method)
             is_unprobed_constructor(target, located) && continue
-            install_method!(method, located, is_probed, originals, skipped)
+            key = key_for(ctx.derived, method)
+            install_method!(method, located, is_probed, originals, skipped, key)
         end
     end
     nothing
@@ -907,8 +1015,16 @@ function arm!(probes::Probes, ctx)
     skipped = ProbeSkip[]
     ACTIVE[] = session
     try
-        install!(probes.functions, true, ctx, originals, skipped)
-        install!(probes.ambient, false, ctx, originals, skipped)
+        producers = Any[]
+        for declared in ctx.derived
+            isnothing(declared.key) && continue
+            push!(producers, declared.producer)
+        end
+        install!(producers, true, ctx, originals, skipped)
+        listed = filter(func -> !(func in producers), probes.functions)
+        ambient = filter(func -> !(func in producers), probes.ambient)
+        install!(listed, true, ctx, originals, skipped)
+        install!(ambient, false, ctx, originals, skipped)
         isempty(skipped) || throw(skip_error(skipped))
     catch
         restore_originals(originals)
