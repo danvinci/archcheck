@@ -86,38 +86,30 @@ function walk_iteration!(scan, node, scope, on_qualified = nothing)
     end
 end
 
-# Bindings stay silent. Index targets, type annotations and property bases are references.
-function walk_assign_lhs!(scan, node, scope, on_qualified = nothing)
-    kind = JS.kind(node)
+# The parts of an assignment's left side that read names: a type annotation, an index target, a property
+# base. A bare binding reads nothing.
+function collect_lhs!(found, node)
     children = child_nodes(node)
-    isnothing(children) && return
+    isnothing(children) && return found
+    kind = JS.kind(node)
     if kind == K"::"
-        if length(children) >= 2
-            walk_scoped!(scan, last(children), scope, on_qualified)
-        end
-        if length(children) == 1
-            walk_scoped!(scan, children[1], scope, on_qualified)
-        end
-        return
-    end
-    if kind == K"."
-        walk_scoped!(scan, node, scope, on_qualified)
-        return
-    end
-    if kind == K"=" || kind == K"..."
-        if !isempty(children)
-            walk_assign_lhs!(scan, children[1], scope, on_qualified)
-        end
-        return
-    end
-    if kind == K"ref" || kind == K"call" || kind == K"dotcall"
-        walk_scoped!(scan, node, scope, on_qualified)
-        return
-    end
-    if kind == K"tuple" || kind == K"parameters"
+        isempty(children) || push!(found, last(children))
+    elseif kind == K"." || kind == K"ref" || kind == K"call" || kind == K"dotcall"
+        push!(found, node)
+    elseif kind == K"=" || kind == K"..."
+        isempty(children) || collect_lhs!(found, children[1])
+    elseif kind == K"tuple" || kind == K"parameters"
         for child in children
-            walk_assign_lhs!(scan, child, scope, on_qualified)
+            collect_lhs!(found, child)
         end
+    end
+    found
+end
+
+function walk_assign_lhs!(scan, node, scope, on_qualified = nothing)
+    targets = collect_lhs!(JS.SyntaxNode[], node)
+    for target in targets
+        walk_scoped!(scan, target, scope, on_qualified)
     end
 end
 

@@ -117,12 +117,20 @@ function value_child(node)
     node
 end
 
-function walk_value_children!(walk, node)
+# The value each child carries: a keyword's right-hand side, otherwise the child.
+function value_children(node)
+    values = JS.SyntaxNode[]
     children = child_nodes(node)
-    isnothing(children) && return
+    isnothing(children) && return values
     for child in children
-        walked = value_child(child)
-        walk(walked)
+        push!(values, value_child(child))
+    end
+    values
+end
+
+function walk_value_children!(walk, node)
+    for child in value_children(node)
+        walk(child)
     end
 end
 
