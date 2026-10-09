@@ -27,6 +27,7 @@ SibA.spread(x::String; pad = 0) = x
     Base.length(::SibA.Leaf) = 1
     Base.one(::Type{SibA.Leaf}) = SibA.Leaf()
     SibA.spread(x::Union{Twig,Char}) = x
+    Base.:+(left::Base.RefValue{Symbol}, right::Base.RefValue{Symbol}) = left
     end
     """,
 ])
@@ -35,9 +36,9 @@ function method_signature(parts...)
     string(Tuple{parts...})
 end
 
-@testset "a method on a foreign function needs an argument type its module owns" begin
+@testset "a method on a foreign function needs an argument type its package owns, or when strict its module" begin
     ctx = case_context(METHOD_FAMILY)
-    found = ArchCheck.run(ModulePiracy(), ctx)
+    found = ArchCheck.run(ModulePiracy(strict = true), ctx)
     flagged = Set((finding.mod, ev(finding, :signature)) for finding in found)
     pkg = METHOD_FAMILY.pkg
     leaf = pkg.SibA.Leaf
@@ -70,7 +71,14 @@ end
     @test (sib_b, on_union) in flagged
     @test (root, on_string) in flagged
     @test (root, on_kw) in flagged
-    @test length(found) == 7
+    reference = Base.RefValue{Symbol}
+    on_base = method_signature(typeof(+), reference, reference)
+    @test (sib_b, on_base) in flagged
+    @test length(found) == 8
+
+    package_found = ArchCheck.run(ModulePiracy(), ctx)
+    package_flagged = Set((finding.mod, ev(finding, :signature)) for finding in package_found)
+    @test package_flagged == Set([(sib_b, on_base)])
 
     by_signature = Dict(ev(finding, :signature) => finding for finding in found)
     leaf_finding = by_signature[on_leaf]

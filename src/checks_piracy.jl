@@ -1,5 +1,5 @@
-# A method whose function and every argument type sit outside the defining module's subtree.
-# The subtree is every module whose full name starts with the defining module's own.
+# A method whose function and every argument type sit outside its owner: the package, or the defining module.
+# An owner's subtree is every module whose full name starts with the owner's own.
 
 # Every method a checked module defines, on any function, in source order.
 function project_methods(mods)
@@ -60,27 +60,29 @@ function all_members_foreign(members, owns)
     true
 end
 
-function owns_subtree(mod, home_name, depth)
+# Whether a module's full name is `scope` or starts with it; `exact` takes `scope` alone.
+function is_in_scope(mod, scope, exact::Bool)
     full = fullname(mod)
-    taken = min(length(full), depth)
+    exact && return full == scope
+    taken = min(length(full), length(scope))
     prefix = full[1:taken]
-    prefix == home_name
+    prefix == scope
 end
 
-# module-piracy: the function is foreign to the defining module, and every argument type is foreign
-# to its subtree. A keyword method is judged by the function it wraps.
-function check_module_piracy(mods; repo)
+# module-piracy: the function is foreign to the owner, and every argument type to the owner's subtree. The owner
+# is the package, or with `strict` the defining module. A keyword method is judged by the function it wraps.
+function check_module_piracy(mods, root::Module; repo, strict::Bool)
     findings = Finding[]
+    package_scope = fullname(root)
     for method in project_methods(mods)
         home = method.module
-        home_name = fullname(home)
-        depth = length(home_name)
+        scope = strict ? fullname(home) : package_scope
         function_type, arguments = split_signature(method.sig)
         # A Union in the function slot is foreign when every member is foreign.
         members = Base.uniontypes(function_type)
-        owns_home = ==(home)
-        all_members_foreign(members, owns_home) || continue
-        owns_argument = mod -> owns_subtree(mod, home_name, depth)
+        owns_function = mod -> is_in_scope(mod, scope, strict)
+        all_members_foreign(members, owns_function) || continue
+        owns_argument = mod -> is_in_scope(mod, scope, false)
         arguments_foreign = true
         for argument in arguments
             is_foreign(argument, owns_argument) && continue
@@ -100,7 +102,7 @@ function check_module_piracy(mods; repo)
         evidence = [:owner => owner_path, :signature => signature]
         key = module_key(home)
         name = string(method.name)
-        detail = "extends a function another module owns on no type its own subtree owns"
+        detail = "extends a function from outside its owner on no type its owner holds"
         finding = Finding(key, :module_piracy, file, name, line, detail, evidence)
         push!(findings, finding)
     end

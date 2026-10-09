@@ -75,16 +75,25 @@ end
 
 """Runs in `CHECKS`. A file that fails to parse, an include of a missing file or a non-string, or a file or module the spine leaves unranked."""
 struct Corpus <: Check end
-"""Runs in `CHECKS`. A module references another that finishes loading at the same rank or later."""
-struct ModuleBackEdges <: Check end
-"""Runs in `CHECKS`. Modules reference one another in a cycle."""
-struct ModuleCycles <: Check end
+"""Runs in `CHECKS`. A module references another that finishes loading at the same rank or later. A reference to an enclosing module counts only with `strict`, which holds every module to the layering."""
+struct ModuleBackEdges <: Check
+    strict::Bool   # a reference to an enclosing module counts
+end
+ModuleBackEdges(; strict::Bool = false) = ModuleBackEdges(strict)
+"""Runs in `CHECKS`. Modules reference one another in a cycle. A reference to an enclosing module counts only with `strict`."""
+struct ModuleCycles <: Check
+    strict::Bool   # a reference to an enclosing module counts
+end
+ModuleCycles(; strict::Bool = false) = ModuleCycles(strict)
 """Runs in `CHECKS`. A function in the contracts module does more than name a type and its interface."""
 struct ContractsPurity <: Check end
 """Runs in `CHECKS`. Two modules export one name bound to different objects."""
 struct OwnerUniqueness <: Check end
-"""Runs in `CHECKS`. A method extends a function owned outside the defining module, on argument types owned outside that module's subtree."""
-struct ModulePiracy <: Check end
+"""Runs in `CHECKS`. A method extends a function owned outside the package on argument types owned outside it. With `strict`, the defining module stands for the package: its own functions, its own subtree's types."""
+struct ModulePiracy <: Check
+    strict::Bool   # ownership is the defining module's rather than the package's
+end
+ModulePiracy(; strict::Bool = false) = ModulePiracy(strict)
 """Runs in `CHECKS`. A file calls into a file the wrapper includes later."""
 struct FileBackEdges <: Check end
 """Runs in `CHECKS`. Every callee of a definition lives in one lower-ranked file, and at most half the module's files reach that file."""
@@ -152,10 +161,10 @@ end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,
                    :unranked_file => :error, :unranked_module => :error)
 
-run(::ModuleBackEdges, ctx) = check_backedges(ctx.graph)
+run(check::ModuleBackEdges, ctx) = check_backedges(ctx.graph, nameof(ctx.root); strict = check.strict)
 kinds(::ModuleBackEdges) = (:back_edge => :error,)
 
-run(::ModuleCycles, ctx) = check_cycles(ctx.graph)
+run(check::ModuleCycles, ctx) = check_cycles(ctx.graph, nameof(ctx.root); strict = check.strict)
 kinds(::ModuleCycles) = (:cycle => :error,)
 
 run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
@@ -164,7 +173,7 @@ kinds(::ContractsPurity) = (:contracts_logic => :error,)
 run(::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
 
-run(::ModulePiracy, ctx) = check_module_piracy(package_modules(ctx); repo = ctx.index.repo)
+run(check::ModulePiracy, ctx) = check_module_piracy(package_modules(ctx), ctx.root; repo = ctx.index.repo, strict = check.strict)
 kinds(::ModulePiracy) = (:module_piracy => :error,)
 
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)

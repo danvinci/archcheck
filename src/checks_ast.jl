@@ -133,10 +133,23 @@ function is_downrank(rank, from, to)
     completes_before(target, source)
 end
 
+# A module reaching one that encloses it: the root encloses every module, and a dotted key encloses those below it.
+function reaches_enclosing(ref::ModRef, root::Symbol)
+    ref.to === root && return true
+    is_within_module(ref.from, ref.to)
+end
+
+# The references the layering rules judge. A package may let its modules use what encloses them; `strict` holds
+# every module to the layering.
+function layered_refs(graph::ModuleGraph, root::Symbol, strict::Bool)
+    strict && return graph.refs
+    filter(ref -> !reaches_enclosing(ref, root), graph.refs)
+end
+
 # Any cross-module reference whose target does not finish loading strictly before its source.
-function check_backedges(graph::ModuleGraph)
+function check_backedges(graph::ModuleGraph, root::Symbol; strict::Bool)
     findings = Finding[]
-    for ref in graph.refs
+    for ref in layered_refs(graph, root, strict)
         is_backedge(graph.rank, ref.from, ref.to) || continue
         from_rank = graph.rank[ref.from]
         to_rank = graph.rank[ref.to]
@@ -195,9 +208,9 @@ function find_cycles(nodes, adjacent::AbstractDict)
 end
 
 # A cycle at module zoom. A down-only graph is already acyclic.
-function check_cycles(graph::ModuleGraph)
+function check_cycles(graph::ModuleGraph, root::Symbol; strict::Bool)
     adjacent = Dict{Symbol,Vector{Symbol}}()
-    for ref in graph.refs
+    for ref in layered_refs(graph, root, strict)
         targets = get!(adjacent, ref.from, Symbol[])
         push!(targets, ref.to)
     end
