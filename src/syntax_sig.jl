@@ -179,17 +179,22 @@ function bind_receiver!(names, head)
     _argname!(names, head)
 end
 
+# The names a signature's call binds: a callable's receiver and every argument.
+function call_argnames!(names, parts)
+    bind_receiver!(names, parts.head)
+    for argument in parts.arguments
+        _argname!(names, argument)
+    end
+    names
+end
+
 # The names a signature binds: `where` variables, a callable's receiver, and every argument.
 function sig_argnames(signature)
     names = Symbol[]
     where_vars!(names, signature)
     parts = call_parts(signature)
     isnothing(parts) && return names
-    bind_receiver!(names, parts.head)
-    for argument in parts.arguments
-        _argname!(names, argument)
-    end
-    names
+    call_argnames!(names, parts)
 end
 
 function is_method_form(node)

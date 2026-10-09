@@ -16,11 +16,11 @@ function module_key(mod::Module)
     Symbol(text)
 end
 
-# The module's wrapper path by layout convention, for a finding with no single source line:
+# A module key's wrapper path by layout convention, for a finding with no single source line:
 # `Geometry.Meshes` -> src/geometry/meshes/Meshes.jl.
-function module_file(mod::Module)
-    key = string(module_key(mod))
-    segments = split(key, '.')
+function module_file(key::Symbol)
+    text = string(key)
+    segments = split(text, '.')
     dirs = lowercase(join(segments, "/"))
     "src/" * dirs * "/" * last(segments) * ".jl"
 end
@@ -42,12 +42,12 @@ end
 function check_module_corpus(mods, rank)
     findings = Finding[]
     for mod in mods
+        owner = module_key(mod)
+        file = module_file(owner)
         for child in submodules(mod)
             haskey(rank, module_key(child)) && continue
             name = string(nameof(child))
             detail = "a submodule its wrapper does not declare as an include followed by a using"
-            file = module_file(mod)
-            owner = module_key(mod)
             push!(findings, Finding(owner, :unranked_module, file, name, 0, detail))
         end
     end
@@ -292,7 +292,7 @@ function check_sinkable(mods, rank, body_calls, sites; repo)
     findings = Finding[]
     empty_calls = Dict{Symbol,Set{Symbol}}()
     for mod in mods
-        key = module_key(mod)
+        key = project_keys[mod]
         haskey(rank, key) || continue
         own_rank = rank[key]
         calls_by_def = get(body_calls, key, empty_calls)

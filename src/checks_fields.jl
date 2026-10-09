@@ -14,21 +14,21 @@ function method_types(mod, node, outer::Scope)
     kids = child_nodes(node)
     (isnothing(kids) || isempty(kids)) && return types
     sig = first(kids)
-    argument_names = sig_argnames(sig)
+    typevars = Symbol[]
+    where_vars!(typevars, sig)
+    for name in typevars
+        delete!(types, name)
+    end
+    parts = call_parts(sig)
+    isnothing(parts) && return types
+    argument_names = call_argnames!(Symbol[], parts)
     for name in argument_names
         delete!(types, name)
     end
-    typevars = Symbol[]
-    where_vars!(typevars, sig)
-    call = signature_call(sig)
-    isnothing(call) && return types
-    parts = child_nodes(call)
-    (isnothing(parts) || isempty(parts)) && return types
-    head = first(parts)
-    if JS.kind(head) == K"::"
-        bind_annotated!(types, mod, head, typevars)
+    if JS.kind(parts.head) == K"::"
+        bind_annotated!(types, mod, parts.head, typevars)
     end
-    for arg in parts[2:end]
+    for arg in parts.arguments
         if JS.kind(arg) == K"parameters"
             parameters = child_nodes(arg)
             isnothing(parameters) && continue
