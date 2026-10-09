@@ -161,7 +161,7 @@ function static_checks()
 end
 
 function workload_checks()
-    (UnreachedMethods(public_is_entry = true),)
+    (UnreachedMethods(),)
 end
 
 function self_checks()
