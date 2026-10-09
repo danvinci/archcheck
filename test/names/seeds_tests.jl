@@ -36,6 +36,11 @@
             count = length(xs)
             (0:count) ./ count
         end
+        function quotes_equals(head)
+            head === :(=)
+            count = 8
+            (0:count) ./ count
+        end
         """)
         write(joinpath(other, "Other.jl"), "include(\"seeds.jl\")")
         write(joinpath(other, "seeds.jl"), """
@@ -47,7 +52,7 @@
                                    Dict("geo" => :Geo, "other" => :Other))
         found = check_scan_seeds(index; directories=(geometry,))
         expected = Set(["by_const", "literal", "by_range", "by_linrange", "span_grid",
-                        "local_grid", "step_grid", "adjacent_grid"])
+                        "local_grid", "step_grid", "adjacent_grid", "quotes_equals"])
         @test Set(finding.symbol for finding in found) == expected
         @test all(finding -> finding.kind === :scan_seed, found)
         @test length(unique(fingerprint.(found))) == length(found)
