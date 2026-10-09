@@ -39,7 +39,7 @@ end
 function sink_index(dir)
     rank = Dict(:M => 1)
     dirs = Dict("m" => :M)
-    build_source_index(dir, rank, dirs)
+    ArchCheck.build_source_index(dir, rank, dirs)
 end
 
 function sink_methods(loaded, specs)
@@ -99,15 +99,15 @@ const SINK_PLACED = [
     mktempdir() do dir
         write_sink_tree(dir, SINK_SPLIT)
         index = sink_index(dir)
-        graph = build_call_graph(index, :M)
-        named = check_file_sinkable(graph, NO_SITES)
+        graph = ArchCheck.build_call_graph(index, :M)
+        named = ArchCheck.check_file_sinkable(graph, NO_SITES)
         @test isempty(named)
         loaded = load_sink_module(dir, :SinkSplit)
         specs = [(:split, Tuple{Int}), (:split, Tuple{String})]
         methods = sink_methods(loaded, specs)
-        with_nothing = check_file_sinkable(graph, NO_SITES, nothing, index.repo)
+        with_nothing = ArchCheck.check_file_sinkable(graph, NO_SITES, nothing, index.repo)
         @test isempty(with_nothing)
-        found = check_file_sinkable(graph, NO_SITES, methods, index.repo)
+        found = ArchCheck.check_file_sinkable(graph, NO_SITES, methods, index.repo)
         @test length(found) == 2
         left = finding_by_callee(found, "low_a.jl")
         right = finding_by_callee(found, "low_b.jl")
@@ -125,13 +125,13 @@ end
     mktempdir() do dir
         write_sink_tree(dir, SINK_HUB)
         index = sink_index(dir)
-        graph = build_call_graph(index, :M)
-        named = check_file_sinkable(graph, NO_SITES)
+        graph = ArchCheck.build_call_graph(index, :M)
+        named = ArchCheck.check_file_sinkable(graph, NO_SITES)
         @test isempty(named)
         loaded = load_sink_module(dir, :SinkHub)
         specs = [(:from_a, Tuple{Int}), (:from_b, Tuple{Int})]
         methods = sink_methods(loaded, specs)
-        found = check_file_sinkable(graph, NO_SITES, methods, index.repo)
+        found = ArchCheck.check_file_sinkable(graph, NO_SITES, methods, index.repo)
         @test isempty(found)
     end
 end
@@ -140,15 +140,15 @@ end
     mktempdir() do dir
         write_sink_tree(dir, SINK_PASSED)
         index = sink_index(dir)
-        graph = build_call_graph(index, :M)
-        named = check_file_sinkable(graph, NO_SITES)
+        graph = ArchCheck.build_call_graph(index, :M)
+        named = ArchCheck.check_file_sinkable(graph, NO_SITES)
         by_name = only(named)
         @test by_name.symbol == "wrap"
         @test ev(by_name, :callees_in) == "low.jl"
         loaded = load_sink_module(dir, :SinkPassed)
         specs = [(:wrap, Tuple{Vector{Int}})]
         methods = sink_methods(loaded, specs)
-        found = check_file_sinkable(graph, NO_SITES, methods, index.repo)
+        found = ArchCheck.check_file_sinkable(graph, NO_SITES, methods, index.repo)
         hit = only(found)
         @test hit.symbol == "wrap"
         @test endswith(hit.file, "wrap.jl")
@@ -162,13 +162,13 @@ end
     mktempdir() do dir
         write_sink_tree(dir, SINK_PLACED)
         index = sink_index(dir)
-        graph = build_call_graph(index, :M)
-        named = check_file_sinkable(graph, NO_SITES)
+        graph = ArchCheck.build_call_graph(index, :M)
+        named = ArchCheck.check_file_sinkable(graph, NO_SITES)
         @test isempty(named)
         loaded = load_sink_module(dir, :SinkPlaced)
         specs = [(:place, Tuple{Int}), (:place, Tuple{String}), (:uses, Tuple{Int})]
         methods = sink_methods(loaded, specs)
-        found = check_file_sinkable(graph, NO_SITES, methods, index.repo)
+        found = ArchCheck.check_file_sinkable(graph, NO_SITES, methods, index.repo)
         away = only(found)
         @test away.symbol == "place"
         @test endswith(away.file, "away.jl")

@@ -19,19 +19,19 @@ end
     else
         @eval using JET
         repo = @__DIR__
-        dirty = check_opt_entries([OptEntry(FOpt.any_kernel, Tuple{Vector{Any}})];
+        dirty = ArchCheck.check_opt_entries([ArchCheck.OptEntry(FOpt.any_kernel, Tuple{Vector{Any}})];
                                   repo, target_modules = [FOpt])
         @test length(dirty) == 1 && only(dirty).kind === :runtime_dispatch
         @test occursin("any_kernel", only(dirty).symbol)
         @test parse(Int, ev(only(dirty), :dispatches)) >= 1
 
-        clean = check_opt_entries([OptEntry(FOpt.stable_trapz, Tuple{Vector{Float64},Vector{Float64}})];
+        clean = ArchCheck.check_opt_entries([ArchCheck.OptEntry(FOpt.stable_trapz, Tuple{Vector{Float64},Vector{Float64}})];
                                   repo, target_modules = [FOpt])
         @test isempty(clean)
 
         # a box inference finds is its own kind; the reflection check owns :boxed_capture
-        boxed_entry = OptEntry(FOpt.boxed_total, Tuple{Vector{Float64}})
-        boxed = check_opt_entries([boxed_entry]; repo, target_modules = [FOpt])
+        boxed_entry = ArchCheck.OptEntry(FOpt.boxed_total, Tuple{Vector{Float64}})
+        boxed = ArchCheck.check_opt_entries([boxed_entry]; repo, target_modules = [FOpt])
         boxed_kinds = Set(f.kind for f in boxed)
         @test :inferred_box in boxed_kinds && !(:boxed_capture in boxed_kinds)
     end

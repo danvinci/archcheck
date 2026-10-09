@@ -1,7 +1,7 @@
 # The check registry. Each check is a type with two methods: `run` emits its findings, `kinds` declares
 # each kind it emits as `kind => :error | :advisory`. A new check is a struct, both methods, and a CHECKS entry.
 
-# Everything a check may read, built once per run.
+"""Everything one run of the gate builds for a check to read."""
 struct Context{D<:Tuple}
     index::SourceIndex                      # the one parse of src/ and the entry dirs
     graph::ModuleGraph                      # module rank + cross-module references
@@ -53,35 +53,53 @@ function run_checks(ctx, checks)
     findings
 end
 
+"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or a non-string, or a file or module the spine leaves unranked."""
 struct Corpus <: Check end
+"""Runs in `CHECKS`. A module references another that finishes loading at the same rank or later."""
 struct ModuleBackEdges <: Check end
+"""Runs in `CHECKS`. Modules reference one another in a cycle."""
 struct ModuleCycles <: Check end
+"""Runs in `CHECKS`. A function in the contracts module does more than name a type and its interface."""
 struct ContractsPurity <: Check end
+"""Runs in `CHECKS`. Two modules export one name bound to different objects."""
 struct OwnerUniqueness <: Check end
+"""Runs in `CHECKS`. A method extends a function owned outside the defining module, on argument types owned outside that module's subtree."""
 struct ModulePiracy <: Check end
+"""Runs in `CHECKS`. A file calls into a file the wrapper includes later."""
 struct FileBackEdges <: Check end
+"""Runs in `CHECKS`. Every callee of a definition lives in one lower-ranked file, and at most half the module's files reach that file."""
 struct FileSinkable <: Check end
+"""Runs in `CHECKS`. A definition touches only modules that rank below its own, or one file holds several such definitions."""
 struct Sinkable <: Check end
+"""Runs in `CHECKS`. A function body ends in a bare tuple of three or more slots."""
 struct TupleReturns <: Check end
+"""Runs in `CHECKS`. A top-level definition has no reference in the source or the entry directories. `public_is_entry` counts an exported or public name as a reference."""
 struct DeadCode <: Check
     public_is_entry::Bool   # an exported or public name counts as an entry point
 end
 DeadCode(; public_is_entry::Bool = false) = DeadCode(public_is_entry)
+"""Runs in `CHECKS`. A module wrapper exports its whole namespace with `names` and `all` set."""
 struct BlanketExports <: Check end
+"""Runs in `CHECKS`. An exported name is undefined."""
 struct StaleExports <: Check end
+"""Runs in `CHECKS`. Source refers to a name its module leaves unexported and unmarked public."""
 struct ReachesInternal <: Check end
+"""Runs in `CHECKS`. An import binds a name whose leading underscore marks it private."""
 struct PrivateImports <: Check end
+"""Runs in `CHECKS`. A closure assigns a captured local in more than one place, so lowering boxes it."""
 struct BoxedCaptures <: Check end
+"""Runs in `CHECKS`. A struct field's stored type leaves dispatch open."""
 struct AbstractFields <: Check end
+"""Configured through `gate(...; checks)` with a supertype and the readers its concrete subtypes must answer. A subtype with no matching method is a finding."""
 struct ReaderSet{S, R<:Tuple} <: Check
     super::Type{S}  # concrete subtypes of this type must answer each reader
     required::R     # (reader, extra argument types after the subject) pairs
 end
+"""Configured through `gate(...; checks)` with the directories to read. Fixed integer counts in one method form a uniform grid."""
 struct ScanSeeds{D<:Tuple} <: Check
     directories::D  # source directories relative to the repository root, or absolute paths
 end
-# Modules that do not reference one another, each counted with the modules nested in it; import-linter's
-# `independence` contract is the precedent. The constructor refuses a set of one and a member inside another.
+"""Configured through `gate(...; checks)` with two or more modules. A reference from one, or from a module nested in it, to another is a finding."""
 struct Independent{N} <: Check
     modules::NTuple{N,Symbol}   # dotted module keys below the package
     function Independent(modules::Symbol...)
@@ -94,10 +112,15 @@ struct Independent{N} <: Check
         new{length(modules)}(modules)
     end
 end
+"""Runs in `CHECKS`. A reference reaches a name the module it is written through leaves unexported and unmarked public."""
 struct DeclaredNames <: Check end
+"""Runs in `CHECKS`. A reference reaches a module the wrapper's using and import lines omit."""
 struct DeclaredModules <: Check end
+"""Runs in `CHECKS`. A method is added to a function its owner leaves unmarked public or undocumented."""
 struct DeclaredExtensions <: Check end
+"""Runs in `CHECKS`. Code reads a field of a struct another module owns."""
 struct ForeignFields <: Check end
+"""Runs in `CHECKS`. A runtime type test on a method's own parameter picks a path."""
 struct TypeBranches <: Check end
 
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.

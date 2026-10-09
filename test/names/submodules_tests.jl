@@ -3,7 +3,7 @@
     readers = ReaderSet(Nested.Geo.Curves.Shape, ((Nested.Geo.Curves.perimeter, Tuple{}),))
     report = joinpath(mktempdir(), "architecture.jsonl")
     blocked = try
-        ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks = (CHECKS..., readers))
+        ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks = (ArchCheck.CHECKS..., readers))
         false
     catch err
         err isa ErrorException || rethrow()

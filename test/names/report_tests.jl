@@ -9,7 +9,7 @@ module FConsumer
 end
 
 @testset "severity: a kind its check does not declare is refused" begin
-    @test_throws ArgumentError run_checks(nothing, (FConsumer.Undeclared(),))
+    @test_throws ArgumentError ArchCheck.run_checks(nothing, (FConsumer.Undeclared(),))
 end
 
 @testset "severity: error_kinds promotes a consumer's kinds" begin
@@ -29,29 +29,29 @@ end
 @testset "delta vs the previous run" begin
     old = [Finding(:Geo, :tuple_return, "a.jl", "wide", 10, "3 slots"),
            Finding(:Geo, :dead_code, "a.jl", "gone", 20, "unused")]
-    # same finding, moved down the file: the line drifts, the fingerprint does not
+    # same finding, moved down the file: the line drifts, the ArchCheck.fingerprint does not
     moved = Finding(:Geo, :tuple_return, "a.jl", "wide", 99, "3 slots")
     fresh = Finding(:Aero, :file_backedge, "solve.jl", "model.jl", 0, "up-rank")
 
     severity = default_severity()
     mktempdir() do dir
         path = joinpath(dir, "architecture.jsonl")
-        @test isnothing(previous_fingerprints(path))        # no previous run -> nothing is new
+        @test isnothing(ArchCheck.previous_fingerprints(path))        # no previous run -> nothing is new
 
         open(io -> emit_jsonl(io, old, severity), path, "w")
-        prev = previous_fingerprints(path)
-        @test isempty(new_findings([moved], prev))       # same finding, drifted line -> not new
+        prev = ArchCheck.previous_fingerprints(path)
+        @test isempty(ArchCheck.new_findings([moved], prev))       # same finding, drifted line -> not new
 
         # a kind absent from the previous run belongs to a check added since: its findings enter
         # as standing, so adding a check leaves that kind off the new-finding list
-        @test isempty(new_findings([fresh], prev))
+        @test isempty(ArchCheck.new_findings([fresh], prev))
         withknown = vcat(old, fresh)
         open(io -> emit_jsonl(io, withknown, severity), path, "w")
-        prev2 = previous_fingerprints(path)
+        prev2 = ArchCheck.previous_fingerprints(path)
         later = Finding(:Aero, :file_backedge, "solve.jl", "influence.jl", 0, "up-rank")
-        @test [f.symbol for f in new_findings([fresh, later], prev2)] == ["influence.jl"]
+        @test [f.symbol for f in ArchCheck.new_findings([fresh, later], prev2)] == ["influence.jl"]
 
-        current = Set(fingerprint(f) for f in [moved, fresh])
+        current = Set(ArchCheck.fingerprint(f) for f in [moved, fresh])
         @test length(setdiff(prev, current)) == 1        # dead_code disappeared -> fixed
     end
 

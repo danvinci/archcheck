@@ -132,7 +132,7 @@ function overload_index()
     write(entry, "placeholder() = 1\n")
     rank = Dict(:Empty => 1)
     dirs = Dict("." => :Empty)
-    build_source_index(src, rank, dirs)
+    ArchCheck.build_source_index(src, rank, dirs)
 end
 
 function hits_named(found, name)

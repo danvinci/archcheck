@@ -5,6 +5,7 @@ const LOOP_CALLS = (:map, :map!, :sum, :maximum, :minimum, :foreach, :reduce, :m
                     :filter, :any, :all, :count, :findfirst, :findall, :extrema)
 const LOOP_HOPS = 2   # callee distance at which a loop still makes the repeated call costly
 
+"""Configured through `gate(...; checks)`, and the gate needs `entries`. Two calls on one path ask one question."""
 struct OverlappingCalls <: Check end
 
 kinds(::OverlappingCalls) = (:overlapping_call => :advisory,)

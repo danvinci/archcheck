@@ -18,12 +18,12 @@
         write(joinpath(module_dir, "late.jl"), "default_index() = 1\nleaf(value) = value\nhelper() = 2\n")
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
-        index = build_source_index(root, rank, dir2mod)
-        graph = build_call_graph(index, :M)
-        found = check_file_backedges(graph)
+        index = ArchCheck.build_source_index(root, rank, dir2mod)
+        graph = ArchCheck.build_call_graph(index, :M)
+        found = ArchCheck.check_file_backedges(graph)
         edges = Set((basename(f.file), basename(f.symbol)) for f in found)
         @test edges == Set([("extension.jl", "late.jl")])
-        dead = Set(f.symbol for f in check_dead_code_static(index))
+        dead = Set(f.symbol for f in ArchCheck.check_dead_code_static(index))
         @test dead == Set(["helper"])
     end
 end
@@ -44,9 +44,9 @@ end
         write(joinpath(root, "lofts", "late.jl"), "refine(c) = c\n")
         rank = Dict(:Iface => 1, :Lofts => 2)
         dir2mod = Dict("iface" => :Iface, "lofts" => :Lofts)
-        index = build_source_index(root, rank, dir2mod)
-        graph = build_call_graph(index, :Lofts)
-        found = check_file_backedges(graph)
+        index = ArchCheck.build_source_index(root, rank, dir2mod)
+        graph = ArchCheck.build_call_graph(index, :Lofts)
+        found = ArchCheck.check_file_backedges(graph)
         # a call to the verb reaches its declaring module, whether a project module under its imported name
         # or an outside package; the method cut.jl adds carries that file's own edge
         edges = Set((basename(f.file), basename(f.symbol), ev(f, :via)) for f in found)
@@ -74,20 +74,20 @@ end
             end
             """)
         write(joinpath(dir, "m", "b.jl"), "items() = 1\nhelper() = 1\n")
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        cg = build_call_graph(index, :M)
+        index = ArchCheck.build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        cg = ArchCheck.build_call_graph(index, :M)
         @test :helper in cg.calls[:Holder]
         @test !(:items in cg.calls[:Holder])
     end
 
-    @test :helper in scan_defs("""
+    @test :helper in ArchCheck.scan_defs("""
         function owner()
             global helper
             helper = identity(helper)
             helper()
         end
         """).refs[:owner]
-    @test :helper in scan_defs("""
+    @test :helper in ArchCheck.scan_defs("""
         function owner()
             helper = 1
             callback = () -> begin
@@ -99,80 +99,80 @@ end
         """).refs[:owner]
 
     # named-tuple field labels are not references; the RHS still is, including in a comprehension
-    labeled = scan_defs("labeled() = (items = helper(),)\nnested() = [(items = helper(),) for _ in xs]")
+    labeled = ArchCheck.scan_defs("labeled() = (items = helper(),)\nnested() = [(items = helper(),) for _ in xs]")
     @test :helper in labeled.refs[:labeled] && !(:items in labeled.refs[:labeled])
     @test :helper in labeled.refs[:nested] && !(:items in labeled.refs[:nested])
-    called = scan_defs("called() = (items = items(),)")
+    called = ArchCheck.scan_defs("called() = (items = items(),)")
     @test :items in called.refs[:called]
 
-    keyworded = scan_defs("keyed(; knots = helper()) = knots\nhelper() = 1")
+    keyworded = ArchCheck.scan_defs("keyed(; knots = helper()) = knots\nhelper() = 1")
     @test :helper in keyworded.refs[:keyed]
     @test !(:knots in keyworded.refs[:keyed])
-    same = scan_defs("same(helper = helper()) = helper\nhelper() = 1")
+    same = ArchCheck.scan_defs("same(helper = helper()) = helper\nhelper() = 1")
     @test :helper in same.refs[:same]
-    later = scan_defs("later(x = helper(), helper = 1) = x\nhelper() = 1")
+    later = ArchCheck.scan_defs("later(x = helper(), helper = 1) = x\nhelper() = 1")
     @test :helper in later.refs[:later]
-    earlier = scan_defs("earlier(helper = () -> 2, x = helper()) = x\nhelper() = 1")
+    earlier = ArchCheck.scan_defs("earlier(helper = () -> 2, x = helper()) = x\nhelper() = 1")
     @test !(:helper in earlier.refs[:earlier])
-    keyed_same = scan_defs("keyed_same(; helper = helper()) = helper\nhelper() = 1")
+    keyed_same = ArchCheck.scan_defs("keyed_same(; helper = helper()) = helper\nhelper() = 1")
     @test :helper in keyed_same.refs[:keyed_same]
-    hid = scan_defs("function hid(x = helper())\n    helper = 1\n    x\nend\nhelper() = 1")
+    hid = ArchCheck.scan_defs("function hid(x = helper())\n    helper = 1\n    x\nend\nhelper() = 1")
     @test :helper in hid.refs[:hid]
-    anon = scan_defs("anon(::Helper, x = Helper()) = x")
+    anon = ArchCheck.scan_defs("anon(::Helper, x = Helper()) = x")
     @test :Helper in anon.refs[:anon]
-    ctor = scan_defs("struct Owner\n    value::Int   # stored test value\n    Owner(x = helper()) = new(x)\nend\nhelper() = 1")
+    ctor = ArchCheck.scan_defs("struct Owner\n    value::Int   # stored test value\n    Owner(x = helper()) = new(x)\nend\nhelper() = 1")
     @test :helper in ctor.refs[:Owner]
-    destructured = scan_defs("f((helper, value), x = helper()) = x\nhelper() = 1")
+    destructured = ArchCheck.scan_defs("f((helper, value), x = helper()) = x\nhelper() = 1")
     @test !(:helper in destructured.refs[:f])
-    whered = scan_defs("f(x::T, y = zero(T)) where T = y")
+    whered = ArchCheck.scan_defs("f(x::T, y = zero(T)) where T = y")
     @test !(:T in whered.refs[:f])
 
-    named = scan_defs("struct Law end\nhelper() = leaf()\n(law::Law)(x) = helper()")
+    named = ArchCheck.scan_defs("struct Law end\nhelper() = leaf()\n(law::Law)(x) = helper()")
     @test :helper in named.refs[:Law]
     @test !(:Law in named.funcs)
     @test !(:helper in named.modrefs)
-    early = scan_defs("(law::Law)(x) = helper()\nstruct Law end\nhelper() = 1")
+    early = ArchCheck.scan_defs("(law::Law)(x) = helper()\nstruct Law end\nhelper() = 1")
     @test :helper in early.refs[:Law]
     @test :Law in early.types && !(:Law in early.funcs)
-    extension = scan_defs("(law::Law)(x) = helper()\nhelper() = 1")
+    extension = ArchCheck.scan_defs("(law::Law)(x) = helper()\nhelper() = 1")
     @test :helper in extension.refs[:Law]
     @test !(:Law in extension.types) && !(:Law in extension.funcs)
-    anon_call = scan_defs("(::Law)(x) = helper()")
+    anon_call = ArchCheck.scan_defs("(::Law)(x) = helper()")
     @test :helper in anon_call.refs[:Law]
-    where_call = scan_defs("function (law::Law{T})(x = helper()) where {T}\n    law\nend")
+    where_call = ArchCheck.scan_defs("function (law::Law{T})(x = helper()) where {T}\n    law\nend")
     @test :helper in where_call.refs[:Law]
     @test !(:law in where_call.refs[:Law]) && !(:T in where_call.refs[:Law])
-    foreign = scan_defs("function Base.getindex(a::Law, i)\n    helper()\nend\nhelper() = 1")
+    foreign = ArchCheck.scan_defs("function Base.getindex(a::Law, i)\n    helper()\nend\nhelper() = 1")
     @test :helper in foreign.refs[Symbol("Base.getindex")]
     @test !(:getindex in foreign.funcs)
     @test !haskey(foreign.refs, :Law) || !(:helper in foreign.refs[:Law])
 
-    branched = scan_defs("function owner()\n    if true\n        helper = 1\n    end\n    helper\nend")
+    branched = ArchCheck.scan_defs("function owner()\n    if true\n        helper = 1\n    end\n    helper\nend")
     @test !(:helper in branched.refs[:owner])
-    trapped = scan_defs("function owner()\n    try\n        helper = 1\n        helper\n    catch\n    end\nend")
+    trapped = ArchCheck.scan_defs("function owner()\n    try\n        helper = 1\n        helper\n    catch\n    end\nend")
     @test !(:helper in trapped.refs[:owner])
-    lambda = scan_defs("owner() = map(x -> helper(x), xs)")
+    lambda = ArchCheck.scan_defs("owner() = map(x -> helper(x), xs)")
     @test :helper in lambda.refs[:owner] && !(:x in lambda.refs[:owner])
-    letted = scan_defs("function owner()\n    let helper = 1\n        helper\n    end\n    helper()\nend")
+    letted = ArchCheck.scan_defs("function owner()\n    let helper = 1\n        helper\n    end\n    helper()\nend")
     @test :helper in letted.refs[:owner]
-    nested_g = scan_defs("function owner()\n    helper = 1\n    callback = () -> begin\n        global helper\n        1\n    end\n    helper\n    callback()\nend")
+    nested_g = ArchCheck.scan_defs("function owner()\n    helper = 1\n    callback = () -> begin\n        global helper\n        1\n    end\n    helper\n    callback()\nend")
     @test !(:helper in nested_g.refs[:owner])
-    gen = scan_defs("owner() = [helper(x) for x in xs]")
+    gen = ArchCheck.scan_defs("owner() = [helper(x) for x in xs]")
     @test :helper in gen.refs[:owner] && !(:x in gen.refs[:owner])
-    ordered = scan_defs("f(xs) = [leaf(j) for i in xs for j in produce(i)]")
+    ordered = ArchCheck.scan_defs("f(xs) = [leaf(j) for i in xs for j in produce(i)]")
     @test :leaf in ordered.refs[:f] && :produce in ordered.refs[:f]
     @test !(:i in ordered.refs[:f])
     @test !(:j in ordered.refs[:f])
     @test !(:xs in ordered.refs[:f])
-    nested_def = scan_defs("f() = begin; inner(x = helper()) = x; inner(); end")
+    nested_def = ArchCheck.scan_defs("f() = begin; inner(x = helper()) = x; inner(); end")
     @test :helper in nested_def.refs[:f]
     @test !(:inner in nested_def.refs[:f])
     @test !(:x in nested_def.refs[:f])
-    indexed = scan_defs("f(values, i) = begin; store[i] = values; end")
+    indexed = ArchCheck.scan_defs("f(values, i) = begin; store[i] = values; end")
     @test :store in indexed.refs[:f]
     @test !(:values in indexed.refs[:f])
     @test !(:i in indexed.refs[:f])
-    typed = scan_defs("f() = begin; x::Marker = make(); x; end")
+    typed = ArchCheck.scan_defs("f() = begin; x::Marker = make(); x; end")
     @test :Marker in typed.refs[:f] && :make in typed.refs[:f]
     @test !(:x in typed.refs[:f])
 end
@@ -187,9 +187,9 @@ end
         write(joinpath(dir, "m", "b.jl"), "abstract type Shape end")
         supertype_rank = Dict(:M => 1)
         supertype_dirs = Dict("m" => :M)
-        supertype_index = build_source_index(dir, supertype_rank, supertype_dirs)
-        supertype_graph = build_call_graph(supertype_index, :M)
-        supertype_back = only(check_file_backedges(supertype_graph))
+        supertype_index = ArchCheck.build_source_index(dir, supertype_rank, supertype_dirs)
+        supertype_graph = ArchCheck.build_call_graph(supertype_index, :M)
+        supertype_back = only(ArchCheck.check_file_backedges(supertype_graph))
         @test ev(supertype_back, :via) == "S"
     end
 
@@ -199,9 +199,9 @@ end
         write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")\ninclude(\"b.jl\")")
         write(joinpath(dir, "m", "a.jl"), "struct S; x::T; end")
         write(joinpath(dir, "m", "b.jl"), "struct T end\nmake() = S()")
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        cg = build_call_graph(index, :M)
-        back = only(check_file_backedges(cg))
+        index = ArchCheck.build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        cg = ArchCheck.build_call_graph(index, :M)
+        back = only(ArchCheck.check_file_backedges(cg))
         @test ev(back, :via) == "S"                       # the struct itself carries the edge
     end
 end
@@ -211,8 +211,8 @@ end
         rng = MersenneTwister(seed)
         mktempdir() do root
             spec = random_module(rng, joinpath(root, "m"))
-            index = build_source_index(root, Dict(:M => 1), Dict("m" => :M))
-            found = check_file_backedges(build_call_graph(index, :M))
+            index = ArchCheck.build_source_index(root, Dict(:M => 1), Dict("m" => :M))
+            found = ArchCheck.check_file_backedges(ArchCheck.build_call_graph(index, :M))
 
             # the oracle: an edge is a back-edge exactly when the target is not strictly earlier
             expected = Set((from, to) for (from, to) in spec.truth

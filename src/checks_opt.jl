@@ -16,6 +16,7 @@ function OptEntry(f::F, argtypes::Type{A}) where {F<:Function, A<:Tuple}
     OptEntry{F,A}(f, argtypes, symbol)
 end
 
+"""Configured through `gate(...; checks)` with a corpus of concrete calls. A call whose inferred code dispatches at runtime, or boxes a captured local, is a finding. An empty corpus reports nothing."""
 struct OptAnalysis{E} <: Check
     entries::Vector{E}                  # corpus calls, each one specialization
 end

@@ -13,7 +13,7 @@ function case_package(name, body)
     layout = ArchCheck.package_layout(path, mod_name)
     rank = layout[1]
     dirs = layout[2]
-    index = build_source_index(src, rank, dirs; root = mod_name)
+    index = ArchCheck.build_source_index(src, rank, dirs; root = mod_name)
     (mod = mod, index = index, directory = directory)
 end
 

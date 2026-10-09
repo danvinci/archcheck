@@ -19,7 +19,7 @@ function callee_names(scan, site)
 end
 
 function assert_nested_form(source, outer_text, inner_text)
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     outer_line = line_holding(source, outer_text)
     inner_line = line_holding(source, inner_text)
     outer_site = MethodSite(:outer, outer_line)

@@ -23,8 +23,8 @@ end
         write(joinpath(dir, "geo", "Geo.jl"),
               "include(\"a.jl\")\nfor n in names(@__MODULE__; all=true)\n    @eval export \$n\nend")
         write(joinpath(dir, "geo", "a.jl"), "f() = 1")
-        index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
-        found = check_blanket_exports(index)
+        index = ArchCheck.build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
+        found = ArchCheck.check_blanket_exports(index)
         @test length(found) == 1
         @test found[1].kind === :blanket_export
     end
@@ -35,33 +35,33 @@ end
         write(joinpath(dir, "geo", "Geo.jl"),
               "include(\"a.jl\")\n# names(@__MODULE__; all=true)\n")
         write(joinpath(dir, "geo", "a.jl"), "f() = 1")
-        index = build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
-        @test isempty(check_blanket_exports(index))
+        index = ArchCheck.build_source_index(dir, Dict(:Geo => 1), Dict("geo" => :Geo))
+        @test isempty(ArchCheck.check_blanket_exports(index))
     end
 
     # stale export: Julia accepts a name with no definition behind it
-    stale = check_stale_exports([FIface])
+    stale = ArchCheck.check_stale_exports([FIface])
     @test length(stale) == 1
     @test stale[1].symbol == "vanished"
     @test stale[1].kind === :stale_export
-    @test isempty(check_stale_exports([FDupA]))
+    @test isempty(ArchCheck.check_stale_exports([FDupA]))
 
     # reaches-internal: a qualified reference to a name the owner kept private
     mktempdir() do dir
         mkpath(joinpath(dir, "m"))
         write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")")
         write(joinpath(dir, "m", "a.jl"), "g() = 1")
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        index = ArchCheck.build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
         entry = mktempdir()
         write(joinpath(entry, "probe.jl"), "a = FIface.hidden()\nb = FIface.present()\n")
-        found = check_reaches_internal(index, [FIface]; entry_dirs = [entry])
+        found = ArchCheck.check_reaches_internal(index, [FIface]; entry_dirs = [entry])
         @test length(found) == 1
         @test found[1].symbol == "FIface.hidden"
         @test found[1].kind === :reaches_internal
 
         # a missing entry dir contributes nothing, as the index treats it
         absent = joinpath(dir, "absent")
-        found = check_reaches_internal(index, [FIface]; entry_dirs = [absent, entry])
+        found = ArchCheck.check_reaches_internal(index, [FIface]; entry_dirs = [absent, entry])
         @test [f.symbol for f in found] == ["FIface.hidden"]
     end
 
@@ -70,11 +70,11 @@ end
         mkpath(joinpath(dir, "m"))
         write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")")
         write(joinpath(dir, "m", "a.jl"), "g() = 1")
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        index = ArchCheck.build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
         entry = mktempdir()
         write(joinpath(entry, "probe.jl"),
               "# FIface.hidden()\ns = \"FIface.hidden()\"\nx = 1  # FIface.hidden\n")
-        @test isempty(check_reaches_internal(index, [FIface]; entry_dirs = [entry]))
+        @test isempty(ArchCheck.check_reaches_internal(index, [FIface]; entry_dirs = [entry]))
     end
 
     # public-unexported names are the declared interface; aliases and quotes follow the same rule
@@ -84,12 +84,12 @@ end
         write(joinpath(dir, "m", "a.jl"), "g() = 1")
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
-        index = build_source_index(dir, rank, dir2mod)
+        index = ArchCheck.build_source_index(dir, rank, dir2mod)
         entry = mktempdir()
         probe = joinpath(entry, "probe.jl")
         write(probe,
               "const G = Main.FPub\nG.hidden()\nG.offered()\nFPub.hidden()\nFPub.offered()\nFPub.shown()\nMain.FPub.hidden()\nfunction wrap()\n    G = 1\n    G.hidden()\nend\nq = :(FPub.hidden())\nobj = (FPub = (hidden = 1,),)\nobj.FPub.hidden\n")
-        found = check_reaches_internal(index, [FPub]; entry_dirs = [entry])
+        found = ArchCheck.check_reaches_internal(index, [FPub]; entry_dirs = [entry])
         @test Set(f.symbol for f in found) == Set(["FPub.hidden"])
         @test length(found) == 3
         write(probe, """
@@ -100,7 +100,7 @@ end
             G.hidden(x) = x
             lambda = (x::G.Secret) -> x
             """)
-        found = check_reaches_internal(index, [FPub]; entry_dirs = [entry, entry])
+        found = ArchCheck.check_reaches_internal(index, [FPub]; entry_dirs = [entry, entry])
         @test sort([f.symbol for f in found]) ==
               [fill("FPub.Secret", 4); "FPub.hidden"; "FPub.value"]
     end
@@ -170,6 +170,6 @@ end
 
     # a path opening with the package's own name reaches the module below it
     source = "x = Pkg.Aa.f()\nimport ..Pkg\n"
-    refs = scan_modrefs(source, :Bb, "x.jl", Set([:Aa, :Bb]); root = :Pkg)
+    refs = ArchCheck.scan_modrefs(source, :Bb, "x.jl", Set([:Aa, :Bb]); root = :Pkg)
     @test Set((r.to, r.via) for r in refs) == Set([(:Aa, :qualified), (:Pkg, :import)])
 end

@@ -1,5 +1,6 @@
 # Joins whose result the method drops: a discarded fetch, any wait, a bare fetch or wait passed onward, an @sync block.
 
+"""Configured through `gate(...; checks)`. A package names functions whose joins wait on a file or a device. Any other discarded `fetch`, bare `wait`, passed join, or `@sync` block is a finding."""
 struct UnreadWaits{A<:NTuple{N,Symbol} where N} <: Check
     allowed::A   # function names whose joins wait on a file or a device queue
 end

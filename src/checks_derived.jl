@@ -1,7 +1,10 @@
 # Declared derived values: one producer, a key that names every evaluation, calls kept on the cache.
 
+"""Runs in `CHECKS`. With no declared derived value it is quiet. A second method constructs a declared value."""
 struct OneProducer <: Check end
+"""Runs in `CHECKS`. With no declared derived value it is quiet. A declared key is not isbits, caches by identity, or omits a name the producer reads."""
 struct CacheKeys <: Check end
+"""Runs in `CHECKS`. With no declared derived value it is quiet. A method calls the producer and does not write the declared cache field."""
 struct CachedCalls <: Check end
 
 kinds(::OneProducer) = (:second_producer => :advisory,)

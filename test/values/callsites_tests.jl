@@ -107,7 +107,7 @@ end
 @testset "generated call list matches the parse, seed $seed" for seed in 1:40
     rng = Xoshiro(seed)
     source, expected = random_probe(rng)
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     got = rows_by_site(scan)
     probe = MethodSite(:probe, 1)
     @test got == Dict(probe => expected)
@@ -153,7 +153,7 @@ end
         ),
     ]
     for case in cases
-        scan = scan_defs(case.source)
+        scan = ArchCheck.scan_defs(case.source)
         @test rows_by_site(scan) == case.expected
     end
 end
@@ -164,7 +164,7 @@ end
         h(x)
     end
     """
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     got = rows_of(scan, :f, 1)
     expected = [
         (:g, "", "1", "", 1, 0),
@@ -209,7 +209,7 @@ end
         ),
     ]
     for case in cases
-        scan = scan_defs(case.source)
+        scan = ArchCheck.scan_defs(case.source)
         @test rows_by_site(scan) == case.expected
     end
 end
@@ -222,7 +222,7 @@ end
         end
     end
     """
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     got = rows_of(scan, :outer, 1)
     expected = [
         (:g, "", "", "", 2, 0),
@@ -238,7 +238,7 @@ end
         arr[i](z)
     end
     """
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     @test rows_of(scan, :outer, 1) == [(:f, "", "x", "", 2, 0)]
 end
 
@@ -249,7 +249,7 @@ end
             1)
     end
     """
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     got = rows_of(scan, :outer, 1)
     expected = [
         (:f, "", "x + 1", "", 2, 0),
@@ -259,6 +259,6 @@ end
 end
 
 @testset "a call outside any method is not a call site" begin
-    scan = scan_defs("const ready = f(1)\nfunction g end\n")
+    scan = ArchCheck.scan_defs("const ready = f(1)\nfunction g end\n")
     @test isempty(scan.callsites)
 end

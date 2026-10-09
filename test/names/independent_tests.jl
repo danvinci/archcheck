@@ -1,8 +1,8 @@
 # Members of an independent set do not reference one another.
 @testset "independent modules: no member of the set references another" begin
     src = joinpath(pkgdir(Nested), "src")
-    graph = build_module_graph(src, joinpath(src, "Nested.jl"))
-    edges(modules...) = run_checks((graph = graph,), (Independent(modules...),))
+    graph = ArchCheck.build_module_graph(src, joinpath(src, "Nested.jl"))
+    edges(modules...) = ArchCheck.run_checks((graph = graph,), (Independent(modules...),))
     curves = Symbol("Geo.Curves")
     cuts = Symbol("Geo.Cuts")
 
@@ -28,9 +28,9 @@
     # both reach Shared, which sits below the set
     rank = Dict(:Shared => [1], :A => [2], :B => [3])
     dir2mod = Dict("shared" => :Shared, "a" => :A, "b" => :B)
-    refs = [ModRef(:A, :Shared, "src/a/a.jl", 1, :using), ModRef(:B, :Shared, "src/b/b.jl", 2, :qualified)]
-    lower = ModuleGraph(rank, dir2mod, refs)
-    @test isempty(run_checks((graph = lower,), (Independent(:A, :B),)))
+    refs = [ArchCheck.ModRef(:A, :Shared, "src/a/a.jl", 1, :using), ArchCheck.ModRef(:B, :Shared, "src/b/b.jl", 2, :qualified)]
+    lower = ArchCheck.ModuleGraph(rank, dir2mod, refs)
+    @test isempty(ArchCheck.run_checks((graph = lower,), (Independent(:A, :B),)))
 
     # a set that cannot constrain anything, or names a module the graph lacks, is refused
     @test_throws ArgumentError Independent(:Geo)

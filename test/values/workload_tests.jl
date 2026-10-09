@@ -44,7 +44,7 @@ function workload_context(root::Module)
     rank = Dict{Symbol,Vector{Int}}(nameof(root) => [1])
     dirs = Dict{String,Symbol}()
     files = FileNode[]
-    refs = ModRef[]
+    refs = ArchCheck.ModRef[]
     external = Set{Symbol}()
     unparsed = Tuple{Symbol,String}[]
     missing = Tuple{Symbol,String,String,Int}[]

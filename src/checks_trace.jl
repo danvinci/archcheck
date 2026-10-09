@@ -2,8 +2,11 @@
 
 const SECOND_DIGITS = 6
 
+"""Configured through `gate(...; checks)` beside a workload and probes. The same arguments of one probed function were evaluated again."""
 struct Rebuilds <: Check end
+"""Configured through `gate(...; checks)` beside a workload and probes. Two probed functions returned one value."""
 struct TwoNames <: Check end
+"""Configured through `gate(...; checks)` beside a workload and probes. A wait finished and a later call left the result unread."""
 struct Waits <: Check end
 
 kinds(::Rebuilds) = (:rebuild => :advisory,)

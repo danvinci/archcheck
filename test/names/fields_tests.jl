@@ -29,7 +29,7 @@ module FAbs
 end
 
 @testset "abstract-field" begin
-    found = check_abstract_fields([FAbs], NO_SITES)
+    found = ArchCheck.check_abstract_fields([FAbs], NO_SITES)
     syms = Set(f.symbol for f in found)
 
     @test "Open.xs" in syms && ev(only(f for f in found if f.symbol == "Open.xs"), :declared) == "Vector"

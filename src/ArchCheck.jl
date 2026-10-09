@@ -51,35 +51,22 @@ include("checks_readers.jl")
 include("catalog.jl")
 include("gate.jl")
 
+# A name a caller writes is exported. A verb the caller qualifies stays public.
+# A name whose other methods the package reaches stays public when a test-only method would otherwise read as unreached.
 export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
-public kinds, phase, gate
-export MethodSite, CallSite, MethodGraph, Probes, ProbeRecord, WaitRecord, ProbeTrace, Observation, Derived
-public method_graph, arm!, disarm!, observe, package_layout
-export FindingKey, fingerprint, previous_fingerprints, new_findings
-export ModRef, ModuleGraph, build_module_graph, scan_modrefs
-export FileNode, SourceIndex, build_source_index, files_of, file_rank, include_paths, is_wrapper
-export def_sites, site_of
-export Check, Context, CHECKS, run_checks, ReaderSet, ScanSeeds
-export CallerWhitelist, SentinelReturns, StringPayloads
-export StorageOverloads, ExpressionClones, ToleranceSearch
-export OverlappingCalls, KeptBuilders
-export UnreachedMethods
-export Rebuilds, TwoNames, Waits, UnreadWaits
+export Check, Context
+export Corpus, ModuleBackEdges, ModuleCycles, ContractsPurity, OwnerUniqueness, ModulePiracy
+export FileBackEdges, FileSinkable, Sinkable, TupleReturns, DeadCode, BlanketExports, StaleExports
+export ReachesInternal, PrivateImports, DeclaredNames, DeclaredModules, DeclaredExtensions
+export ForeignFields, BoxedCaptures, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
-export Independent
-export check_corpus, check_backedges, is_backedge, is_downrank, find_cycles, check_cycles
-export check_contracts_logic
-export check_dup_owners, check_sinkable, check_module_piracy
-export CallGraph, build_call_graph
-export check_file_sinkable, check_file_backedges, check_extract_candidates
-export check_tuple_returns
-export scan_defs, scan_tree, parse_file, check_dead_code_static, check_scan_seeds
-export check_blanket_exports, check_stale_exports, check_reaches_internal, check_reader_set
-export check_private_imports, check_module_corpus, check_declared_names, check_declared_modules
-export check_declared_extensions
-export check_foreign_fields
-export check_abstract_fields, check_boxed_captures, is_open_field
-export check_storage_overloads
-export OptEntry, OptAnalysis, check_opt_entries, jet_loaded
+export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders
+export Independent, ReaderSet, ScanSeeds, OverlappingCalls, OptAnalysis
+export UnreachedMethods, Rebuilds, TwoNames, Waits, UnreadWaits
+export Derived, Probes
+export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
+export Observation, ProbeRecord, WaitRecord
+public gate, run, kinds, phase
+public scan_defs, scan_modrefs, CallGraph, ModRef, build_module_graph
 
 end # module ArchCheck

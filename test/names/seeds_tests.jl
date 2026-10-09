@@ -48,15 +48,15 @@
         separate() = [k / OWN_COUNT for k in 0:OWN_COUNT]
         unknown() = [k / GRID_COUNT for k in 0:GRID_COUNT]
         """)
-        index = build_source_index(root, Dict(:Geo => 1, :Other => 2),
+        index = ArchCheck.build_source_index(root, Dict(:Geo => 1, :Other => 2),
                                    Dict("geo" => :Geo, "other" => :Other))
-        found = check_scan_seeds(index; directories=(geometry,))
+        found = ArchCheck.check_scan_seeds(index; directories=(geometry,))
         expected = Set(["by_const", "literal", "by_range", "by_linrange", "span_grid",
                         "local_grid", "step_grid", "adjacent_grid", "quotes_equals"])
         @test Set(finding.symbol for finding in found) == expected
         @test all(finding -> finding.kind === :scan_seed, found)
-        @test length(unique(fingerprint.(found))) == length(found)
-        together = check_scan_seeds(index; directories=(geometry, other))
+        @test length(unique(ArchCheck.fingerprint.(found))) == length(found)
+        together = ArchCheck.check_scan_seeds(index; directories=(geometry, other))
         @test Set(finding.symbol for finding in together) == union(expected, Set(["separate"]))
     end
 end
