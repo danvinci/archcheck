@@ -149,8 +149,35 @@ function method_form(index::SourceIndex, method::Method)
     nothing
 end
 
+# Whether `outer` is `inner` or a module `inner` sits inside, by the loaded parent chain.
+function encloses(outer::Module, inner::Module)
+    current = inner
+    while true
+        current === outer && return true
+        parent = parentmodule(current)
+        parent === current && return false
+        current = parent
+    end
+end
+
+# The owners that bind `name` to an object another owner does not share. Without `strict` a module and one it
+# encloses act as one owner, as a package lets its modules use what encloses them.
+function colliding_owners(owners, name, strict)
+    colliding = Module[]
+    for left in owners, right in owners
+        left === right && continue
+        left_value = getproperty(left, name)
+        right_value = getproperty(right, name)
+        isequal(left_value, right_value) && continue
+        is_nested = encloses(left, right) || encloses(right, left)
+        is_nested && !strict && continue
+        left in colliding || push!(colliding, left)
+    end
+    colliding
+end
+
 # duplicate-owner: a name exported by >=2 modules bound to DIFFERENT objects (same object = shared generic, ok).
-function check_dup_owners(mods, rank)
+function check_dup_owners(mods, rank; strict::Bool)
     by_name = Dict{Symbol,Vector{Module}}()
     for mod in mods
         for name in names(mod; all = false)
@@ -161,10 +188,9 @@ function check_dup_owners(mods, rank)
     end
     findings = Finding[]
     for (name, owners) in by_name
-        length(owners) < 2 && continue
-        bound = [getproperty(mod, name) for mod in owners]
-        length(unique(bound)) < 2 && continue
-        keys = [module_key(mod) for mod in owners]
+        colliding = colliding_owners(owners, name, strict)
+        length(colliding) < 2 && continue
+        keys = [module_key(mod) for mod in colliding]
         ranked = sort(keys, by = key -> rank[key])
         detail = "exported by more than one module, bound to different objects"
         evidence = [:owners => join(ranked, " ")]

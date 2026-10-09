@@ -87,8 +87,11 @@ end
 ModuleCycles(; strict::Bool = false) = ModuleCycles(strict)
 """Runs in `CHECKS`. A function in the contracts module does more than name a type and its interface."""
 struct ContractsPurity <: Check end
-"""Runs in `CHECKS`. Two modules export one name bound to different objects."""
-struct OwnerUniqueness <: Check end
+"""Runs in `CHECKS`. Two modules export one name bound to different objects. A module and one it encloses count only with `strict`."""
+struct OwnerUniqueness <: Check
+    strict::Bool   # a module and one it encloses count as two owners
+end
+OwnerUniqueness(; strict::Bool = false) = OwnerUniqueness(strict)
 """Runs in `CHECKS`. A method extends a function owned outside the package on argument types owned outside it. With `strict`, the defining module stands for the package: its own functions, its own subtree's types."""
 struct ModulePiracy <: Check
     strict::Bool   # ownership is the defining module's rather than the package's
@@ -170,7 +173,7 @@ kinds(::ModuleCycles) = (:cycle => :error,)
 run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
 kinds(::ContractsPurity) = (:contracts_logic => :error,)
 
-run(::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank)
+run(check::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank; strict = check.strict)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
 
 run(check::ModulePiracy, ctx) = check_module_piracy(package_modules(ctx), ctx.root; repo = ctx.index.repo, strict = check.strict)
