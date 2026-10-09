@@ -49,6 +49,8 @@ args = [["GEOM_EPS", "RESOLUTION_M", "LOFT_GEO_M"]]
 
 [checks.OneProducer]
 
+[checks.UnreadWaits]
+
 # The reflected knot vector declared as a type with one producer; the split mutant writes a second formula for it.
 [mutants.knots_split]
 base = "builders"
@@ -254,6 +256,34 @@ expect = "quiet"
 kind = "wait"
 file = "export/emit.jl"
 symbol = "write_renders"
+
+# The renders join their @sync block in both states; the builders commit adds a foreach(fetch) to the emitter.
+[[expectations]]
+case = "unread"
+check = "UnreadWaits"
+state = "stack"
+expect = "fire"
+kind = "unread_wait"
+file = "export/renders.jl"
+symbol = "write_renders"
+
+[[expectations]]
+case = "unread"
+check = "UnreadWaits"
+state = "builders"
+expect = "fire"
+kind = "unread_wait"
+file = "export/renders.jl"
+symbol = "write_renders"
+
+[[expectations]]
+case = "unread"
+check = "UnreadWaits"
+state = "builders"
+expect = "fire"
+kind = "unread_wait"
+file = "export/emit.jl"
+symbol = "emit_artifacts"
 
 [[expectations]]
 case = "7"
