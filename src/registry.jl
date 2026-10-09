@@ -2,7 +2,7 @@
 # each kind it emits as `kind => :error | :advisory`. A new check is a struct, both methods, and a CHECKS entry.
 
 # Everything a check may read, built once per run.
-struct Context
+struct Context{D<:Tuple}
     index::SourceIndex                      # the one parse of src/ and the entry dirs
     graph::ModuleGraph                      # module rank + cross-module references
     root::Module                            # the package module itself; in mods only when it is the package's one module
@@ -12,18 +12,21 @@ struct Context
     entry_dirs::Vector{String}              # tested/scripted entry points; interface checks scan them too
     methods::Union{Nothing,MethodGraph}     # calls between methods from the declared entries; nothing when none is declared
     observed::Union{Nothing,Observation}    # what the workload did; nothing before it runs, or with no workload
+    derived::D                              # the package's declared derived values, each a `Derived`
 end
 
-function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[], methods = nothing)
+function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[], methods = nothing, derived = ())
     graph = build_module_graph(index)
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
-    Context(index, graph, root, mods, sites, callgraphs, entry_dirs, methods, nothing)
+    Context(index, graph, root, mods, sites, callgraphs, entry_dirs, methods, nothing, derived)
 end
 
 # The same context once the workload has run.
-Context(ctx::Context; observed::Observation) = Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites,
-                                                      ctx.callgraphs, ctx.entry_dirs, ctx.methods, observed)
+function Context(ctx::Context; observed::Observation)
+    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.entry_dirs, ctx.methods,
+            observed, ctx.derived)
+end
 
 abstract type Check end
 
