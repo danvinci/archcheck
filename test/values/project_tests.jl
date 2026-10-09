@@ -140,7 +140,34 @@ end
     @test rows == expected
 end
 
-@testset "a string-keyed dictionary holding a non-string value is reported" begin
+@testset "a sentinel set that omits nothing leaves a typed absence quiet" begin
+    files = [
+        "gate/Gate.jl" => "include(\"checked/bodies.jl\")\n",
+        "gate/checked/bodies.jl" => """
+            ends_nothing() = nothing
+            ends_inf() = -Inf
+            ends_nan() = NaN
+            returns_missing() = missing
+            hidden() = nothing
+            ends_value() = 1
+            """,
+    ]
+    rank = Dict(:ProjectSentinels => 1)
+    dir2mod = Dict("gate" => :ProjectSentinels)
+    ctx = project_context(files, rank, dir2mod, [ProjectSentinels])
+    sentinels = (:Inf, :NaN, :missing)
+    check = ArchCheck.SentinelReturns(("src/gate/checked",), sentinels)
+    found = ArchCheck.run(check, ctx)
+    rows = finding_rows(found, :sentinel)
+    expected = [
+        ("ends_inf", "src/gate/checked/bodies.jl", :sentinel_return, "-Inf"),
+        ("ends_nan", "src/gate/checked/bodies.jl", :sentinel_return, "NaN"),
+        ("returns_missing", "src/gate/checked/bodies.jl", :sentinel_return, "missing"),
+    ]
+    @test rows == expected
+end
+
+@testset "a string-keyed dictionary is reported when its value type is not concrete" begin
     files = [
         "data/Data.jl" => "include(\"maps.jl\")\n",
         "data/maps.jl" => """
@@ -150,8 +177,32 @@ end
             function labels()
                 Dict{String,String}()
             end
+            function ranks()
+                Dict{String,Symbol}()
+            end
+            function pairs()
+                Dict{String,NTuple{2,Int}}()
+            end
+            function sets()
+                Dict{String,Set{String}}()
+            end
+            function lists()
+                Dict{String,Vector{Int}}()
+            end
             function qualified()
                 Base.Dict{String,Any}()
+            end
+            function record()
+                Dict{String,Union{Int,String}}()
+            end
+            function numbers()
+                Dict{String,Integer}()
+            end
+            function open_lists()
+                Dict{String,Vector}()
+            end
+            function nested()
+                Dict{String,Dict{String,Any}}()
             end
             struct Bucket
                 rows::Dict{String,Float64}
@@ -160,7 +211,7 @@ end
                 rows
             end
             """,
-        "other/Other.jl" => "outside() = Dict{String,Symbol}()\n",
+        "other/Other.jl" => "outside() = Dict{String,Any}()\n",
     ]
     rank = Dict(:Data => 1, :Other => 2)
     dir2mod = Dict("data" => :Data, "other" => :Other)
@@ -171,9 +222,10 @@ end
     rows = finding_rows(found, :type)
     expected = [
         ("Base.Dict{String,Any}", "src/data/maps.jl", :string_payload, "Base.Dict{String,Any}"),
-        ("Dict{String,Float64}", "src/data/maps.jl", :string_payload, "Dict{String,Float64}"),
-        ("Dict{String,Int}", "src/data/maps.jl", :string_payload, "Dict{String,Int}"),
-        ("Dict{String,UInt8}", "src/data/maps.jl", :string_payload, "Dict{String,UInt8}"),
+        ("Dict{String,Any}", "src/data/maps.jl", :string_payload, "Dict{String,Any}"),
+        ("Dict{String,Integer}", "src/data/maps.jl", :string_payload, "Dict{String,Integer}"),
+        ("Dict{String,Union{Int,String}}", "src/data/maps.jl", :string_payload, "Dict{String,Union{Int,String}}"),
+        ("Dict{String,Vector}", "src/data/maps.jl", :string_payload, "Dict{String,Vector}"),
     ]
     @test rows == expected
 end

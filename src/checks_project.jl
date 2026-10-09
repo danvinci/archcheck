@@ -1,5 +1,5 @@
 # Parameterized checks a package configures: who may call a name, which public functions return a
-# sentinel, and where a string-keyed dictionary carries another value.
+# sentinel, and where a string-keyed dictionary carries a value with no single layout.
 
 struct CallerWhitelist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
     callees::C       # function names a body may reference only from an allowed def
@@ -26,7 +26,7 @@ function SentinelReturns(directories, sentinels = (:nothing, :Inf, :NaN, :missin
 end
 
 struct StringPayloads{D<:NTuple{N,String} where N} <: Check
-    directories::D   # repo-relative directories read for a Dict{String,V} type
+    directories::D   # repo-relative directories read for string-keyed dictionaries
 end
 
 function StringPayloads(directories)
@@ -83,10 +83,6 @@ function is_sentinel_literal(node, sentinels)
     is_sentinel_literal(children[2], sentinels)
 end
 
-function sentinel_text(node)
-    JS.sourcetext(node)
-end
-
 # Nested functions, closures and quotes keep their own bodies.
 function returned_sentinel(node, sentinels)
     kind = JS.kind(node)
@@ -97,7 +93,8 @@ function returned_sentinel(node, sentinels)
         children = child_nodes(node)
         one_value = !isnothing(children) && length(children) == 1
         if one_value && is_sentinel_literal(children[1], sentinels)
-            return sentinel_text(children[1])
+            marker = children[1]
+            return JS.sourcetext(marker)
         end
     end
     children = child_nodes(node)
@@ -124,7 +121,7 @@ function observed_sentinel(body, sentinels)
     tail = last_body_expr(body)
     isnothing(tail) && return nothing
     is_sentinel_literal(tail, sentinels) || return nothing
-    sentinel_text(tail)
+    JS.sourcetext(tail)
 end
 
 function method_at_top(node)
@@ -163,14 +160,87 @@ function is_dict_head(node)
     children[2].val === :Dict
 end
 
-function is_string_payload(node)
+# The type a node names, parameters included. Nothing when the name is unresolved in `mod`.
+function applied_type(mod, node)
+    if JS.kind(node) == K"curly"
+        parts = child_nodes(node)
+        isnothing(parts) && return nothing
+        isempty(parts) && return nothing
+        head_node = first(parts)
+        head = applied_type(mod, head_node)
+        head isa Type || return nothing
+        parameters = Any[]
+        for part in parts[2:end]
+            parameter = type_parameter(mod, part)
+            isnothing(parameter) && return nothing
+            push!(parameters, parameter)
+        end
+        return apply_type(head, parameters)
+    end
+    path = dotted_names(node)
+    isnothing(path) && return nothing
+    value = constant_value(mod, path)
+    value isa Type || return nothing
+    value
+end
+
+# A value parameter is the integer itself (`NTuple{2,Int}`); every other parameter is a type.
+function type_parameter(mod, node)
+    literal = node.val
+    literal isa Integer && return literal
+    applied_type(mod, node)
+end
+
+type_application_failed(::TypeError) = true
+type_application_failed(::MethodError) = true
+type_application_failed(::ArgumentError) = true
+type_application_failed(::Any) = false
+
+function apply_type(head, parameters)
+    try
+        head{parameters...}
+    catch err
+        type_application_failed(err) || rethrow()
+        nothing
+    end
+end
+
+# false when the resolved value has no single layout. nothing when every module leaves the name unresolved.
+# A where clause is a family of types, so the value it names has no single layout.
+function value_concreteness(modules, node)
+    JS.kind(node) == K"where" && return false
+    for mod in modules
+        named = applied_type(mod, node)
+        isnothing(named) && continue
+        return isconcretetype(named)
+    end
+    nothing
+end
+
+# The file's module, then the module that defines the language types, then the other loaded modules.
+function type_modules(ctx, file_module)
+    matched = Module[]
+    others = Module[]
+    for mod in ctx.mods
+        key = module_key(mod)
+        if key == file_module
+            push!(matched, mod)
+        else
+            push!(others, mod)
+        end
+    end
+    vcat(matched, Module[Base], others)
+end
+
+function is_string_payload(node, modules)
     JS.kind(node) == K"curly" || return false
     children = child_nodes(node)
     isnothing(children) && return false
     length(children) == 3 || return false
     is_dict_head(children[1]) || return false
     children[2].val === :String || return false
-    children[3].val !== :String
+    concreteness = value_concreteness(modules, children[3])
+    concreteness === false
 end
 
 function run(check::CallerWhitelist, ctx)
@@ -240,14 +310,14 @@ function run(check::SentinelReturns, ctx)
     findings
 end
 
-function collect_payloads!(found, node)
-    if is_string_payload(node)
+function collect_payloads!(found, node, modules)
+    if is_string_payload(node, modules)
         push!(found, node)
     end
     children = child_nodes(node)
     isnothing(children) && return
     for child in children
-        collect_payloads!(found, child)
+        collect_payloads!(found, child, modules)
     end
 end
 
@@ -258,7 +328,8 @@ function run(check::StringPayloads, ctx)
         for file in ctx.index.files
             is_under(file.path, directory) || continue
             nodes = JS.SyntaxNode[]
-            collect_payloads!(nodes, file.tree)
+            modules = type_modules(ctx, file.mod)
+            collect_payloads!(nodes, file.tree, modules)
             for node in nodes
                 type_text = JS.sourcetext(node)
                 line = source_line(node)
