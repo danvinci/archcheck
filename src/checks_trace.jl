@@ -43,8 +43,8 @@ function trace_records(ctx)
 end
 
 # A probed method is one `arm!` found in the index, so its file is indexed.
-function module_at(index, path::String)
-    file = indexed_file(index, path)
+function module_at(index, path::String, line::Int)
+    file = indexed_file(index, path, line)
     file.mod
 end
 
@@ -133,7 +133,7 @@ function total_seconds(records)
 end
 
 function rebuild_finding(index, key, records)
-    mod = module_at(index, key.file)
+    mod = module_at(index, key.file, key.line)
     count = length(records)
     total = total_seconds(records)
     function_name = string(key.name)
@@ -209,7 +209,7 @@ end
 function two_name_finding(index, record, functions, values)
     file = record.site[1]
     line = record.site[2]
-    mod = module_at(index, file)
+    mod = module_at(index, file, line)
     symbol = string(record.name)
     evidence = Pair{Symbol,String}[
         :functions => functions,
@@ -328,7 +328,7 @@ function wait_totals(records, waits)
 end
 
 function wait_finding(index, key, seconds::Float64)
-    mod = module_at(index, key.file)
+    mod = module_at(index, key.file, key.line)
     consumer = string(key.consumer)
     waited = string(key.waited)
     span = seconds_text(seconds)

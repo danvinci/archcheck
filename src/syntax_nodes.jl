@@ -2,7 +2,40 @@
 const JS = Base.JuliaSyntax
 using Base.JuliaSyntax: @K_str
 
-child_nodes(node) = JS.children(node)
+is_module_block(node) = JS.kind(node) == K"module"
+
+# Every walk takes children here. A module block's code belongs to that module, so a walk stops at one.
+function child_nodes(node)
+    is_module_block(node) && return nothing
+    JS.children(node)
+end
+
+# A module block's name and its body: the one way into the code a walk stops at.
+function module_name(block)::Union{Nothing,Symbol}
+    parts = JS.children(block)
+    node_symbol(parts[1])
+end
+
+function module_body(block)
+    parts = JS.children(block)
+    parts[2]
+end
+
+# The module blocks among a code root's own statements, docstring included. A block under a branch or a macro
+# loads only on a condition, so the index leaves it unplaced.
+function module_blocks(root)
+    blocks = JS.SyntaxNode[]
+    statements = child_nodes(root)
+    isnothing(statements) && return blocks
+    for statement in statements
+        target = statement
+        if JS.kind(statement) == K"doc"
+            target = last(child_nodes(statement))
+        end
+        is_module_block(target) && push!(blocks, target)
+    end
+    blocks
+end
 
 # An identifier node's value. Anything else names no symbol.
 function node_symbol(node)::Union{Nothing,Symbol}

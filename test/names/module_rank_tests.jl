@@ -57,10 +57,48 @@ using .Inner
     module Inner
     include("deep/Deep.jl")
     using .Deep
-    module Stray end
+    Core.eval(@__MODULE__, :(module Stray end))
     end
     """,
     "inner/deep/Deep.jl" => "module Deep\nend\n",
+])
+
+# A module block in an included file: under a directory module, and under a one-module package's root.
+const INLINE_CHILD = load_package("InlineChild", """
+include("aa/Aa.jl")
+using .Aa
+""", [
+    "aa/Aa.jl" => "module Aa\ninclude(\"parts.jl\")\nend\n",
+    "aa/parts.jl" => """
+    helper() = 1
+    module Inline
+    climb() = Aa.helper()
+    end
+    """,
+])
+
+const INLINE_ROOT = load_package("InlineRoot", """
+include("tokens.jl")
+grow() = 1
+""", [
+    "tokens.jl" => "module Tokens\nclimb() = InlineRoot.grow()\nend\n",
+])
+
+# A spine with one directory module and plain files at two include depths, one holding a module block.
+const SPINE_FILES = load_package("SpineFiles", """
+include("pkg/Versions.jl")
+using .Versions
+include("utils.jl")
+""", [
+    "pkg/Versions.jl" => "module Versions\nend\n",
+    "utils.jl" => """
+    include("deeper.jl")
+    unused_util() = 1
+    module Piracy
+    unused_piracy() = 1
+    end
+    """,
+    "deeper.jl" => "unused_deeper() = 1\n",
 ])
 
 function module_edge_rows(case)
@@ -181,7 +219,35 @@ end
     end
 end
 
-@testset "a loaded submodule the wrapper does not declare is unranked" begin
+@testset "an inline module is ranked and owns its own code" begin
+    cases = ((INLINE_CHILD, Symbol("Aa.Inline"), "Aa"), (INLINE_ROOT, :Tokens, "InlineRoot"))
+    for (case, inline, parent) in cases
+        ctx = case_context(case)
+        corpus = ArchCheck.run(Corpus(), ctx)
+        @test !any(finding -> finding.kind === :unranked_module, corpus)
+        found = ArchCheck.run(ModuleBackEdges(), ctx)
+        climb = only(found)
+        @test climb.mod === inline
+        @test climb.symbol == parent
+        @test ev(climb, :include_order) == "1.1->1"
+    end
+end
+
+@testset "the root owns every file its spine includes outside a module directory" begin
+    ctx = case_context(SPINE_FILES)
+    corpus = ArchCheck.run(Corpus(), ctx)
+    @test isempty(corpus)
+    dead = ArchCheck.run(DeadCode(), ctx)
+    rows = Set((finding.mod, finding.file, finding.symbol) for finding in dead)
+    expected = Set([
+        (:SpineFiles, "src/utils.jl", "unused_util"),
+        (:SpineFiles, "src/deeper.jl", "unused_deeper"),
+        (:Piracy, "src/utils.jl", "unused_piracy"),
+    ])
+    @test rows == expected
+end
+
+@testset "a loaded submodule no file places is unranked" begin
     ctx = case_context(STRAY_CHILD)
     found = ArchCheck.run(Corpus(), ctx)
     stray = only(finding for finding in found if finding.kind === :unranked_module)

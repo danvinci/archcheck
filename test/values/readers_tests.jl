@@ -142,6 +142,7 @@ end
     found = unlisted_findings(WRAPPED_BOUND; entries, derived = declared)
     rows = evidence_rows(found, :callee, :via, :derived)
     @test rows == [
+        (:unlisted_reader, "consume", "meters", "field", "distance"),
         (:unlisted_reader, "pass_homonym", "consume", "code_typed", "distance"),
         (:unlisted_reader, "pass_homonym", "consume", "parse", "distance"),
         (:unlisted_reader, "pass_miss", "wants", "code_typed", "distance"),
