@@ -11,13 +11,13 @@ end
 
 # A check with nothing in this package to point at, or one whose run throws on a file this configuration leaves unchanged.
 const NOT_APPLICABLE = (
-    (ArchCheck.ToleranceSearch, "no quantity is compared with a named tolerance"),
-    (ArchCheck.KeptBuilders, "no constructor result is kept for its caller with get!"),
-    (ArchCheck.CallerWhitelist, "no function has a closed list of callers"),
-    (ArchCheck.Independent, "the package is one module, so no pair of modules is independent"),
-    (ArchCheck.Rebuilds, "one probe session runs at a time, and this gate arms none"),
-    (ArchCheck.TwoNames, "one probe session runs at a time, and this gate arms none"),
-    (ArchCheck.Waits, "one probe session runs at a time, and this gate arms none"),
+    (ToleranceSearch, "no quantity is compared with a named tolerance"),
+    (KeptBuilders, "no constructor result is kept for its caller with get!"),
+    (CallerWhitelist, "no function has a closed list of callers"),
+    (Independent, "the package is one module, so no pair of modules is independent"),
+    (Rebuilds, "one probe session runs at a time, and this gate arms none"),
+    (TwoNames, "one probe session runs at a time, and this gate arms none"),
+    (Waits, "one probe session runs at a time, and this gate arms none"),
 )
 
 function exhibit_workload()
@@ -56,54 +56,57 @@ function exhibit_probes()
         Exhibits.Shape.drops,
         Exhibits.Shape.hold_inputs,
     )
-    ArchCheck.Probes(functions = watched, slow_s = 0.0)
+    Probes(functions = watched, slow_s = 0.0)
 end
 
 function exhibit_derived()
-    declared = ArchCheck.Derived(
+    declared = Derived(
         Exhibits.Shape.make_span;
         key = Exhibits.Shape.span_key,
         cache = :held,
         readers = (Exhibits.Shape.read_span,),
     )
-    plain = ArchCheck.Derived(Exhibits.Shape.plain_label)
+    plain = Derived(Exhibits.Shape.plain_label)
     (declared, plain)
 end
 
-function exhibit_checks()
-    active = ArchCheck.Check[]
+# The default catalog, with a library's public names counted as entry points.
+function library_defaults()
+    active = Check[]
     for check in ArchCheck.CHECKS
-        if check isa ArchCheck.DeadCode
-            configured = ArchCheck.DeadCode(public_is_entry = true)
+        if check isa DeadCode
+            configured = DeadCode(public_is_entry = true)
             push!(active, configured)
         else
             push!(active, check)
         end
     end
+    active
+end
+
+function exhibit_checks()
+    active = library_defaults()
     allowed = (("src/shape/plants.jl", :allowed_call),)
-    whitelist = ArchCheck.CallerWhitelist((:guarded,), allowed)
+    whitelist = CallerWhitelist((:guarded,), allowed)
     push!(active, whitelist)
-    push!(active, ArchCheck.SentinelReturns(("src/shape/sentinels.jl",)))
-    push!(active, ArchCheck.StringPayloads(("src/shape/payloads.jl",)))
-    push!(active, ArchCheck.UnreadWaits(allowed = (:hold_inputs,)))
-    push!(active, ArchCheck.ToleranceSearch((:GAP,)))
-    push!(active, ArchCheck.KeptBuilders(:(Shape.build_shape)))
-    push!(active, ArchCheck.Independent(:Low, :Shape))
+    push!(active, SentinelReturns(("src/shape/sentinels.jl",)))
+    push!(active, StringPayloads(("src/shape/payloads.jl",)))
+    push!(active, UnreadWaits(allowed = (:hold_inputs,)))
+    push!(active, ToleranceSearch((:GAP,)))
+    push!(active, KeptBuilders(:(Shape.build_shape)))
+    push!(active, Independent(:Low, :Shape))
     readers = ((Exhibits.Shape.read_item, Tuple{}),)
-    push!(active, ArchCheck.ReaderSet(Exhibits.Shape.Item, readers))
-    push!(active, ArchCheck.ScanSeeds(("src/shape/seeds.jl",)))
-    push!(active, ArchCheck.OverlappingCalls())
-    jet = ArchCheck.jet_loaded()
-    if !isnothing(jet)
-        runtime = ArchCheck.OptEntry(Exhibits.Shape.runtime_plant, Tuple{Function,Int})
-        boxed = ArchCheck.OptEntry(Exhibits.Shape.boxed_total, Tuple{Int})
-        corpus = ArchCheck.OptEntry[runtime, boxed]
-        push!(active, ArchCheck.OptAnalysis(corpus))
-    end
-    push!(active, ArchCheck.UnreachedMethods())
-    push!(active, ArchCheck.Rebuilds())
-    push!(active, ArchCheck.TwoNames())
-    push!(active, ArchCheck.Waits())
+    push!(active, ReaderSet(Exhibits.Shape.Item, readers))
+    push!(active, ScanSeeds(("src/shape/seeds.jl",)))
+    push!(active, OverlappingCalls())
+    runtime = OptEntry(Exhibits.Shape.runtime_plant, Tuple{Function,Int})
+    boxed = OptEntry(Exhibits.Shape.boxed_total, Tuple{Int})
+    corpus = OptEntry[runtime, boxed]
+    push!(active, OptAnalysis(corpus))
+    push!(active, UnreachedMethods())
+    push!(active, Rebuilds())
+    push!(active, TwoNames())
+    push!(active, Waits())
     Tuple(active)
 end
 
@@ -138,54 +141,39 @@ function exhibit_gate(; report_path, io)
     run_exhibit_gate(report_path, io, probes)
 end
 
+# The public calls a caller makes, with any keywords.
 function self_entries()
-    (
-        (ArchCheck.gate, Tuple{Module}),
-        (ArchCheck.build_source_index, Tuple{AbstractString, Any, Any}),
-        (ArchCheck.method_graph, Tuple{Any, Any}),
-        (ArchCheck.arm!, Tuple{ArchCheck.Probes, Any}),
-        (ArchCheck.disarm!, Tuple{ArchCheck.ProbeHandle}),
-        (ArchCheck.observe, Tuple{Any, Any, Any}),
-        (ArchCheck.check_opt_entries, Tuple{Any}),
-    )
+    gate_call = (Core.kwcall, Tuple{NamedTuple, typeof(ArchCheck.gate), Module})
+    context_call = (Core.kwcall, Tuple{NamedTuple, Type{Context}, Module})
+    (gate_call, context_call)
 end
 
+# The index build and one check run, entered through the public calls a caller makes.
 function self_opt()
-    index_types = Tuple{String, Dict{Symbol,Vector{Int}}, Dict{String,Symbol}}
-    index_entry = ArchCheck.OptEntry(ArchCheck.build_source_index, index_types)
-    scan_types = Tuple{Base.JuliaSyntax.SyntaxNode}
-    scan_entry = ArchCheck.OptEntry(ArchCheck.scan_tree, scan_types)
-    check_types = Tuple{ArchCheck.Context{Tuple{}}, Tuple{ArchCheck.Corpus}}
-    check_entry = ArchCheck.OptEntry(ArchCheck.run_checks, check_types)
-    entries = ArchCheck.OptEntry[index_entry, scan_entry, check_entry]
-    ArchCheck.OptAnalysis(entries)
+    index_entry = OptEntry(Context, Tuple{Module})
+    check_types = Tuple{Corpus, Context{Tuple{}}}
+    check_entry = OptEntry(ArchCheck.run, check_types)
+    entries = OptEntry[index_entry, check_entry]
+    OptAnalysis(entries)
 end
 
 function static_checks()
-    active = ArchCheck.Check[]
-    for check in ArchCheck.CHECKS
-        if check isa ArchCheck.DeadCode
-            configured = ArchCheck.DeadCode(public_is_entry = true)
-            push!(active, configured)
-        else
-            push!(active, check)
-        end
-    end
-    waits = ArchCheck.UnreadWaits(allowed = (:probe_wait, :wait_synced))
+    active = library_defaults()
+    waits = UnreadWaits(allowed = (:probe_wait, :wait_synced))
     push!(active, waits)
-    push!(active, ArchCheck.OverlappingCalls())
+    push!(active, OverlappingCalls())
     readers = ((ArchCheck.run, Tuple{Any}), (ArchCheck.kinds, Tuple{}))
-    push!(active, ArchCheck.ReaderSet(ArchCheck.Check, readers))
+    push!(active, ReaderSet(Check, readers))
     sentinels = (:Inf, :NaN, :missing)
-    push!(active, ArchCheck.SentinelReturns(("src",), sentinels))
-    push!(active, ArchCheck.StringPayloads(("src",)))
-    push!(active, ArchCheck.ScanSeeds(("src",)))
+    push!(active, SentinelReturns(("src",), sentinels))
+    push!(active, StringPayloads(("src",)))
+    push!(active, ScanSeeds(("src",)))
     push!(active, self_opt())
     Tuple(active)
 end
 
 function workload_checks()
-    (ArchCheck.UnreachedMethods(public_is_entry = true),)
+    (UnreachedMethods(public_is_entry = true),)
 end
 
 function self_checks()

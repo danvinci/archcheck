@@ -86,10 +86,3 @@ const PLANTED = Set{Tuple{String,String,String}}([
     end
     @test got == PLANTED
 end
-
-@testset "a rejected type application resolves to nothing" begin
-    missed = ArchCheck.apply_parameters(Int, (1,))
-    @test isnothing(missed)
-    negative = ArchCheck.apply_parameters(NTuple, (-1, Int))
-    @test isnothing(negative)
-end

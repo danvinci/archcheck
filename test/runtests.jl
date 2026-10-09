@@ -51,7 +51,7 @@ end
 # every engine check at its declared severity, with no consumer promotion
 function default_severity()
     engine = (ArchCheck.CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))
-    ArchCheck.severities(engine)
+    Dict(kind => severity for check in engine for (kind, severity) in ArchCheck.kinds(check))
 end
 
 # n files, random defs, random cross-file calls, and a random include order.
