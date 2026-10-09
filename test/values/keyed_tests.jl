@@ -48,7 +48,7 @@ function load_keyed()
     layout = ArchCheck.package_layout(path, :KeyedHandles)
     rank = layout[1]
     dir2mod = layout[2]
-    index = build_source_index(src, rank, dir2mod; root = :KeyedHandles)
+    index = ArchCheck.build_source_index(src, rank, dir2mod; root = :KeyedHandles)
     ctx = Context(index, mod, Module[mod])
     (; mod, ctx, index)
 end

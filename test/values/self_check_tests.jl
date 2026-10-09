@@ -3,7 +3,7 @@
 @testset "self-check: ArchCheck's gate passes on ArchCheck with every kind an error" begin
     report = joinpath(mktempdir(), "architecture.jsonl")
     active = Check[]
-    for check in CHECKS
+    for check in ArchCheck.CHECKS
         if check isa ArchCheck.DeadCode
             push!(active, ArchCheck.DeadCode(public_is_entry = true))
         else
@@ -32,9 +32,9 @@ end
         write(body, "shipped() = 1\nvisible() = 2\nhidden() = 3\n")
         rank = Dict(:Aa => 1)
         dirs = Dict("aa" => :Aa)
-        index = build_source_index(dir, rank, dirs)
+        index = ArchCheck.build_source_index(dir, rank, dirs)
         check = ArchCheck.DeadCode(public_is_entry = true)
-        dead = run_checks((index = index,), (check,))
+        dead = ArchCheck.run_checks((index = index,), (check,))
         pairs = Tuple{String,Symbol}[]
         for finding in dead
             push!(pairs, (finding.symbol, finding.kind))
@@ -54,12 +54,12 @@ end
         write(joinpath(src, "b.jl"), "from_b() = hub_fn()\n")
         write(joinpath(src, "a.jl"), "from_a() = hub_fn()\nstray() = leaf_fn()\n")
         rank, dir2mod = ArchCheck.package_layout(spine, :Hub)
-        index = build_source_index(src, rank, dir2mod)
+        index = ArchCheck.build_source_index(src, rank, dir2mod)
         root = Module()
         mods = Module[]
         ctx = ArchCheck.Context(index, root, mods)
         check = ArchCheck.FileSinkable()
-        found = run_checks(ctx, (check,))
+        found = ArchCheck.run_checks(ctx, (check,))
         records = Tuple{String,Symbol,String,String}[]
         for finding in found
             callee_file = ev(finding, :callees_in)
@@ -68,6 +68,24 @@ end
         end
         @test Set(records) == Set([("stray", :file_sinkable, "c.jl", "1/4")])
     end
+end
+
+@testset "an exported check type carries a docstring" begin
+    missing = String[]
+    for name in names(ArchCheck)
+        isdefined(ArchCheck, name) || continue
+        value = getfield(ArchCheck, name)
+        body = value isa UnionAll ? Base.unwrap_unionall(value) : value
+        body isa DataType || continue
+        body <: Check || continue
+        isabstracttype(body) && continue
+        binding = Base.Docs.Binding(ArchCheck, name)
+        documented = haskey(Base.Docs.meta(ArchCheck), binding)
+        documented && continue
+        push!(missing, string(name))
+    end
+    sort!(missing)
+    @test missing == String[]
 end
 
 @testset "self-check: every exported check is run or named inapplicable" begin

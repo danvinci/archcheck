@@ -1,6 +1,7 @@
 # A declared derived value reaches only its readers and its converters: a wrapper struct on the typed code of the
 # method graph, a bare number on the parse inside one method, and the wrapper's fields and constructor on the parse.
 
+"""Runs in `CHECKS`. With no declared derived value it is quiet. A declared value reaches a function outside its readers and converters. A wrapper value needs `entries` on the gate."""
 struct DerivedReaders <: Check end
 
 kinds(::DerivedReaders) = (:unlisted_reader => :advisory,)

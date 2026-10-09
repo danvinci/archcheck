@@ -9,7 +9,7 @@ function waits_context(source)
     write(path, source)
     rank = Dict(:Joins => 1)
     dir2mod = Dict("joins" => :Joins)
-    index = build_source_index(src, rank, dir2mod)
+    index = ArchCheck.build_source_index(src, rank, dir2mod)
     ArchCheck.Context(index, Main, Module[])
 end
 

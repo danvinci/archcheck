@@ -28,7 +28,7 @@ function spine_index(src)
     layout = ArchCheck.package_layout(spine, :SpinePkg)
     rank = layout[1]
     dir2mod = layout[2]
-    build_source_index(src, rank, dir2mod; root = :SpinePkg)
+    ArchCheck.build_source_index(src, rank, dir2mod; root = :SpinePkg)
 end
 
 function loaded_spine(src)
@@ -64,13 +64,13 @@ end
             ordered_before = ArchCheck.completes_before(spine_file.modrank, module_rank)
             @test ordered_before
         end
-        dead = check_dead_code_static(index)
+        dead = ArchCheck.check_dead_code_static(index)
         planted = filter(f -> f.symbol == "spine_only", dead)
         finding = only(planted)
         @test finding.kind === :dead_code
         @test finding.mod === :SpinePkg
         @test endswith(finding.file, joinpath("src", "SpinePkg.jl"))
-        corpus = check_corpus(index)
+        corpus = ArchCheck.check_corpus(index)
         hole = any(f -> f.kind === :unranked_file && endswith(f.file, "SpinePkg.jl"), corpus)
         @test !hole
 
@@ -88,7 +88,7 @@ end
         @test !outside_ref
         imported = filter(r -> r.via === :import && r.to === :Child, index.refs)
         @test length(imported) == 1
-        dead = check_dead_code_static(index)
+        dead = ArchCheck.check_dead_code_static(index)
         @test any(f -> f.symbol == "spine_only" && f.mod === :SpinePkg, dead)
     end
 end

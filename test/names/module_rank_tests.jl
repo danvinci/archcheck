@@ -16,7 +16,7 @@ end
         @test dir2mod == Dict("aa" => :Aa, "bb/inner" => :Inner)
     end
     # relative import = edge, qualified X.f = edge, external pkg skipped, self-ref dropped
-    refs = scan_modrefs("using ..Aa, ..Bb, QuadGK\nq = Cc.foo(1)", :Aa, "x.jl", Set([:Aa, :Bb, :Cc]))
+    refs = ArchCheck.scan_modrefs("using ..Aa, ..Bb, QuadGK\nq = Cc.foo(1)", :Aa, "x.jl", Set([:Aa, :Bb, :Cc]))
     @test Set((r.to, r.via) for r in refs) == Set([(:Bb, :using), (:Cc, :qualified)])
 end
 
@@ -25,20 +25,20 @@ end
     chain_rank = Dict(:a => [1], :b => [2], :c => [3])
     chain_dirs = Dict("a" => :a, "b" => :b, "c" => :c)
     chain_refs = [
-        ModRef(:a, :b, "a.jl", 1, :using),
-        ModRef(:b, :c, "b.jl", 1, :using),
+        ArchCheck.ModRef(:a, :b, "a.jl", 1, :using),
+        ArchCheck.ModRef(:b, :c, "b.jl", 1, :using),
     ]
-    chain = ModuleGraph(chain_rank, chain_dirs, chain_refs)
-    @test isempty(check_cycles(chain))
+    chain = ArchCheck.ModuleGraph(chain_rank, chain_dirs, chain_refs)
+    @test isempty(ArchCheck.check_cycles(chain))
 
     loop_rank = Dict(:a => [1], :b => [2])
     loop_dirs = Dict("a" => :a, "b" => :b)
     loop_refs = [
-        ModRef(:a, :b, "a.jl", 1, :using),
-        ModRef(:b, :a, "b.jl", 1, :using),
+        ArchCheck.ModRef(:a, :b, "a.jl", 1, :using),
+        ArchCheck.ModRef(:b, :a, "b.jl", 1, :using),
     ]
-    loop = ModuleGraph(loop_rank, loop_dirs, loop_refs)
-    found = only(check_cycles(loop))
+    loop = ArchCheck.ModuleGraph(loop_rank, loop_dirs, loop_refs)
+    found = only(ArchCheck.check_cycles(loop))
     @test found.kind === :cycle
     @test ev(found, :loop) == "a->b->a"
 end
@@ -116,10 +116,10 @@ end
             src = joinpath(root, "src")
             spec = random_package(rng, src)
             rank, dir2mod = ArchCheck.parse_spine_order(joinpath(src, "Pkg.jl"))
-            index = build_source_index(src, rank, dir2mod)
+            index = ArchCheck.build_source_index(src, rank, dir2mod)
             @test Set(string.(keys(index.rank))) == Set(spec.keys)   # every declared module, at every depth
 
-            found = check_backedges(build_module_graph(index))
+            found = ArchCheck.check_backedges(ArchCheck.build_module_graph(index))
             got = Set((string(f.mod), f.symbol) for f in found)
             # the oracle: a reference climbs exactly when its target finishes loading at or after its source
             expected = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])

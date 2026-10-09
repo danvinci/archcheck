@@ -10,8 +10,8 @@
         write(joinpath(entry_dir, "run.jl"), "entry()")
         rank = Dict(:Aa => 1)
         dirs = Dict("aa" => :Aa)
-        index = build_source_index(dir, rank, dirs; entry_dirs = [entry_dir])
-        dead = check_dead_code_static(index)
+        index = ArchCheck.build_source_index(dir, rank, dirs; entry_dirs = [entry_dir])
+        dead = ArchCheck.check_dead_code_static(index)
         syms = Set(f.symbol for f in dead)
         @test "gone" in syms                        # never called, not external -> dead
         @test !("keep" in syms) && !("entry" in syms)   # called / external
@@ -23,8 +23,8 @@
         write(joinpath(dir, "aa", "aa.jl"), "owner(x = helper()) = x\nhelper() = 1")
         rank = Dict(:Aa => 1)
         dir2mod = Dict("aa" => :Aa)
-        index = build_source_index(dir, rank, dir2mod)
-        dead = Set(f.symbol for f in check_dead_code_static(index))
+        index = ArchCheck.build_source_index(dir, rank, dir2mod)
+        dead = Set(f.symbol for f in ArchCheck.check_dead_code_static(index))
         @test !("helper" in dead)
         @test "owner" in dead
     end
@@ -37,11 +37,11 @@
         entry = joinpath(dir, "scripts")
         write(joinpath(entry, "run.jl"), "shipped()")
 
-        lonely = build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa))
-        @test "shipped" in Set(f.symbol for f in check_dead_code_static(lonely))
+        lonely = ArchCheck.build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa))
+        @test "shipped" in Set(f.symbol for f in ArchCheck.check_dead_code_static(lonely))
 
-        withentry = build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa); entry_dirs = [entry])
-        @test isempty(check_dead_code_static(withentry))
+        withentry = ArchCheck.build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa); entry_dirs = [entry])
+        @test isempty(ArchCheck.check_dead_code_static(withentry))
     end
     # a test/ entry dir does not keep a def alive: nothing production runs reaches it there
     mktempdir() do dir
@@ -52,16 +52,16 @@
         entry = joinpath(dir, "test")
         write(joinpath(entry, "runtests.jl"), "tested()")
 
-        index = build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa); entry_dirs = [entry])
-        @test "tested" in Set(f.symbol for f in check_dead_code_static(index))
+        index = ArchCheck.build_source_index(dir, Dict(:Aa => 1), Dict("aa" => :Aa); entry_dirs = [entry])
+        @test "tested" in Set(f.symbol for f in ArchCheck.check_dead_code_static(index))
     end
     # a def's own export line is not a use: exported with no caller is still dead
     mktempdir() do dir
         mkpath(joinpath(dir, "bb"))
         write(joinpath(dir, "bb", "Bb.jl"), "export uncalled\ninclude(\"impl.jl\")")
         write(joinpath(dir, "bb", "impl.jl"), "uncalled() = 1")
-        index = build_source_index(dir, Dict(:Bb => 1), Dict("bb" => :Bb))
-        @test "uncalled" in Set(f.symbol for f in check_dead_code_static(index))
+        index = ArchCheck.build_source_index(dir, Dict(:Bb => 1), Dict("bb" => :Bb))
+        @test "uncalled" in Set(f.symbol for f in ArchCheck.check_dead_code_static(index))
     end
     # a qualified call from another module counts as the use dead-code looks for
     mktempdir() do dir
@@ -73,8 +73,8 @@
         write(joinpath(dir, "cc", "caller.jl"), "user() = Aa.helper()")
         rank = Dict(:Aa => 1, :Cc => 2)
         dir2mod = Dict("aa" => :Aa, "cc" => :Cc)
-        index = build_source_index(dir, rank, dir2mod)
-        dead = Set(f.symbol for f in check_dead_code_static(index))
+        index = ArchCheck.build_source_index(dir, rank, dir2mod)
+        dead = Set(f.symbol for f in ArchCheck.check_dead_code_static(index))
         @test !("helper" in dead)
     end
 end

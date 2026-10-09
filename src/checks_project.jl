@@ -1,6 +1,7 @@
 # Parameterized checks a package configures: who may call a name, which public functions return a
 # sentinel, and where a string-keyed dictionary carries a value with no single layout.
 
+"""Configured through `gate(...; checks)` with the names, the definitions allowed to call them, and directories to skip. A call from outside that list is a finding."""
 struct CallerWhitelist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
     callees::C       # function names a body may reference only from an allowed def
     allowed::A       # (repo-relative path, def name) pairs that may reference them
@@ -14,6 +15,7 @@ function CallerWhitelist(callees, allowed, exempt_dirs = ())
     CallerWhitelist(names, pairs, prefixes)
 end
 
+"""Configured through `gate(...; checks)` with the directories to read. A public function there returns `nothing`, `Inf`, `NaN` or `missing`."""
 struct SentinelReturns{D<:NTuple{N,String} where N, S<:NTuple{M,Symbol} where M} <: Check
     directories::D   # repo-relative directories whose public functions are read
     sentinels::S     # literal results that encode absence
@@ -25,6 +27,7 @@ function SentinelReturns(directories, sentinels = (:nothing, :Inf, :NaN, :missin
     SentinelReturns(roots, literals)
 end
 
+"""Configured through `gate(...; checks)` with the directories to read. A string-keyed dictionary there holds a value with no single layout."""
 struct StringPayloads{D<:NTuple{N,String} where N} <: Check
     directories::D   # repo-relative directories read for string-keyed dictionaries
 end

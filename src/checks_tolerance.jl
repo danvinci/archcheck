@@ -1,5 +1,6 @@
 # A search whose predicate measures against a configured tolerance.
 
+"""Configured through `gate(...; checks)` with the tolerance names. A search predicate compares against one of them."""
 struct ToleranceSearch{N} <: Check
     tolerances::NTuple{N,Symbol}   # constants a search predicate may measure against
 end

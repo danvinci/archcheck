@@ -53,12 +53,12 @@ end
         (FReadMissing.x_span, Tuple{}),
         (FReadMissing.triangles, Tuple{}),
     )
-    missing = check_reader_set([FReadMissing], FReadMissing.Comp, missing_required; sites = NO_SITES)
+    missing = ArchCheck.check_reader_set([FReadMissing], FReadMissing.Comp, missing_required; sites = NO_SITES)
     syms = Set(f.symbol for f in missing)
     @test syms == Set(["Bare.classify", "Bare.section", "Bare.x_span", "Bare.triangles",
                       "Fam.classify", "Fam.section", "Fam.x_span", "Fam.triangles", "Flat.classify"])
     @test ev(only(f for f in missing if f.symbol == "Bare.classify"), :reader) == "classify"
-    @test length(unique(fingerprint.(missing))) == length(missing)
+    @test length(unique(ArchCheck.fingerprint.(missing))) == length(missing)
 
     complete_required = (
         (FReadComplete.classify, Tuple{FReadComplete.Point3D}),
@@ -66,7 +66,7 @@ end
         (FReadComplete.x_span, Tuple{}),
         (FReadComplete.triangles, Tuple{}),
     )
-    @test isempty(check_reader_set([FReadComplete], FReadComplete.Comp, complete_required; sites = NO_SITES))
+    @test isempty(ArchCheck.check_reader_set([FReadComplete], FReadComplete.Comp, complete_required; sites = NO_SITES))
 
     generic_required = (
         (FReadGeneric.classify, Tuple{FReadGeneric.Point3D}),
@@ -74,5 +74,5 @@ end
         (FReadGeneric.x_span, Tuple{}),
         (FReadGeneric.triangles, Tuple{}),
     )
-    @test isempty(check_reader_set([FReadGeneric], FReadGeneric.Comp, generic_required; sites = NO_SITES))
+    @test isempty(ArchCheck.check_reader_set([FReadGeneric], FReadGeneric.Comp, generic_required; sites = NO_SITES))
 end

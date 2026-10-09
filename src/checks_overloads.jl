@@ -1,5 +1,6 @@
 # Storage overloads: one function, two methods, one kernel for each array storage.
 
+"""Runs in `CHECKS`. Two methods of one function take the same values in different array storage."""
 struct StorageOverloads <: Check end
 
 kinds(::StorageOverloads) = (:storage_overload => :error,)

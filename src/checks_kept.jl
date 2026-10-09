@@ -1,5 +1,6 @@
 # A builder that drops the value it builds.
 
+"""Configured through `gate(...; checks)` with the builder. A method calls that builder and drops the value, while another method keeps it with `get!`."""
 struct KeptBuilders{D<:NTuple{N,String} where N} <: Check
     builder::Symbol    # qualified function name, the dotted name as written
     exempt_dirs::D     # repo-relative directories whose methods are skipped

@@ -14,7 +14,7 @@ function probed_context()
     layout = ArchCheck.package_layout(spine, root)
     rank = layout[1]
     dir2mod = layout[2]
-    index = build_source_index(src, rank, dir2mod; root)
+    index = ArchCheck.build_source_index(src, rank, dir2mod; root)
     Context(index, Probed, [Probed])
 end
 
@@ -287,7 +287,7 @@ function indexed_module(name::Symbol, source::String)
     layout = ArchCheck.package_layout(path, name)
     rank = layout[1]
     dir2mod = layout[2]
-    index = build_source_index(src, rank, dir2mod; root = name)
+    index = ArchCheck.build_source_index(src, rank, dir2mod; root = name)
     ctx = Context(index, mod, Module[mod])
     (; mod, ctx)
 end
@@ -397,7 +397,7 @@ function archcheck_context(; methods = nothing)
     layout = ArchCheck.package_layout(spine, root)
     rank = layout[1]
     dir2mod = layout[2]
-    index = build_source_index(src, rank, dir2mod; root)
+    index = ArchCheck.build_source_index(src, rank, dir2mod; root)
     ordered = sort(collect(keys(index.rank)); by = name -> index.rank[name])
     mods = Module[]
     for name in ordered

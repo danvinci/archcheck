@@ -18,7 +18,7 @@ function index_tree(dir, name)
     layout = ArchCheck.package_layout(spine, root)
     rank = layout[1]
     dir2mod = layout[2]
-    build_source_index(src, rank, dir2mod)
+    ArchCheck.build_source_index(src, rank, dir2mod)
 end
 
 function typed_entry(mod, name, argument)
@@ -201,7 +201,7 @@ function call_findings()
     modules = (CallProbe,)
     graph = ArchCheck.method_graph(entries, modules)
     ctx = ArchCheck.Context(CALL_INDEX, CallProbe, [CallProbe]; methods = graph)
-    run_checks(ctx, (check,))
+    ArchCheck.run_checks(ctx, (check,))
 end
 
 function ensure_target(targets, callee)
@@ -420,7 +420,7 @@ function oracle_records(spec)
     modules = (spec.mod,)
     graph = ArchCheck.method_graph(entries, modules)
     ctx = ArchCheck.Context(spec.index, spec.mod, [spec.mod]; methods = graph)
-    found = run_checks(ctx, (check,))
+    found = ArchCheck.run_checks(ctx, (check,))
     overlap_records(found)
 end
 
@@ -482,7 +482,7 @@ function run_kept(loaded, root, check)
     nested = ArchCheck.submodules(root)
     mods = [root; nested]
     ctx = ArchCheck.Context(loaded.index, root, mods)
-    run_checks(ctx, (check,))
+    ArchCheck.run_checks(ctx, (check,))
 end
 
 @testset "calls" begin
@@ -545,7 +545,7 @@ end
     @testset "overlapping calls need entries" begin
         ctx = ArchCheck.Context(CALL_INDEX, CallProbe, [CallProbe])
         check = (ArchCheck.OverlappingCalls(),)
-        @test_throws ArgumentError("OverlappingCalls needs entries") run_checks(ctx, check)
+        @test_throws ArgumentError("OverlappingCalls needs entries") ArchCheck.run_checks(ctx, check)
     end
 
     @testset "a generated call graph matches the reach the generator recorded" begin

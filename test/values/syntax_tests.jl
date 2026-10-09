@@ -9,7 +9,7 @@ function renamed_marker(source)
 end
 
 function function_kids(source)
-    tree = parse_file(source, "probe.jl")
+    tree = ArchCheck.parse_file(source, "probe.jl")
     func = first(ArchCheck.child_nodes(tree))
     ArchCheck.child_nodes(func)
 end
@@ -25,7 +25,7 @@ function digest_stable(source)
 end
 
 function marker_is_ref(source)
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     :marker in scan.refs[:probe]
 end
 
@@ -94,7 +94,7 @@ function generated_scope(rng)
 end
 
 function marker_referenced(source)
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     for names in values(scan.refs)
         :marker in names && return true
     end
@@ -111,7 +111,7 @@ end
 end
 
 function used_pairs(source)
-    scan = scan_defs(source)
+    scan = ArchCheck.scan_defs(source)
     site = MethodSite(:probe, 1)
     calls = scan.callsites[site]
     pairs = Tuple{Symbol,Bool}[]

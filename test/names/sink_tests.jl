@@ -29,7 +29,7 @@ end
     high_calls[:uses_run] = Set([:LowRun])
     bc = Dict(:FakeHi => high_calls)
     repo = normpath(joinpath(@__DIR__, "..", ".."))
-    sink = check_sinkable([FakeLo, FakeHi], Dict(:FakeLo => [1], :FakeHi => [2]), bc, NO_SITES; repo)
+    sink = ArchCheck.check_sinkable([FakeLo, FakeHi], Dict(:FakeLo => [1], :FakeHi => [2]), bc, NO_SITES; repo)
     syms = Set(f.symbol for f in sink)
     @test "takes_low" in syms                       # footprint is the lower module alone -> candidate
     @test !("helper_low" in syms)                   # same footprint, but called at home -> stays
@@ -41,22 +41,22 @@ end
     @test ev(flagged, :touches) == "FakeLo"
     @test ev(flagged, :sinks_to) == "FakeLo"                # one module in the footprint names it
     # no indexed site here, so this is the reflected fallback - it must carry a repo-relative path,
-    # since `file` is part of the fingerprint that suppression and the new/fixed delta key on
+    # since `file` is part of the ArchCheck.fingerprint that suppression and the new/fixed delta key on
     @test flagged.file == relpath(@__FILE__, repo)
     # a Union alias has no parentmodule: the module owning its binding is the one the body touches
     run_user = only(f for f in sink if f.symbol == "uses_run")
     @test ev(run_user, :sinks_to) == "FakeLo"
     # a footprint spanning two modules names no destination: the def may belong in a shared module
     # nobody has written yet
-    wide = check_sinkable([FakeLo, FakeMid, FakeHi], Dict(:FakeLo => [1], :FakeMid => [2], :FakeHi => [3]), bc, NO_SITES; repo)
+    wide = ArchCheck.check_sinkable([FakeLo, FakeMid, FakeHi], Dict(:FakeLo => [1], :FakeMid => [2], :FakeHi => [3]), bc, NO_SITES; repo)
     spanning = only(f for f in wide if f.symbol == "spans_two")
     @test ev(spanning, :touches) == "FakeLo FakeMid"
     @test !any(k === :sinks_to for (k, _) in spanning.evidence)
 
     # duplicate-owner: same name, different objects, two modules -> collision; single owner -> clean
-    dup = check_dup_owners([FDupA, FDupB], Dict(:FDupA => [1], :FDupB => [2]))
+    dup = ArchCheck.check_dup_owners([FDupA, FDupB], Dict(:FDupA => [1], :FDupB => [2]))
     @test length(dup) == 1 && dup[1].kind === :duplicate_owner && dup[1].symbol == "dup"
-    @test isempty(check_dup_owners([FDupA], Dict(:FDupA => [1])))
+    @test isempty(ArchCheck.check_dup_owners([FDupA], Dict(:FDupA => [1])))
 end
 
 @testset "file-sinkable (advisory)" begin
@@ -64,8 +64,8 @@ end
     calls = Dict(:helper => Set([:a, :b]), :a => Set{Symbol}(), :b => Set{Symbol}())
 
     # helper in x.jl calls only into y.jl, which ranks BELOW it -> it belongs down there
-    down = CallGraph(:M, [:helper, :a, :b], files, calls, calls, Dict("y.jl" => 1, "x.jl" => 2))
-    fs = only(check_file_sinkable(down, NO_SITES))
+    down = ArchCheck.CallGraph(:M, [:helper, :a, :b], files, calls, calls, Dict("y.jl" => 1, "x.jl" => 2))
+    fs = only(ArchCheck.check_file_sinkable(down, NO_SITES))
     @test fs.symbol == "helper" && fs.kind === :file_sinkable
     @test ev(fs, :callees_in) == "y.jl"
     
@@ -73,15 +73,15 @@ end
     @test ev(fs, :callers_in_own_file) == "0"               # nothing in x.jl calls helper
 
     # same calls, but y.jl ranks above x.jl: an up-rank edge belongs to the back-edge check
-    up = CallGraph(:M, [:helper, :a, :b], files, calls, calls, Dict("x.jl" => 1, "y.jl" => 2))
-    @test isempty(check_file_sinkable(up, NO_SITES))
-    @test length(check_file_backedges(up)) == 1        # reported once, by the check that owns it
+    up = ArchCheck.CallGraph(:M, [:helper, :a, :b], files, calls, calls, Dict("x.jl" => 1, "y.jl" => 2))
+    @test isempty(ArchCheck.check_file_sinkable(up, NO_SITES))
+    @test length(ArchCheck.check_file_backedges(up)) == 1        # reported once, by the check that owns it
 
     # callees spanning two files are an integrator, so the check reports nothing
     spread = Dict(:h => Set([:a, :b]), :a => Set{Symbol}(), :b => Set{Symbol}())
-    cg2 = CallGraph(:M, [:h, :a, :b], Dict(:h => "x.jl", :a => "y.jl", :b => "z.jl"), spread, spread,
+    cg2 = ArchCheck.CallGraph(:M, [:h, :a, :b], Dict(:h => "x.jl", :a => "y.jl", :b => "z.jl"), spread, spread,
                     Dict("y.jl" => 1, "z.jl" => 2, "x.jl" => 3))
-    @test isempty(check_file_sinkable(cg2, NO_SITES))
+    @test isempty(ArchCheck.check_file_sinkable(cg2, NO_SITES))
 
     mktempdir() do dir
         mkpath(joinpath(dir, "m"))
@@ -108,13 +108,13 @@ end
                 Shadow(helper) = new(helper(1))
             end
             """)
-        index = build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        cg = build_call_graph(index, :M)
+        index = ArchCheck.build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
+        cg = ArchCheck.build_call_graph(index, :M)
         for owner in (:Long, :Short, :Parametric)
             @test !(owner in cg.funcs)
         end
         @test !(:helper in cg.calls[:Shadow])
-        @test isempty(check_file_sinkable(cg, def_sites(index)))
+        @test isempty(ArchCheck.check_file_sinkable(cg, ArchCheck.def_sites(index)))
     end
 
     mktempdir() do dir
@@ -128,9 +128,9 @@ end
             """)
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
-        index = build_source_index(dir, rank, dir2mod)
-        cg = build_call_graph(index, :M)
-        found = check_file_sinkable(cg, def_sites(index))
+        index = ArchCheck.build_source_index(dir, rank, dir2mod)
+        cg = ArchCheck.build_call_graph(index, :M)
+        found = ArchCheck.check_file_sinkable(cg, ArchCheck.def_sites(index))
         @test !any(f -> f.symbol == "helper", found)
         stray = only(f for f in found if f.symbol == "stray")
         @test ev(stray, :callees_in) == "low.jl"
@@ -141,9 +141,9 @@ end
 @testset "extract-candidate (sinkable density)" begin
     sink = [Finding(:Geo, :sinkable, "surface.jl", "a", ""), Finding(:Geo, :sinkable, "surface.jl", "b", ""),
             Finding(:Geo, :sinkable, "surface.jl", "c", ""), Finding(:Geo, :sinkable, "resolve.jl", "d", "")]
-    ec = only(check_extract_candidates(sink; min_defs = 3))
+    ec = only(ArchCheck.check_extract_candidates(sink; min_defs = 3))
     @test ec.file == "surface.jl" && ec.kind === :extract_candidate
     @test ev(ec, :defs) == "3"
     # below threshold -> nothing
-    @test isempty(check_extract_candidates([Finding(:Geo, :sinkable, "x.jl", "a", "")]; min_defs = 3))
+    @test isempty(ArchCheck.check_extract_candidates([Finding(:Geo, :sinkable, "x.jl", "a", "")]; min_defs = 3))
 end

@@ -95,7 +95,7 @@ function role_index(files, rank, dir2mod)
         mkpath(dirname(path))
         write(path, text)
     end
-    build_source_index(src, rank, dir2mod)
+    ArchCheck.build_source_index(src, rank, dir2mod)
 end
 
 function role_rows(found)

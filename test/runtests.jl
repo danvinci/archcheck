@@ -25,7 +25,7 @@ ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
 # every engine check at its declared severity, with no consumer promotion
 function default_severity()
-    engine = (CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))
+    engine = (ArchCheck.CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))
     ArchCheck.severities(engine)
 end
 

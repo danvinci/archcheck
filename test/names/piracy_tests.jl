@@ -26,7 +26,7 @@ end
 @testset "module piracy: a method on a foreign function needs an argument type its module owns" begin
     repo = normpath(joinpath(@__DIR__, ".."))
     here = relpath(@__FILE__, repo)
-    found = check_module_piracy([FFam, FFam.SibA, FFam.SibB]; repo)
+    found = ArchCheck.check_module_piracy([FFam, FFam.SibA, FFam.SibB]; repo)
     by_signature = Dict(ev(f, :signature) => f for f in found)
     flagged = Set((f.mod, ev(f, :signature)) for f in found)
     sig(parts...) = string(Tuple{parts...})

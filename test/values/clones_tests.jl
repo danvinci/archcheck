@@ -19,7 +19,7 @@ end
 # Node count of `expr` as a short-form method body. Independent of the check.
 function expression_nodes(expr)
     source = "f(v1, v2, v3, v4) = " * expr
-    tree = parse_file(source, "count.jl")
+    tree = ArchCheck.parse_file(source, "count.jl")
     method = CLONE_JS.children(tree)[1]
     body = CLONE_JS.children(method)[2]
     count_syntax(body)
@@ -80,12 +80,12 @@ function clones_index(dir, filename, source)
     layout = ArchCheck.package_layout(joinpath(src, "Flat.jl"), :Flat)
     rank = layout[1]
     dir2mod = layout[2]
-    build_source_index(src, rank, dir2mod)
+    ArchCheck.build_source_index(src, rank, dir2mod)
 end
 
 function clone_findings(index; min_nodes)
     check = ArchCheck.ExpressionClones(; min_nodes = min_nodes)
-    run_checks((index = index,), (check,))
+    ArchCheck.run_checks((index = index,), (check,))
 end
 
 function search_record(finding)
@@ -245,7 +245,7 @@ end
     mktempdir() do dir
         index = clones_index(dir, "tol.jl", source)
         check = ArchCheck.ToleranceSearch((:GEOM_EPS,))
-        found = run_checks((index = index,), (check,))
+        found = ArchCheck.run_checks((index = index,), (check,))
         got = Set(search_record(finding) for finding in found)
         expected = Set([
             ("direct", "findfirst", "GEOM_EPS"),

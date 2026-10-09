@@ -1,5 +1,6 @@
 # Methods the workload left uncompiled. A resolved call, or a name left to runtime dispatch, accounts for one the run skipped.
 
+"""Configured through `gate(...; checks)` beside a workload. A method the workload left uncompiled, and that no resolved call names, is a finding. `public_is_entry` counts an exported or public name as reached."""
 struct UnreachedMethods <: Check
     public_is_entry::Bool   # an exported or public name counts as an entry point
 end

@@ -27,7 +27,7 @@ function project_context(files, rank, dir2mod, mods)
         mkpath(dirname(path))
         write(path, text)
     end
-    index = build_source_index(src, rank, dir2mod)
+    index = ArchCheck.build_source_index(src, rank, dir2mod)
     ArchCheck.Context(index, Main, mods)
 end
 

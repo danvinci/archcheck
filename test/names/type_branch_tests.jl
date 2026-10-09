@@ -38,8 +38,8 @@
             """)
         rank = Dict(:M => 1)
         dir2mod = Dict("m" => :M)
-        index = build_source_index(dir, rank, dir2mod)
-        found = run_checks((index = index,), (ArchCheck.TypeBranches(),))
+        index = ArchCheck.build_source_index(dir, rank, dir2mod)
+        found = ArchCheck.run_checks((index = index,), (ArchCheck.TypeBranches(),))
         @test all(f -> f.kind === :type_branch && f.mod === :M, found)
         # `&&` and `||` pick a path only as a statement; as an operand or a result they compute a Bool
         flagged = Set([("flagged_if:shape", 3), ("flagged_ternary:label", 9), ("flagged_typeof:shape", 13),

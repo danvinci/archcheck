@@ -1,5 +1,6 @@
 # Expression clones: one syntax tree, locals renamed in order of appearance.
 
+"""Runs in `CHECKS`. The same expression, with locals renamed in order of appearance, is written in two or more methods."""
 Base.@kwdef struct ExpressionClones <: Check
     min_nodes::Int = 20   # smallest subtree that can form a group, in syntax nodes
 end
