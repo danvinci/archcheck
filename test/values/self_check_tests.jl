@@ -69,3 +69,33 @@ end
         @test Set(records) == Set([("stray", :file_sinkable, "c.jl", "1/4")])
     end
 end
+
+@testset "self-check: every exported check is run or named inapplicable" begin
+    gate_file = joinpath(@__DIR__, "..", "self_gate.jl")
+    if !isdefined(@__MODULE__, :self_checks)
+        include(gate_file)
+    end
+    held = Set{Any}()
+    for pair in NOT_APPLICABLE
+        push!(held, pair[1])
+    end
+    missing = String[]
+    for name in names(ArchCheck)
+        value = getfield(ArchCheck, name)
+        body = value isa UnionAll ? Base.unwrap_unionall(value) : value
+        body isa DataType || continue
+        body <: Check || continue
+        isabstracttype(body) && continue
+        ran = false
+        for check in self_checks()
+            if check isa value
+                ran = true
+            end
+        end
+        ran && continue
+        value in held && continue
+        push!(missing, string(name))
+    end
+    sort!(missing)
+    @test missing == String[]
+end
