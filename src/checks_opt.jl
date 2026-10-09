@@ -1,7 +1,8 @@
 # Opt-analysis port: a corpus of concrete calls run through JET.report_opt. No-op until JET is loaded.
 
-struct OptEntry{F<:Function, A<:Tuple}
-    f::F                                # the function the corpus names
+"""One concrete call in the opt-analysis corpus: a callable and its argument types as a `Tuple` type."""
+struct OptEntry{F, A<:Tuple}
+    f::F                                # the callable the corpus names: a function or a type
     argtypes::Type{A}                   # concrete argument types, one specialization
     symbol::String                      # Finding.symbol; includes the signature so Dual and Float64 stay distinct
 end
@@ -11,7 +12,7 @@ function entry_symbol(f, ::Type{T}) where {T <: Tuple}
     "$(nameof(f))($args)"
 end
 
-function OptEntry(f::F, argtypes::Type{A}) where {F<:Function, A<:Tuple}
+function OptEntry(f::F, argtypes::Type{A}) where {F, A<:Tuple}
     symbol = entry_symbol(f, argtypes)
     OptEntry{F,A}(f, argtypes, symbol)
 end
