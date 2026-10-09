@@ -51,15 +51,15 @@ end
 
 # stale-export: Julia accepts `export foo` with no `foo`, so a deleted definition leaves the name in
 # names(M) forever and no load ever complains.
-function check_stale_exports(mods)
+function check_stale_exports(mods; repo)
     findings = Finding[]
     for M in mods
         owner = module_key(M)
-        path = module_file(owner)
+        path, line = module_site(M, repo)
         for n in names(M)
             n === nameof(M) && continue
             isdefined(M, n) && continue
-            found = Finding(owner, :stale_export, path, string(n), "exported name is never defined")
+            found = Finding(owner, :stale_export, path, string(n), line, "exported name is never defined")
             push!(findings, found)
         end
     end

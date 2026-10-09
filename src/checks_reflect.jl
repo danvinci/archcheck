@@ -16,15 +16,6 @@ function module_key(mod::Module)
     Symbol(text)
 end
 
-# A module key's wrapper path by layout convention, for a finding with no single source line:
-# `Geometry.Meshes` -> src/geometry/meshes/Meshes.jl.
-function module_file(key::Symbol)
-    text = string(key)
-    segments = split(text, '.')
-    dirs = lowercase(join(segments, "/"))
-    "src/" * dirs * "/" * last(segments) * ".jl"
-end
-
 # The modules defined directly inside a module.
 function submodules(mod::Module)
     found = Module[]
@@ -39,16 +30,16 @@ end
 
 # unranked-module: a loaded submodule no wrapper declares by the spine rule, so the index files it under its
 # parent and no rank rule reaches it.
-function check_module_corpus(mods, rank)
+function check_module_corpus(mods, rank; repo)
     findings = Finding[]
     for mod in mods
         owner = module_key(mod)
-        file = module_file(owner)
         for child in submodules(mod)
             haskey(rank, module_key(child)) && continue
             name = string(nameof(child))
+            file, line = module_site(child, repo)
             detail = "a submodule its wrapper does not declare as an include followed by a using"
-            push!(findings, Finding(owner, :unranked_module, file, name, 0, detail))
+            push!(findings, Finding(owner, :unranked_module, file, name, line, detail))
         end
     end
     findings
@@ -120,12 +111,19 @@ function split_signature(@nospecialize(sig))
     (params[slot], params[slot + 1:end])
 end
 
-# A method's definition site, repo-relative like an indexed site. A system image records a stdlib's files at the
+# A path loaded code recorded, repo-relative like an indexed site. A system image records a stdlib's files at the
 # build machine's path; the fixup maps them to this installation.
-function method_site(method::Method, repo)
-    recorded = string(method.file)
-    local_path = Base.fixup_stdlib_path(recorded)
-    (relpath(local_path, repo), Int(method.line))
+function recorded_path(file, repo)
+    local_path = Base.fixup_stdlib_path(string(file))
+    relpath(local_path, repo)
+end
+
+method_site(method::Method, repo) = (recorded_path(method.file, repo), Int(method.line))
+
+# Where a module's `module` line sits.
+function module_site(mod::Module, repo)
+    location = Base.moduleloc(mod)
+    (recorded_path(location.file, repo), location.line)
 end
 
 # A scan site names a method by its own name, or by a qualified name ending in it (`Base.show`).

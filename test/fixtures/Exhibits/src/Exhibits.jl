@@ -4,6 +4,12 @@ __precompile__(false)
 
 module Exhibits
 
+# stale_export: the root exports a name it does not define
+export not_here
+
+# Julia runs `__init__` on load with no reference to it, so it stays quiet
+__init__() = nothing
+
 include("low/Low.jl")
 using .Low: Brick
 include("shape/Shape.jl")

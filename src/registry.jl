@@ -142,7 +142,7 @@ struct TypeBranches <: Check end
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.
 function run(::Corpus, ctx)
     files = check_corpus(ctx.index)
-    modules = check_module_corpus(ctx.mods, ctx.index.rank)
+    modules = check_module_corpus(package_modules(ctx), ctx.index.rank; repo = ctx.index.repo)
     vcat(files, modules)
 end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,
@@ -172,7 +172,7 @@ kinds(::DeadCode) = (:dead_code => :advisory,)
 run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)
 kinds(::BlanketExports) = (:blanket_export => :advisory,)
 
-run(::StaleExports, ctx) = check_stale_exports(ctx.mods)
+run(::StaleExports, ctx) = check_stale_exports(package_modules(ctx); repo = ctx.index.repo)
 kinds(::StaleExports) = (:stale_export => :advisory,)
 
 run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods, nameof(ctx.root); entry_dirs = ctx.entry_dirs)
