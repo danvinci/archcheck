@@ -38,23 +38,6 @@ end
 # The bare name of Base's join, unbound in the method; a parameter named `wait` is the caller's value.
 is_free_join(node, bound) = node.val in (:fetch, :wait) && !(node.val in bound)
 
-keyword_value(param) = JS.kind(param) == K"=" ? child_nodes(param)[2] : param
-
-# The values a call passes, keyword values included; the callee and operator tokens are left out.
-function passed_values(call)
-    passed = JS.SyntaxNode[]
-    is_operator = is_operator_call(call)
-    for (index, child) in enumerate(child_nodes(call))
-        if JS.kind(child) == K"parameters"
-            params = child_nodes(child)
-            isnothing(params) || append!(passed, keyword_value.(params))
-        elseif is_operator ? !operator_token(child) : index > 1
-            push!(passed, child)
-        end
-    end
-    passed
-end
-
 function passes_join(call, bound)
     passed = passed_values(call)
     any(value -> is_free_join(value, bound), passed)
