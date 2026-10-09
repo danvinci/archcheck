@@ -24,7 +24,7 @@ By default (`ArchCheck.CHECKS`), the gate holds that:
 - Every file parses, every include resolves, and the package spine ranks every file and module (`Corpus`).
 - Modules and files depend only on what loads before them, with no cycles; a module may use the modules that enclose it (`ModuleBackEdges`, `ModuleCycles`, `FileBackEdges`, and `strict = true` to hold enclosing modules to the order too). A definition that needs only lower layers is reported as one to move down (`Sinkable`, `FileSinkable`).
 - Code reaches another module through its exported or `public` names, declared in its `using` and `import` lines, and reads no field of a struct another module owns (`ReachesInternal`, `DeclaredNames`, `DeclaredModules`, `PrivateImports`, `ForeignFields`).
-- A method extends only functions its owner marks public and documents, and never pirates (`DeclaredExtensions`, `ModulePiracy`).
+- A method on a function from outside the package takes a type the package owns (`ModulePiracy`, and `strict = true` to judge each module alone).
 - Each exported name has one owner and a definition, nothing is exported wholesale, and every definition is used (`OwnerUniqueness`, `StaleExports`, `BlanketExports`, `DeadCode`).
 - Struct fields have concrete types, closures do not box captured locals, and dispatch picks a method's path rather than a runtime type test (`AbstractFields`, `BoxedCaptures`, `TypeBranches`).
 - No function returns a bare tuple of three or more values, no expression is copied across methods, and no function takes the same values in two array storages (`TupleReturns`, `ExpressionClones`, `StorageOverloads`).
@@ -35,6 +35,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 |---|---|
 | `CallerWhitelist` | a call to a listed function from outside its allowed callers |
 | `Independent` | a reference between modules declared independent |
+| `DeclaredExtensions` | a method on another module's function that its owner leaves unmarked public or undocumented |
 | `ReaderSet` | a concrete subtype missing a method its supertype requires |
 | `OptAnalysis` | a listed call whose inferred code dispatches at runtime or boxes a local |
 | `OverlappingCalls` | two calls on one path that ask one question |

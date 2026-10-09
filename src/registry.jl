@@ -145,7 +145,7 @@ end
 struct DeclaredNames <: Check end
 """Runs in `CHECKS`. A reference reaches a module the wrapper's using and import lines omit."""
 struct DeclaredModules <: Check end
-"""Runs in `CHECKS`. A method is added to a function its owner leaves unmarked public or undocumented."""
+"""Configured through `gate(...; checks)` by a package that holds its modules apart. A method is added to a function another of its modules owns and leaves unmarked public or undocumented."""
 struct DeclaredExtensions <: Check end
 """Runs in `CHECKS`. Code reads a field of a struct another module owns."""
 struct ForeignFields <: Check end

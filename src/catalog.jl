@@ -17,7 +17,6 @@ const CHECKS = (
     PrivateImports(),
     DeclaredNames(),
     DeclaredModules(),
-    DeclaredExtensions(),
     ForeignFields(),
     BoxedCaptures(),
     AbstractFields(),
