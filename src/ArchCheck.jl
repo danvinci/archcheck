@@ -66,7 +66,7 @@ export UnreachedMethods, Rebuilds, TwoNames, Waits, UnreadWaits
 export Derived, Probes
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation, ProbeRecord, WaitRecord
-public gate, run, kinds, phase
+public gate, run, kinds, phase, CHECKS
 public scan_defs, scan_modrefs, CallGraph, ModRef, build_module_graph
 
 end # module ArchCheck

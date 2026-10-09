@@ -1,6 +1,4 @@
-# The default check set, once every check is defined.
-# Checks a package configures (caller lists, tolerance names, sentinel directories) join through `gate`'s `checks`.
-
+"""The checks `gate` runs by default. Checks a package configures (caller lists, tolerance names, sentinel directories) join them through `gate`'s `checks`."""
 const CHECKS = (
     Corpus(),
     ModuleBackEdges(),
