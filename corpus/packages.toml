@@ -11,8 +11,8 @@ DataStructures = { version = "0.19.6", errors = [] }
 FillArrays = { version = "1.17.1", errors = [] }
 ForwardDiff = { version = "1.4.6", errors = [] }
 JSON = { version = "1.10.0", errors = [] }
-# The root and its Tokenize module each export `tokenize` and `untokenize`, bound to different functions.
-JuliaSyntax = { version = "1.0.2", errors = ["duplicate_owner"] }
+# Tokenize, a module block the root includes, exports its own `tokenize`; the root and what it encloses act as one owner.
+JuliaSyntax = { version = "1.0.2", errors = [] }
 
 # Layouts the rows above lack.
 # src/precompile.jl sits outside the spine: its include is commented out.

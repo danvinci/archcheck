@@ -49,6 +49,12 @@ using .Bb
 
 const SOLO_NAME = load_package("SoloName", "export present\npresent() = 1\n")
 
+const NESTED_NAME = load_package("NestedName", """
+export tokens
+tokens() = 1
+include("lexer.jl")
+""", ["lexer.jl" => "module Lexer\nexport tokens\ntokens() = 2\nend\n"])
+
 const EXTRACT_BATCH = load_package("ExtractBatch", """
 include("lo/Lo.jl")
 using .Lo
@@ -174,6 +180,14 @@ end
     wide = only(finding for finding in found if finding.symbol == "spans_two")
     @test ev(wide, :touches) == "Lo Mid"
     @test !any(pair -> pair.first === :sinks_to, wide.evidence)
+end
+
+@testset "a module and one it encloses exporting one name collide only when strict" begin
+    ctx = case_context(NESTED_NAME)
+    @test isempty(ArchCheck.run(OwnerUniqueness(), ctx))
+    strict_found = ArchCheck.run(OwnerUniqueness(strict = true), ctx)
+    nested = only(strict_found)
+    @test ev(nested, :owners) == "NestedName Lexer"
 end
 
 @testset "two modules exporting one name bound to different objects collide" begin
