@@ -1,13 +1,9 @@
 # Replay real packages: one environment holds each listed package at its pinned release, and one process runs the
 # default gate on each.
+# usage: julia --project=. corpus/packages.jl corpus/packages.toml [--cache DIR]
 using JSON
 using TOML
 using UUIDs
-
-include("cli.jl")
-include("export.jl")
-
-const USAGE = "usage: julia --project=. corpus/packages.jl <packages.toml> [--cache DIR]"
 
 struct ListedPackage
     name::String                       # package and module name
@@ -20,6 +16,30 @@ struct PackageRun
     advisories::Int                    # advisory findings the gate reported
     seconds::Float64                   # load and gate wall time (s)
     error_text::String                 # why loading or gating threw; empty when the gate ran
+end
+
+function take_args(args)
+    config = ""
+    cache = joinpath(homedir(), ".cache", "archcheck-packages")
+    index = 1
+    while index <= length(args)
+        arg = args[index]
+        if arg == "--cache"
+            cache = args[index + 1]
+            index += 2
+        else
+            config = arg
+            index += 1
+        end
+    end
+    isempty(config) && throw(ArgumentError("usage: julia --project=. corpus/packages.jl <packages.toml> [--cache DIR]"))
+    (config = config, cache = cache)
+end
+
+function archcheck_root()
+    project = Base.active_project()
+    isnothing(project) && throw(ArgumentError("activate the ArchCheck project first"))
+    dirname(project)
 end
 
 function parse_packages(path)
@@ -40,15 +60,28 @@ end
 # One release as Pkg spells it, `Name@1.2.3`.
 release_text(package) = string(package.name, "@", package.version)
 
-function prepare_packages(listed, env, archcheck, label)
+# The environment is rebuilt only when what it holds changes: the ArchCheck tree and every pinned release.
+function prepare_env(listed, env, archcheck)
     arguments = [archcheck]
     for package in listed
         push!(arguments, release_text(package))
     end
+    stamp_path = env * ".stamp"
+    stamp = join(arguments, "\n")
+    if isfile(stamp_path) && read(stamp_path, String) == stamp
+        println("environment reused")
+        return
+    end
+    rm(env; force = true, recursive = true)
+    mkpath(env)
+    identity = uuid4()
+    write(joinpath(env, "Project.toml"), "name = \"PackagesEnv\"\nuuid = \"$identity\"\n")
     prepare = joinpath(@__DIR__, "prepare_packages.jl")
-    stamp = env * ".stamp"
-    mkpath(dirname(env))
-    prepare_env(label, env, prepare, arguments, stamp)
+    withenv("JULIA_PKG_PRECOMPILE_AUTO" => "0") do
+        run(`julia --project=$env $prepare $arguments`)
+    end
+    write(stamp_path, stamp)
+    println("environment built")
 end
 
 function read_runs(results)
@@ -66,9 +99,9 @@ function read_runs(results)
 end
 
 # A package the gate process did not reach fails with the process's exit code.
-function gate_all(listed, env, directory)
-    results = joinpath(directory, "results.jsonl")
-    log = joinpath(directory, "gate.log")
+function gate_all(listed, env, cache)
+    results = joinpath(cache, "results.jsonl")
+    log = joinpath(cache, "gate.log")
     rm(results; force = true)
     script = joinpath(@__DIR__, "gate_packages.jl")
     names = [package.name for package in listed]
@@ -97,6 +130,16 @@ function result_cells(package, result)
     [package.name, package.version, expected, reported, string(result.advisories), string(rounded), verdict]
 end
 
+# The first line is the header; each column pads to its widest cell.
+function print_cells(io, lines)
+    column_count = length(first(lines))
+    widths = [maximum(line -> length(line[index]), lines) for index in 1:column_count]
+    for line in lines
+        padded = [rpad(line[index], widths[index]) for index in 1:column_count]
+        println(io, join(padded, "  "))
+    end
+end
+
 function print_package_failure(io, package, result)
     expected = kinds_cell(package.expected)
     reported = reported_cell(result)
@@ -107,13 +150,13 @@ function print_package_failure(io, package, result)
 end
 
 function main(args)
-    taken = take_args(args, USAGE)
+    taken = take_args(args)
     listed = parse_packages(taken.config)
     archcheck = archcheck_root()
-    directory = joinpath(taken.cache, taken.label)
-    env = joinpath(directory, "env")
-    prepare_packages(listed, env, archcheck, taken.label)
-    results = gate_all(listed, env, directory)
+    mkpath(taken.cache)
+    env = joinpath(taken.cache, "env")
+    prepare_env(listed, env, archcheck)
+    results = gate_all(listed, env, taken.cache)
     headers = ["package", "version", "expected", "reported", "advisories", "seconds", "verdict"]
     lines = [headers]
     for (package, result) in zip(listed, results)
