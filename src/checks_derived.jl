@@ -188,20 +188,6 @@ function producer_memoized(placed_forms)
     false
 end
 
-function resolve_type(mod, node)
-    if JS.kind(node) == K"curly"
-        kids = child_nodes(node)
-        isnothing(kids) && return nothing
-        head = first(kids)
-        return resolve_type(mod, head)
-    end
-    path = dotted_names(node)
-    isnothing(path) && return nothing
-    value = constant_value(mod, path)
-    value isa Type || return nothing
-    value
-end
-
 function is_mutable_key(key_type::DataType)
     isstructtype(key_type) || return false
     ismutabletype(key_type) || return false
@@ -231,7 +217,9 @@ function note_dict!(problems, node, mod)
     isnothing(params) && return
     length(params) < 2 && return
     key_node = params[2]
-    key_type = resolve_type(mod, key_node)
+    applied = written_type(mod, key_node)
+    isnothing(applied) && return
+    key_type = type_head(applied)
     isnothing(key_type) && return
     is_mutable_key(key_type) || return
     push!(problems, "identity_cache")

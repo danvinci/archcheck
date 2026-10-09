@@ -77,10 +77,9 @@ function positional_arguments(call)
     found
 end
 
+# The value a keyword passes. A bare `=` has no value child, so the keyword node stands for it.
 function keyword_value(param)
-    JS.kind(param) == K"=" || return param
-    children = child_nodes(param)
-    children[2]
+    value_child(param)
 end
 
 # Every value a call passes: its positional arguments, then each keyword's value.

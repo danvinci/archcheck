@@ -153,57 +153,12 @@ function is_dict_head(node)
     children[2].val === :Dict
 end
 
-# The type a node names, parameters included. Nothing when the name is unresolved in `mod`.
-function applied_type(mod, node)
-    if JS.kind(node) == K"curly"
-        parts = child_nodes(node)
-        isnothing(parts) && return nothing
-        isempty(parts) && return nothing
-        head_node = first(parts)
-        head = applied_type(mod, head_node)
-        head isa Type || return nothing
-        parameters = Any[]
-        for part in parts[2:end]
-            parameter = type_parameter(mod, part)
-            isnothing(parameter) && return nothing
-            push!(parameters, parameter)
-        end
-        return apply_type(head, parameters)
-    end
-    path = dotted_names(node)
-    isnothing(path) && return nothing
-    value = constant_value(mod, path)
-    value isa Type || return nothing
-    value
-end
-
-# A value parameter is the integer itself (`NTuple{2,Int}`); every other parameter is a type.
-function type_parameter(mod, node)
-    literal = node.val
-    literal isa Integer && return literal
-    applied_type(mod, node)
-end
-
-type_application_failed(::TypeError) = true
-type_application_failed(::MethodError) = true
-type_application_failed(::ArgumentError) = true
-type_application_failed(::Any) = false
-
-function apply_type(head, parameters)
-    try
-        head{parameters...}
-    catch err
-        type_application_failed(err) || rethrow()
-        nothing
-    end
-end
-
 # false when the resolved value has no single layout. nothing when every module leaves the name unresolved.
 # A where clause is a family of types, so the value it names has no single layout.
 function value_concreteness(modules, node)
     JS.kind(node) == K"where" && return false
     for mod in modules
-        named = applied_type(mod, node)
+        named = written_type(mod, node)
         isnothing(named) && continue
         return isconcretetype(named)
     end

@@ -140,42 +140,90 @@ function constant_value(mod::Module, path)
     value
 end
 
-# The type an annotation names in `mod`: a name or a dotted path, parameters dropped, or the Union of the types its
-# members name. A `where` variable names none, and so does a Union with a member that names none.
-function annotation_type(mod::Module, node, typevars)
+type_application_failed(::TypeError) = true
+type_application_failed(::MethodError) = true
+type_application_failed(::ArgumentError) = true
+type_application_failed(::Any) = false
+
+function apply_parameters(head, parameters)
+    try
+        return head{parameters...}
+    catch err
+        type_application_failed(err) || rethrow()
+        return nothing
+    end
+end
+
+# An integer parameter stays the integer it writes. A type parameter resolves in `mod`.
+function written_parameter(mod, node)
+    literal = node.val
+    literal isa Integer && return literal
+    written_type(mod, node)
+end
+
+# The type `node` writes in `mod`, parameters applied. Nothing when any part stays unresolved.
+function written_type(mod::Module, node)
     if JS.kind(node) == K"curly"
         parts = child_nodes(node)
-        head = first(parts)
-        named = annotation_type(mod, head, typevars)
-        named === Union || return named
-        members = Type[]
-        for parameter in parts[2:end]
-            member = annotation_type(mod, parameter, typevars)
-            isnothing(member) && return nothing
-            push!(members, member)
+        isnothing(parts) && return nothing
+        isempty(parts) && return nothing
+        head_node = first(parts)
+        head = written_type(mod, head_node)
+        head isa Type || return nothing
+        parameters = Any[]
+        for part in parts[2:end]
+            parameter = written_parameter(mod, part)
+            isnothing(parameter) && return nothing
+            push!(parameters, parameter)
         end
-        return Union{members...}
+        return apply_parameters(head, parameters)
     end
     path = dotted_names(node)
     isnothing(path) && return nothing
-    first(path) in typevars && return nothing
     value = constant_value(mod, path)
     value isa Type || return nothing
     value
 end
 
+# A where-variable at the head of an annotation names no type in `mod`.
+function opens_on_typevar(node, typevars)
+    isempty(typevars) && return false
+    path = dotted_names(node)
+    if !isnothing(path)
+        return first(path) in typevars
+    end
+    JS.kind(node) == K"curly" || return false
+    parts = child_nodes(node)
+    missing = isnothing(parts) || isempty(parts)
+    missing && return false
+    opens_on_typevar(first(parts), typevars)
+end
+
+# The datatype an applied type is built on. A union has no single datatype.
+function type_head(@nospecialize(applied))
+    applied isa Union && return nothing
+    applied isa Type || return nothing
+    name = Base.typename(applied)
+    name.wrapper
+end
+
 function bind_annotated!(types, mod, arg, typevars)
     kind = JS.kind(arg)
-    kind == K"=" && return bind_annotated!(types, mod, first(child_nodes(arg)), typevars)
+    if kind == K"="
+        kids = child_nodes(arg)
+        target = first(kids)
+        return bind_annotated!(types, mod, target, typevars)
+    end
     kind == K"::" || return
     kids = child_nodes(arg)
     length(kids) == 2 || return
     name = kids[1].val
     name isa Symbol || return
-    declared = annotation_type(mod, kids[2], typevars)
-    if !isnothing(declared)
-        types[name] = declared
-    end
+    node = kids[2]
+    opens_on_typevar(node, typevars) && return
+    declared = written_type(mod, node)
+    isnothing(declared) && return
+    types[name] = declared
 end
 
 # The type a field read on T yields: the field's declared type, or for a Union the Union of each member's. A member
