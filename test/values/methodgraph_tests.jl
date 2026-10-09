@@ -82,6 +82,13 @@ module MGOver
     f(x::String) = h(x)
 end
 
+module MGPassed
+    helper(x::Int) = x
+    wrap(xs::Vector{Int}) = map(x -> helper(x), xs)
+    named(xs::Vector{Int}) = map(helper, xs)
+    captured(xs::Vector{Int}, k::Int) = map(x -> helper(x) + k, xs)
+end
+
 @testset "method graph: a concrete call is one edge" begin
     graph = ArchCheck.method_graph(((MGConcrete.calls, Tuple{Int}),), (MGConcrete,))
     caller = only(methods(MGConcrete.calls))
@@ -292,6 +299,23 @@ function closure_in(callees, written, mod)
     found
 end
 
+function reaches_method(graph, origin, goal)
+    seen = Set{Method}()
+    pending = Method[origin]
+    while !isempty(pending)
+        caller = pop!(pending)
+        caller in seen && continue
+        push!(seen, caller)
+        caller === goal && return true
+        callees = get(graph.edges, caller, nothing)
+        isnothing(callees) && continue
+        for callee in callees
+            push!(pending, callee)
+        end
+    end
+    false
+end
+
 @testset "method graph: a keyword call credits the method the source wrote" begin
     rows = (
         (mod = MGKw, use = MGKw.use, written = MGKw.add, argument = Int),
@@ -330,6 +354,24 @@ end
         owned = edges_in(graph, spec.mod)
         @test owned == spec.expected
     end
+end
+
+@testset "method graph: a function passed to an outside call reaches the function it calls" begin
+    helper = only(methods(MGPassed.helper))
+    rows = (
+        (func = MGPassed.wrap, argument = Tuple{Vector{Int}}),
+        (func = MGPassed.captured, argument = Tuple{Vector{Int},Int}),
+    )
+    for row in rows
+        graph = ArchCheck.method_graph(((row.func, row.argument),), (MGPassed,))
+        caller = only(methods(row.func))
+        callees = get(graph.edges, caller, Set{Method}())
+        closure = closure_in(callees, caller, MGPassed)
+        @test reaches_method(graph, closure, helper)
+    end
+    named_graph = ArchCheck.method_graph(((MGPassed.named, Tuple{Vector{Int}}),), (MGPassed,))
+    named = only(methods(MGPassed.named))
+    @test helper in get(named_graph.edges, named, Set{Method}())
 end
 
 @testset "method graph: methods of one function stay distinct nodes" begin

@@ -78,6 +78,14 @@ const SINK_HUB = [
     "b.jl" => "from_b(x::Int) = leaf(x)\n",
 ]
 
+const SINK_PASSED = [
+    "M.jl" => "include(\"low.jl\")\ninclude(\"wrap.jl\")\ninclude(\"pad_a.jl\")\ninclude(\"pad_b.jl\")\n",
+    "low.jl" => "helper(x::Int) = x\n",
+    "wrap.jl" => "wrap(xs::Vector{Int}) = map(x -> helper(x), xs)\n",
+    "pad_a.jl" => "pad_a(x::Int) = x\n",
+    "pad_b.jl" => "pad_b(x::Int) = x\n",
+]
+
 const SINK_PLACED = [
     "M.jl" => "include(\"low.jl\")\ninclude(\"home.jl\")\ninclude(\"away.jl\")\ninclude(\"pad_a.jl\")\ninclude(\"pad_b.jl\")\n",
     "low.jl" => "leaf(x::Int) = x\nleaf(x::String) = x\n",
@@ -125,6 +133,28 @@ end
         methods = sink_methods(loaded, specs)
         found = check_file_sinkable(graph, NO_SITES, methods, index.repo)
         @test isempty(found)
+    end
+end
+
+@testset "method grain: a callee behind a closure in map keeps the method sinkable" begin
+    mktempdir() do dir
+        write_sink_tree(dir, SINK_PASSED)
+        index = sink_index(dir)
+        graph = build_call_graph(index, :M)
+        named = check_file_sinkable(graph, NO_SITES)
+        by_name = only(named)
+        @test by_name.symbol == "wrap"
+        @test ev(by_name, :callees_in) == "low.jl"
+        loaded = load_sink_module(dir, :SinkPassed)
+        specs = [(:wrap, Tuple{Vector{Int}})]
+        methods = sink_methods(loaded, specs)
+        found = check_file_sinkable(graph, NO_SITES, methods, index.repo)
+        hit = only(found)
+        @test hit.symbol == "wrap"
+        @test endswith(hit.file, "wrap.jl")
+        @test hit.line == 1
+        @test ev(hit, :callees_in) == "low.jl"
+        @test ev(hit, :callers_in_own_file) == "0"
     end
 end
 

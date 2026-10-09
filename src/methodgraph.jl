@@ -88,6 +88,7 @@ function record_resolved!(edges, pending, frame, caller, module_set)
         end
         add_edge!(edges, caller, callee)
         enqueue_target!(pending, target, module_set)
+        record_passed!(edges, pending, caller, target, module_set)
     end
 end
 
@@ -133,6 +134,75 @@ end
 function add_edge!(edges, caller, callee)
     callees = get!(edges, caller, Set{Method}())
     push!(callees, callee)
+end
+
+# A function passed into an outside call expands at the specialization that inference compiled for it.
+# When that call compiled none, the method expands at its declared signature.
+function record_passed!(edges, pending, caller, target, module_set)
+    is_kwcall_method(target.def) && return
+    target.def.module in module_set && return
+    signature = Base.unwrap_unionall(target.specTypes)
+    signature isa DataType || return
+    parameters = signature.parameters
+    for index in eachindex(parameters)
+        index == 1 && continue
+        argument = parameters[index]
+        connect_function_type!(edges, pending, caller, argument, module_set)
+    end
+end
+
+function connect_function_type!(edges, pending, caller, @nospecialize(argument), module_set)
+    argument isa DataType || return
+    isconcretetype(argument) || return
+    argument <: Function || return
+    parentmodule(argument) in module_set || return
+    owned = passed_methods(argument, module_set)
+    has_compiled = false
+    for method in owned
+        specs = method_specializations(method)
+        isempty(specs) && continue
+        has_compiled = true
+        connect_method!(edges, pending, caller, method, specs, module_set)
+    end
+    has_compiled && return
+    for method in owned
+        instance = declared_instance(method)
+        isnothing(instance) && continue
+        instances = Core.MethodInstance[instance]
+        connect_method!(edges, pending, caller, method, instances, module_set)
+    end
+end
+
+function passed_methods(@nospecialize(argument), module_set)
+    signature = Tuple{argument, Vararg{Any}}
+    world = Base.get_world_counter()
+    matches = Base._methods_by_ftype(signature, -1, world)
+    found = Method[]
+    for match in matches
+        method = match.method
+        method.module in module_set || continue
+        push!(found, method)
+    end
+    found
+end
+
+function connect_method!(edges, pending, caller, method, instances, module_set)
+    written = written_method(method)
+    add_edge!(edges, caller, written)
+    for instance in instances
+        enqueue_target!(pending, instance, module_set)
+    end
+end
+
+function method_specializations(method::Method)
+    compiled = Base.specializations(method)
+    collect(Core.MethodInstance, compiled)
+end
+
+function declared_instance(method::Method)
+    signature = method.sig
+    signature isa DataType || return nothing
+    Core.Compiler.specialize_method(method, signature, Core.svec())
 end
 
 function enqueue_target!(pending, target, module_set)
