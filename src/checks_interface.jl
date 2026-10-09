@@ -55,7 +55,7 @@ function check_stale_exports(mods)
     findings = Finding[]
     for M in mods
         owner = module_key(M)
-        path = module_file(M)
+        path = module_file(owner)
         for n in names(M)
             n === nameof(M) && continue
             isdefined(M, n) && continue
