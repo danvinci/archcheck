@@ -1,5 +1,4 @@
-# The check registry. Each check is a type with two methods: `run` emits its findings, `kinds` declares
-# each kind it emits as `kind => :error | :advisory`. A new check is a struct, both methods, and a CHECKS entry.
+# The check contract, the context every check reads, and the default checks' `run` and `kinds` methods.
 
 """Everything one run of the gate builds for a check to read."""
 struct Context{D<:Tuple}
@@ -42,13 +41,16 @@ function Context(ctx::Context; observed::Observation)
             observed, ctx.derived)
 end
 
+"""A rule over a package: a subtype declares the findings it may emit and produces them, and names its stage when it reads a workload. A package passes its own through the `checks` keyword."""
 abstract type Check end
 
-# Required of every check, with no fallback: a check that declares nothing cannot run.
+"""Each kind of finding a check emits, as `kind => :error` or `kind => :advisory`. Every check declares them; a finding of an undeclared kind throws."""
 function kinds end
 
-# When a check runs: `:static` reads the source and the loaded modules, before the workload; `:workload` reads
-# what the workload did, so it runs after it.
+"""A check's findings over the parsed and loaded package, as a `Vector{Finding}`. Given a context built from the package alone, it works without the full gate."""
+function run end
+
+"""When a check reads the package: `:static` by default, before the workload, from the parse and the loaded modules; `:workload` after it, from `ctx.observed`."""
 phase(::Check) = :static
 
 # A finding's kind must be one its check declares, or the gate has no severity for it.
