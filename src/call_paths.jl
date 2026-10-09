@@ -1,6 +1,8 @@
 # Which calls in one method can run on one path.
 # An if, elseif, else, or ternary arm is exclusive of its siblings.
 # A branch that returns is exclusive of every call after it.
+# The kind test builds one concrete marker and calls its method.
+# A marker returned as a union would dispatch at runtime inside the gate.
 
 struct WalkedCall
     callee::Symbol                    # called name
@@ -29,6 +31,12 @@ struct CallWalk
     found::Vector{WalkedCall}          # calls in the order the scanner records them
     splits::Base.RefValue{Int}         # next id for an exclusive split
 end
+
+# `K` names the walk for one node kind.
+struct WalkOf{K} end
+
+struct NodeStep end
+struct IterationStep end
 
 function CallWalk()
     found = WalkedCall[]
@@ -65,262 +73,239 @@ function remember_call!(walk, callee, qualifier, arguments, keywords, line, insi
     nothing
 end
 
+function remember_written!(walk, callee, qualifier, node, inside, exits, is_dead)
+    arguments = arguments_text(node)
+    keywords = keywords_text(node)
+    line = source_line(node)
+    remember_call!(walk, callee, qualifier, arguments, keywords, line, inside, exits, is_dead)
+end
+
 function note_operator!(walk, node, inside, exits, is_dead)
     callee = operator_callee(node)
     isnothing(callee) && return
-    arguments = arguments_text(node)
-    keywords = keywords_text(node)
-    line = source_line(node)
-    remember_call!(walk, callee, "", arguments, keywords, line, inside, exits, is_dead)
+    remember_written!(walk, callee, "", node, inside, exits, is_dead)
 end
 
 function note_named!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return
-    naming = name_of_head(kids[1])
+    children = child_nodes(node)
+    missing = isnothing(children) || isempty(children)
+    missing && return
+    naming = name_of_head(children[1])
     isnothing(naming) && return
-    arguments = arguments_text(node)
-    keywords = keywords_text(node)
-    line = source_line(node)
-    remember_call!(walk, naming.callee, naming.qualifier, arguments, keywords, line, inside, exits, is_dead)
+    remember_written!(walk, naming.callee, naming.qualifier, node, inside, exits, is_dead)
 end
 
 function note_call!(walk, node, inside, exits, is_dead)
     if is_operator_call(node)
         note_operator!(walk, node, inside, exits, is_dead)
-    else
-        note_named!(walk, node, inside, exits, is_dead)
+        return
     end
+    note_named!(walk, node, inside, exits, is_dead)
 end
 
-function visit_node!(walk, node, inside, exits, is_dead)
-    kind = JS.kind(node)
-    if kind == K"quote"
-        return visit_quoted!(walk, node, inside, exits, is_dead)
-    end
-    if is_method_form(node)
-        visit_nested!(walk, node, is_dead)
-        return WalkFollow(false, exits)
-    end
-    if kind == K"->" || kind == K"do"
-        return visit_closure!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"block"
-        return visit_block!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"if" || kind == K"elseif" || kind == K"?"
-        return visit_arms!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"&&" || kind == K"||"
-        return visit_short!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"for" || kind == K"while"
-        return visit_loop!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"comprehension"
-        return visit_comprehension!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"generator"
-        return visit_generator!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"try"
-        return visit_try!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"return"
-        return visit_return!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"."
-        return visit_dot!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"global" || kind == K"local"
-        return visit_declare!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"="
-        return visit_assign!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"tuple" || kind == K"parameters"
-        return visit_values!(walk, node, inside, exits, is_dead)
-    end
-    if kind == K"call" || kind == K"dotcall"
-        return visit_call!(walk, node, inside, exits, is_dead)
-    end
-    visit_children!(walk, node, inside, exits, is_dead)
+# A return already on this path ends the nodes that follow. Otherwise the follow stays open.
+function halt_follow(is_dead, prior, exits)
+    is_dead && return WalkFollow(false, exits)
+    prior.returns && return WalkFollow(true, prior.exits)
+    nothing
 end
 
-function visit_sequenced!(walk, nodes, inside, exits, is_dead)
-    current = exits
-    following_dead = is_dead
-    hit_return = false
-    for node in nodes
-        walked = visit_node!(walk, node, inside, current, following_dead)
-        if following_dead
-            continue
-        end
-        if walked.returns
-            following_dead = true
-            hit_return = true
-            continue
-        end
-        current = walked.exits
-    end
-    WalkFollow(hit_return, current)
-end
-
-function visit_children!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return WalkFollow(false, exits)
-    visit_sequenced!(walk, kids, inside, exits, is_dead)
-end
-
-function visit_block!(walk, node, inside, exits, is_dead)
-    visit_children!(walk, node, inside, exits, is_dead)
-end
-
-function visit_quoted!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    isnothing(kids) && return WalkFollow(false, exits)
-    visit_sequenced!(walk, kids, inside, exits, is_dead)
-    WalkFollow(false, exits)
-end
-
-function visit_dead_rest!(walk, nodes, inside, exits)
+function walk_dead!(walk, nodes, inside, exits)
     for node in nodes
         visit_node!(walk, node, inside, exits, true)
     end
     nothing
 end
 
-function visit_arms!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return WalkFollow(false, exits)
-    cond = visit_node!(walk, kids[1], inside, exits, is_dead)
-    later = kids[2:end]
-    if is_dead
-        visit_dead_rest!(walk, later, inside, exits)
-        return WalkFollow(false, exits)
-    end
-    if cond.returns
-        visit_dead_rest!(walk, later, inside, cond.exits)
-        return WalkFollow(true, cond.exits)
-    end
+function visit_on_arm!(walk, node, inside, prior_exits, split, arm)
+    armed = with_arm(inside, split, arm)
+    visit_node!(walk, node, armed, prior_exits, false)
+end
+
+function follow_returned_arm(prior_exits, split, arm)
+    tagged = with_arm(prior_exits, split, arm)
+    WalkFollow(false, tagged)
+end
+
+function follow_one_arm(walked, prior_exits, split, arm)
+    walked.returns || return WalkFollow(false, walked.exits)
+    follow_returned_arm(prior_exits, split, arm)
+end
+
+function visit_exclusive!(walk, node, inside, prior_exits)
     split = fresh_split(walk)
-    then_inside = with_arm(inside, split, 1)
-    then_walked = visit_node!(walk, kids[2], then_inside, cond.exits, false)
-    has_else = length(kids) >= 3
-    if !has_else
-        if then_walked.returns
-            follow = with_arm(cond.exits, split, 1)
-            return WalkFollow(false, follow)
-        end
-        return WalkFollow(false, then_walked.exits)
-    end
-    else_inside = with_arm(inside, split, 2)
-    else_walked = visit_node!(walk, kids[3], else_inside, cond.exits, false)
-    if then_walked.returns && else_walked.returns
-        return WalkFollow(true, cond.exits)
-    end
-    if then_walked.returns
-        follow = with_arm(else_walked.exits, split, 1)
-        return WalkFollow(false, follow)
-    end
-    if else_walked.returns
-        follow = with_arm(then_walked.exits, split, 2)
-        return WalkFollow(false, follow)
-    end
-    follow = merge_exits(then_walked.exits, else_walked.exits)
-    WalkFollow(false, follow)
+    walked = visit_on_arm!(walk, node, inside, prior_exits, split, 1)
+    follow_one_arm(walked, prior_exits, split, 1)
 end
 
-function visit_short!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return WalkFollow(false, exits)
-    left = visit_node!(walk, kids[1], inside, exits, is_dead)
-    if is_dead
-        visit_node!(walk, kids[2], inside, exits, true)
-        return WalkFollow(false, exits)
+# The node runs only on one arm. A return there puts every later call past that arm.
+function continue_after!(walk, node, inside, exits, is_dead, prior)
+    halted = halt_follow(is_dead, prior, exits)
+    if !isnothing(halted)
+        visit_node!(walk, node, inside, halted.exits, true)
+        return halted
     end
-    if left.returns
-        visit_node!(walk, kids[2], inside, left.exits, true)
-        return WalkFollow(true, left.exits)
-    end
-    split = fresh_split(walk)
-    right_inside = with_arm(inside, split, 1)
-    right = visit_node!(walk, kids[2], right_inside, left.exits, false)
-    if right.returns
-        follow = with_arm(left.exits, split, 1)
-        return WalkFollow(false, follow)
-    end
-    WalkFollow(false, right.exits)
+    visit_exclusive!(walk, node, inside, prior.exits)
 end
 
-function visit_iteration!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    isnothing(kids) && return WalkFollow(false, exits)
-    kind = JS.kind(node)
-    if kind == K"in" || kind == K"="
-        length(kids) < 2 && return WalkFollow(false, exits)
-        rest = kids[2:end]
-        return visit_sequenced!(walk, rest, inside, exits, is_dead)
-    end
-    visit_sequenced_iterations!(walk, kids, inside, exits, is_dead)
+function step_walk!(walk, node, ::NodeStep, inside, exits, is_dead)
+    visit_node!(walk, node, inside, exits, is_dead)
 end
 
-function visit_sequenced_iterations!(walk, nodes, inside, exits, is_dead)
+function step_walk!(walk, node, ::IterationStep, inside, exits, is_dead)
+    visit_iteration!(walk, node, inside, exits, is_dead)
+end
+
+function visit_sequence!(walk, nodes, step, inside, exits, is_dead)
     current = exits
     following_dead = is_dead
-    hit_return = false
+    saw_return = false
     for node in nodes
-        walked = visit_iteration!(walk, node, inside, current, following_dead)
+        walked = step_walk!(walk, node, step, inside, current, following_dead)
         if following_dead
             continue
         end
         if walked.returns
             following_dead = true
-            hit_return = true
+            saw_return = true
             continue
         end
         current = walked.exits
     end
-    WalkFollow(hit_return, current)
+    WalkFollow(saw_return, current)
 end
 
-function visit_loop!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return WalkFollow(false, exits)
-    last_index = length(kids)
-    last_index == 1 && return visit_node!(walk, kids[1], inside, exits, is_dead)
-    headers = kids[1:last_index - 1]
-    if JS.kind(node) == K"for"
-        header = visit_sequenced_iterations!(walk, headers, inside, exits, is_dead)
-    else
-        header = visit_sequenced!(walk, headers, inside, exits, is_dead)
+function visit_children!(walk, node, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || isempty(children)
+    missing && return WalkFollow(false, exits)
+    visit_sequence!(walk, children, NodeStep(), inside, exits, is_dead)
+end
+
+function visit_node!(walk, node, inside, exits, is_dead)::WalkFollow
+    kind = JS.kind(node)
+    kind == K"quote" && return visit_kind!(walk, node, WalkOf{:quote}(), inside, exits, is_dead)
+    if is_method_form(node)
+        return visit_kind!(walk, node, WalkOf{:nested}(), inside, exits, is_dead)
     end
-    body = kids[last_index]
-    if is_dead || header.returns
-        visit_node!(walk, body, inside, header.exits, true)
-        if is_dead
-            return WalkFollow(false, exits)
-        end
-        return WalkFollow(true, header.exits)
+    if kind == K"->" || kind == K"do"
+        return visit_kind!(walk, node, WalkOf{:closure}(), inside, exits, is_dead)
     end
+    if kind == K"if" || kind == K"elseif" || kind == K"?"
+        return visit_kind!(walk, node, WalkOf{:arms}(), inside, exits, is_dead)
+    end
+    if kind == K"&&" || kind == K"||"
+        return visit_kind!(walk, node, WalkOf{:short}(), inside, exits, is_dead)
+    end
+    if kind == K"for" || kind == K"while"
+        return visit_kind!(walk, node, WalkOf{:loop}(), inside, exits, is_dead)
+    end
+    kind == K"comprehension" && return visit_kind!(walk, node, WalkOf{:comprehension}(), inside, exits, is_dead)
+    kind == K"generator" && return visit_kind!(walk, node, WalkOf{:generator}(), inside, exits, is_dead)
+    kind == K"try" && return visit_kind!(walk, node, WalkOf{:try}(), inside, exits, is_dead)
+    kind == K"return" && return visit_kind!(walk, node, WalkOf{:return}(), inside, exits, is_dead)
+    kind == K"." && return visit_kind!(walk, node, WalkOf{:dot}(), inside, exits, is_dead)
+    if kind == K"global" || kind == K"local"
+        return visit_kind!(walk, node, WalkOf{:declare}(), inside, exits, is_dead)
+    end
+    kind == K"=" && return visit_kind!(walk, node, WalkOf{:assign}(), inside, exits, is_dead)
+    if kind == K"tuple" || kind == K"parameters"
+        return visit_kind!(walk, node, WalkOf{:values}(), inside, exits, is_dead)
+    end
+    if kind == K"call" || kind == K"dotcall"
+        return visit_kind!(walk, node, WalkOf{:called}(), inside, exits, is_dead)
+    end
+    visit_kind!(walk, node, WalkOf{:child}(), inside, exits, is_dead)
+end
+
+function join_arm_follows(then_walked, else_walked, prior_exits, split)
+    if then_walked.returns && else_walked.returns
+        return WalkFollow(true, prior_exits)
+    end
+    if then_walked.returns
+        return follow_returned_arm(else_walked.exits, split, 1)
+    end
+    if else_walked.returns
+        return follow_returned_arm(then_walked.exits, split, 2)
+    end
+    merged = merge_exits(then_walked.exits, else_walked.exits)
+    WalkFollow(false, merged)
+end
+
+function join_opened_arms!(walk, children, inside, prior_exits)
     split = fresh_split(walk)
-    body_inside = with_arm(inside, split, 1)
-    walked = visit_node!(walk, body, body_inside, header.exits, false)
-    if walked.returns
-        follow = with_arm(header.exits, split, 1)
-        return WalkFollow(false, follow)
+    then_walked = visit_on_arm!(walk, children[2], inside, prior_exits, split, 1)
+    if length(children) < 3
+        return follow_one_arm(then_walked, prior_exits, split, 1)
     end
-    WalkFollow(false, walked.exits)
+    else_walked = visit_on_arm!(walk, children[3], inside, prior_exits, split, 2)
+    join_arm_follows(then_walked, else_walked, prior_exits, split)
 end
 
-function visit_gen_spec!(walk, node, inside, exits, is_dead)
-    if JS.kind(node) != K"filter"
-        visit_iteration!(walk, node, inside, exits, is_dead)
-        return
+function visit_kind!(walk, node, ::WalkOf{:arms}, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || length(children) < 2
+    missing && return WalkFollow(false, exits)
+    condition = visit_node!(walk, children[1], inside, exits, is_dead)
+    later = children[2:end]
+    halted = halt_follow(is_dead, condition, exits)
+    if !isnothing(halted)
+        walk_dead!(walk, later, inside, halted.exits)
+        return halted
     end
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    for child in kids
+    join_opened_arms!(walk, children, inside, condition.exits)
+end
+
+function visit_kind!(walk, node, ::WalkOf{:short}, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || length(children) < 2
+    missing && return WalkFollow(false, exits)
+    left = visit_node!(walk, children[1], inside, exits, is_dead)
+    continue_after!(walk, children[2], inside, exits, is_dead, left)
+end
+
+function is_bound_clause(node)
+    kind = JS.kind(node)
+    kind == K"in" && return true
+    kind == K"="
+end
+
+function visit_iteration!(walk, node, inside, exits, is_dead)
+    children = child_nodes(node)
+    isnothing(children) && return WalkFollow(false, exits)
+    if is_bound_clause(node)
+        length(children) < 2 && return WalkFollow(false, exits)
+        rest = children[2:end]
+        return visit_sequence!(walk, rest, NodeStep(), inside, exits, is_dead)
+    end
+    visit_sequence!(walk, children, IterationStep(), inside, exits, is_dead)
+end
+
+function visit_loop_header!(walk, node, headers, inside, exits, is_dead)
+    if JS.kind(node) == K"for"
+        return visit_sequence!(walk, headers, IterationStep(), inside, exits, is_dead)
+    end
+    visit_sequence!(walk, headers, NodeStep(), inside, exits, is_dead)
+end
+
+function visit_kind!(walk, node, ::WalkOf{:loop}, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || isempty(children)
+    missing && return WalkFollow(false, exits)
+    last_index = length(children)
+    if last_index == 1
+        return visit_node!(walk, children[1], inside, exits, is_dead)
+    end
+    headers = children[1:last_index - 1]
+    header = visit_loop_header!(walk, node, headers, inside, exits, is_dead)
+    body = children[last_index]
+    continue_after!(walk, body, inside, exits, is_dead, header)
+end
+
+function visit_filter!(walk, node, inside, exits, is_dead)
+    children = child_nodes(node)
+    isnothing(children) && return
+    for child in children
         if is_iteration_clause(child)
             visit_iteration!(walk, child, inside, exits, is_dead)
         else
@@ -330,56 +315,73 @@ function visit_gen_spec!(walk, node, inside, exits, is_dead)
     nothing
 end
 
-function visit_generator!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return WalkFollow(false, exits)
-    if length(kids) >= 2
-        for index in 2:length(kids)
-            visit_gen_spec!(walk, kids[index], inside, exits, is_dead)
-        end
+function visit_gen_spec!(walk, node, inside, exits, is_dead)
+    if JS.kind(node) == K"filter"
+        visit_filter!(walk, node, inside, exits, is_dead)
+        return
     end
-    if is_dead
-        visit_node!(walk, kids[1], inside, exits, true)
-        return WalkFollow(false, exits)
-    end
-    split = fresh_split(walk)
-    element_inside = with_arm(inside, split, 1)
-    element = visit_node!(walk, kids[1], element_inside, exits, false)
-    if element.returns
-        follow = with_arm(exits, split, 1)
-        return WalkFollow(false, follow)
-    end
-    WalkFollow(false, element.exits)
+    visit_iteration!(walk, node, inside, exits, is_dead)
+    nothing
 end
 
-function visit_comprehension!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return WalkFollow(false, exits)
-    visit_node!(walk, kids[1], inside, exits, is_dead)
+function visit_kind!(walk, node, ::WalkOf{:generator}, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || isempty(children)
+    missing && return WalkFollow(false, exits)
+    last_index = length(children)
+    for index in 2:last_index
+        visit_gen_spec!(walk, children[index], inside, exits, is_dead)
+    end
+    prior = WalkFollow(false, exits)
+    element = children[1]
+    continue_after!(walk, element, inside, exits, is_dead, prior)
 end
 
-function visit_try!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    isnothing(kids) && return WalkFollow(false, exits)
-    for child in kids
+function visit_kind!(walk, node, ::WalkOf{:comprehension}, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || isempty(children)
+    missing && return WalkFollow(false, exits)
+    visit_node!(walk, children[1], inside, exits, is_dead)
+end
+
+function visit_kind!(walk, node, ::WalkOf{:try}, inside, exits, is_dead)
+    children = child_nodes(node)
+    isnothing(children) && return WalkFollow(false, exits)
+    for child in children
         visit_node!(walk, child, inside, exits, is_dead)
     end
     WalkFollow(false, exits)
 end
 
-function visit_return!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    isnothing(kids) || visit_sequenced!(walk, kids, inside, exits, is_dead)
-    if is_dead
-        return WalkFollow(false, exits)
+function visit_kind!(walk, node, ::WalkOf{:return}, inside, exits, is_dead)
+    children = child_nodes(node)
+    if !isnothing(children)
+        visit_sequence!(walk, children, NodeStep(), inside, exits, is_dead)
     end
+    is_dead && return WalkFollow(false, exits)
     WalkFollow(true, exits)
 end
 
-function visit_dot!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) != 2) && return visit_children!(walk, node, inside, exits, is_dead)
-    visit_node!(walk, kids[1], inside, exits, is_dead)
+function visit_kind!(walk, node, ::WalkOf{:quote}, inside, exits, is_dead)
+    children = child_nodes(node)
+    isnothing(children) && return WalkFollow(false, exits)
+    visit_sequence!(walk, children, NodeStep(), inside, exits, is_dead)
+    WalkFollow(false, exits)
+end
+
+function visit_kind!(walk, node, ::WalkOf{:closure}, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || length(children) < 2
+    missing && return WalkFollow(false, exits)
+    visit_node!(walk, children[2], inside, exits, is_dead)
+    WalkFollow(false, exits)
+end
+
+function visit_kind!(walk, node, ::WalkOf{:dot}, inside, exits, is_dead)
+    children = child_nodes(node)
+    has_pair = !isnothing(children) && length(children) == 2
+    has_pair && return visit_node!(walk, children[1], inside, exits, is_dead)
+    visit_children!(walk, node, inside, exits, is_dead)
 end
 
 function visit_lhs!(walk, node, inside, exits, is_dead)
@@ -391,56 +393,53 @@ function visit_lhs!(walk, node, inside, exits, is_dead)
     WalkFollow(false, exits)
 end
 
-function visit_assign!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return WalkFollow(false, exits)
-    left = visit_lhs!(walk, kids[1], inside, exits, is_dead)
-    if is_dead || left.returns
-        visit_node!(walk, kids[2], inside, left.exits, true)
-        if is_dead
-            return WalkFollow(false, exits)
-        end
-        return WalkFollow(true, left.exits)
+function visit_declared!(walk, node, inside, exits, is_dead)
+    if JS.kind(node) == K"="
+        return visit_node!(walk, node, inside, exits, is_dead)
     end
-    visit_node!(walk, kids[2], inside, left.exits, false)
+    visit_lhs!(walk, node, inside, exits, is_dead)
 end
 
-function visit_declare!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    isnothing(kids) && return WalkFollow(false, exits)
-    for declaration in kids
-        if JS.kind(declaration) == K"="
-            visit_node!(walk, declaration, inside, exits, is_dead)
-        else
-            visit_lhs!(walk, declaration, inside, exits, is_dead)
-        end
+function visit_kind!(walk, node, ::WalkOf{:declare}, inside, exits, is_dead)
+    children = child_nodes(node)
+    isnothing(children) && return WalkFollow(false, exits)
+    for declaration in children
+        visit_declared!(walk, declaration, inside, exits, is_dead)
     end
     WalkFollow(false, exits)
+end
+
+function visit_kind!(walk, node, ::WalkOf{:assign}, inside, exits, is_dead)
+    children = child_nodes(node)
+    missing = isnothing(children) || length(children) < 2
+    missing && return WalkFollow(false, exits)
+    visit_lhs!(walk, children[1], inside, exits, is_dead)
+    visit_node!(walk, children[2], inside, exits, is_dead)
 end
 
 function visit_values!(walk, node, inside, exits, is_dead)
     values = value_children(node)
     isempty(values) && return WalkFollow(false, exits)
-    visit_sequenced!(walk, values, inside, exits, is_dead)
+    visit_sequence!(walk, values, NodeStep(), inside, exits, is_dead)
 end
 
-function visit_call!(walk, node, inside, exits, is_dead)
+visit_kind!(walk, node, ::WalkOf{:values}, inside, exits, is_dead) =
+    visit_values!(walk, node, inside, exits, is_dead)
+
+function visit_kind!(walk, node, ::WalkOf{:called}, inside, exits, is_dead)
     note_call!(walk, node, inside, exits, is_dead)
     visit_values!(walk, node, inside, exits, is_dead)
 end
 
-function visit_closure!(walk, node, inside, exits, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return WalkFollow(false, exits)
-    visit_node!(walk, kids[2], inside, exits, is_dead)
-    WalkFollow(false, exits)
-end
+visit_kind!(walk, node, ::WalkOf{:child}, inside, exits, is_dead) =
+    visit_children!(walk, node, inside, exits, is_dead)
 
 function visit_default_value!(walk, arg, inside, exits, is_dead)
     JS.kind(arg) == K"=" || return
-    kids = child_nodes(arg)
-    (isnothing(kids) || length(kids) < 2) && return
-    visit_node!(walk, kids[2], inside, exits, is_dead)
+    children = child_nodes(arg)
+    missing = isnothing(children) || length(children) < 2
+    missing && return
+    visit_node!(walk, children[2], inside, exits, is_dead)
     nothing
 end
 
@@ -457,42 +456,40 @@ function visit_default_arg!(walk, arg, inside, exits, is_dead)
     nothing
 end
 
-function visit_defaults!(walk, sig, inside, exits, is_dead)
-    node = sig
-    kind = JS.kind(node)
-    while kind == K"where" || kind == K"::"
-        kids = child_nodes(node)
-        (isnothing(kids) || isempty(kids)) && return
-        node = kids[1]
-        kind = JS.kind(node)
-    end
-    kind == K"call" || return
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return
-    for index in 2:length(kids)
-        visit_default_arg!(walk, kids[index], inside, exits, is_dead)
+function visit_defaults!(walk, signature, inside, exits, is_dead)
+    parts = call_parts(signature)
+    isnothing(parts) && return
+    for argument in parts.arguments
+        visit_default_arg!(walk, argument, inside, exits, is_dead)
     end
     nothing
 end
 
 function visit_nested!(walk, node, is_dead)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return
+    children = child_nodes(node)
+    missing = isnothing(children) || length(children) < 2
+    missing && return
     inside = Vector{Tuple{Int,Int}}()
     exits = Vector{Tuple{Int,Int}}()
-    visit_defaults!(walk, kids[1], inside, exits, is_dead)
-    visit_node!(walk, kids[2], inside, exits, is_dead)
+    visit_defaults!(walk, children[1], inside, exits, is_dead)
+    visit_node!(walk, children[2], inside, exits, is_dead)
     nothing
+end
+
+function visit_kind!(walk, node, ::WalkOf{:nested}, inside, exits, is_dead)
+    visit_nested!(walk, node, is_dead)
+    WalkFollow(false, exits)
 end
 
 function walked_calls(form)
     walk = CallWalk()
-    kids = child_nodes(form)
-    (isnothing(kids) || length(kids) < 2) && return walk.found
+    children = child_nodes(form)
+    missing = isnothing(children) || length(children) < 2
+    missing && return walk.found
     inside = Vector{Tuple{Int,Int}}()
     exits = Vector{Tuple{Int,Int}}()
-    visit_defaults!(walk, kids[1], inside, exits, false)
-    visit_node!(walk, kids[2], inside, exits, false)
+    visit_defaults!(walk, children[1], inside, exits, false)
+    visit_node!(walk, children[2], inside, exits, false)
     walk.found
 end
 

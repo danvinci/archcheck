@@ -23,15 +23,13 @@ end
 function method_before(left, right)
     left_name = string(left.name)
     right_name = string(right.name)
-    left_name < right_name && return true
-    right_name < left_name && return false
     left_line = Int(left.line)
     right_line = Int(right.line)
-    left_line < right_line && return true
-    right_line < left_line && return false
     left_file = string(left.file)
     right_file = string(right.file)
-    left_file < right_file
+    left_order = (left_name, left_line, left_file)
+    right_order = (right_name, right_line, right_file)
+    left_order < right_order
 end
 
 function qualifier_matches(method, qualifier)
@@ -95,17 +93,17 @@ function costs_work(index, ordered, method)
     seen = Set{Method}()
     depth = 0
     while depth <= LOOP_HOPS && !isempty(frontier)
-        nxt = Method[]
+        next_methods = Method[]
         for current in frontier
             current in seen && continue
             push!(seen, current)
             body_loops(index, current) && return true
             depth == LOOP_HOPS && continue
             for callee in callees_of(ordered, current)
-                push!(nxt, callee)
+                push!(next_methods, callee)
             end
         end
-        frontier = nxt
+        frontier = next_methods
         depth += 1
     end
     false
