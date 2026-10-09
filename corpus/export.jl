@@ -75,21 +75,22 @@ function ensure_project(env)
     write(project, text)
 end
 
-function instantiate_env(env, tree, archcheck, prepare)
+function instantiate_env(env, prepare, arguments)
     reset_dir(env)
     ensure_project(env)
     withenv("JULIA_PKG_PRECOMPILE_AUTO" => "0") do
-        run(`julia --project=$env $prepare $tree $archcheck`)
+        run(`julia --project=$env $prepare $arguments`)
     end
 end
 
-function prepare_env(label, env, tree, archcheck, prepare, stamp_path)
-    text = stamp_text(["tree=$tree", "archcheck=$archcheck"])
+# The stamp holds the prepare script's arguments, so changed arguments rebuild the environment.
+function prepare_env(label, env, prepare, arguments, stamp_path)
+    text = stamp_text(arguments)
     if same_stamp(stamp_path, text)
         println("prepare ", label, " instantiate reused")
         return
     end
-    instantiate_env(env, tree, archcheck, prepare)
+    instantiate_env(env, prepare, arguments)
     write(stamp_path, text)
     println("prepare ", label, " instantiate")
 end
@@ -110,7 +111,8 @@ function prepare_states(host, cache, label, archcheck, prepare)
         prepare_export(state.name, host.repo, commit, tree, stamp, archcheck)
         env = joinpath(directory, "env")
         env_stamp = joinpath(directory, "env.stamp")
-        prepare_env(state.name, env, tree, archcheck, prepare, env_stamp)
+        arguments = [tree, archcheck]
+        prepare_env(state.name, env, prepare, arguments, env_stamp)
         trees[state.name] = tree
         commits[state.name] = commit
         flush(stdout)
@@ -125,7 +127,8 @@ function prepare_states(host, cache, label, archcheck, prepare)
                        stamp, archcheck)
         env = joinpath(directory, "env")
         env_stamp = joinpath(directory, "env.stamp")
-        prepare_env(mutant.name, env, tree, archcheck, prepare, env_stamp)
+        arguments = [tree, archcheck]
+        prepare_env(mutant.name, env, prepare, arguments, env_stamp)
         flush(stdout)
     end
 end
