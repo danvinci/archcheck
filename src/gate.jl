@@ -1,12 +1,3 @@
-# The loaded module a dotted key names below the package.
-function loaded_module(pkg::Module, key::Symbol)
-    mod = pkg
-    for name in key_segments(key)
-        mod = getfield(mod, name)
-    end
-    mod
-end
-
 const PHASES = (:static, :workload)
 
 # The checks of one phase, in registry order. An unknown phase is a typo, so it throws.
