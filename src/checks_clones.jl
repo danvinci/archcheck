@@ -124,145 +124,13 @@ function name_role(node, index)
     :value
 end
 
-function bind_iteration!(bound, node)
-    kind = JS.kind(node)
-    kids = child_nodes(node)
-    if (kind == K"in" || kind == K"=") && !isnothing(kids) && !isempty(kids)
-        _argname!(bound, kids[1])
-        return
-    end
-    isnothing(kids) && return
-    for child in kids
-        bind_iteration!(bound, child)
-    end
-end
-
-function bind_body!(bound, body)
-    assigned = Symbol[]
-    collect_scope_assigns!(assigned, body)
-    union!(bound, assigned)
-    globals = Symbol[]
-    collect_scope_globals!(globals, body)
-    setdiff!(bound, globals)
-    bound
-end
-
-function bind_catch!(bound, node)
-    JS.kind(node) == K"catch" || return
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return
-    JS.kind(kids[1]) == K"block" && return
-    _argname!(bound, kids[1])
-end
-
-function method_bound(enclosing, sig, body)
-    bound = copy(enclosing)
-    args = sig_argnames(sig)
-    union!(bound, args)
-    bind_body!(bound, body)
-end
-
-function method_scope(node, bound)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return bound
-    method_bound(bound, kids[1], kids[2])
-end
-
-function for_scope(node, bound)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return bound
-    inner = copy(bound)
-    last_index = length(kids)
-    for index in 1:(last_index - 1)
-        bind_iteration!(inner, kids[index])
-    end
-    bind_body!(inner, kids[last_index])
-    inner
-end
-
-function generator_scope(node, bound)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return bound
-    inner = copy(bound)
-    for index in 2:length(kids)
-        bind_iteration!(inner, kids[index])
-    end
-    bind_body!(inner, kids[1])
-    inner
-end
-
-function while_scope(node, bound)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return bound
-    inner = copy(bound)
-    bind_body!(inner, last(kids))
-    inner
-end
-
-function lambda_scope(node, bound)
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return bound
-    inner = copy(bound)
-    extra = Symbol[]
-    _argname!(extra, kids[1])
-    union!(inner, extra)
-    bind_body!(inner, kids[2])
-    inner
-end
-
-function let_scope(node, bound)
-    kids = child_nodes(node)
-    isnothing(kids) && return bound
-    inner = copy(bound)
-    for child in kids
-        bind_body!(inner, child)
-    end
-    inner
-end
-
-function try_scope(node, bound)
-    kids = child_nodes(node)
-    isnothing(kids) && return bound
-    inner = copy(bound)
-    for child in kids
-        bind_catch!(inner, child)
-        bind_body!(inner, child)
-    end
-    inner
-end
-
-function scoped_locals(node, bound)
-    kind = JS.kind(node)
-    if is_method_form(node)
-        return method_scope(node, bound)
-    end
-    if kind == K"for"
-        return for_scope(node, bound)
-    end
-    if kind == K"generator"
-        return generator_scope(node, bound)
-    end
-    if kind == K"while"
-        return while_scope(node, bound)
-    end
-    if kind == K"->" || kind == K"do"
-        return lambda_scope(node, bound)
-    end
-    if kind == K"let"
-        return let_scope(node, bound)
-    end
-    if kind == K"try"
-        return try_scope(node, bound)
-    end
-    bound
-end
-
 function absorb_children!(state, node, kids, bound)
     for index in eachindex(kids)
         child = kids[index]
         role = name_role(node, index)
         absorb!(state, role)
-        absorb_tree!(state, child, bound, role)
+        inner = child_locals(node, index, bound)
+        absorb_tree!(state, child, inner, role)
     end
 end
 
@@ -293,8 +161,7 @@ function absorb_tree!(state, node, bound, role)
         absorb_quoted!(state, node, kids, bound)
         return
     end
-    inner = scoped_locals(node, bound)
-    absorb_children!(state, node, kids, inner)
+    absorb_children!(state, node, kids, bound)
 end
 
 function digest_of(node, bound)
@@ -333,7 +200,7 @@ function collect_methods!(found, node, enclosing, file)
         name = method_name_of(kids[1])
         if !isnothing(name)
             body = kids[2]
-            bound = method_bound(enclosing, kids[1], body)
+            bound = body_locals(kids[1], body, enclosing)
             line = source_line(node)
             record = MethodBody(name, line, file.path, file.mod, body, bound)
             push!(found, record)
@@ -342,8 +209,9 @@ function collect_methods!(found, node, enclosing, file)
         end
     end
     isnothing(kids) && return
-    inner = scoped_locals(node, enclosing)
-    for child in kids
+    for index in eachindex(kids)
+        child = kids[index]
+        inner = child_locals(node, index, enclosing)
         collect_methods!(found, child, inner, file)
     end
 end
@@ -364,10 +232,10 @@ function walk_sites!(grouped, counts, node, method, path, min_nodes, bound)
     push_site!(grouped, digest, method, node, path)
     kids = child_nodes(node)
     isnothing(kids) && return
-    inner = scoped_locals(node, bound)
     for index in eachindex(kids)
         child = kids[index]
         is_method_form(child) && continue
+        inner = child_locals(node, index, bound)
         child_path = vcat(path, index)
         walk_sites!(grouped, counts, child, method, child_path, min_nodes, inner)
     end
@@ -557,15 +425,16 @@ function collect_predicates!(found, node, enclosing)
         name = sig_name(kids[1])
         if !isnothing(name)
             body = kids[2]
-            bound = method_bound(enclosing, kids[1], body)
+            bound = body_locals(kids[1], body, enclosing)
             push!(found, LocalPredicate(name, body, bound))
             collect_predicates!(found, body, bound)
             return
         end
     end
     isnothing(kids) && return
-    inner = scoped_locals(node, enclosing)
-    for child in kids
+    for index in eachindex(kids)
+        child = kids[index]
+        inner = child_locals(node, index, enclosing)
         collect_predicates!(found, child, inner)
     end
 end
@@ -589,11 +458,11 @@ function note_uses!(used, called, node, bound, tolerances, known, role, inside)
     end
     kids = child_nodes(node)
     isnothing(kids) && return
-    inner = scoped_locals(node, bound)
     comparing = inside || is_range_compare(node)
     for index in eachindex(kids)
         child = kids[index]
         child_role = name_role(node, index)
+        inner = child_locals(node, index, bound)
         note_uses!(used, called, child, inner, tolerances, known, child_role, comparing)
     end
 end
@@ -733,8 +602,9 @@ function walk_searches!(found, node, method, bound, tolerances, reached)
     end
     kids = child_nodes(node)
     isnothing(kids) && return
-    inner = scoped_locals(node, bound)
-    for child in kids
+    for index in eachindex(kids)
+        child = kids[index]
+        inner = child_locals(node, index, bound)
         walk_searches!(found, child, method, inner, tolerances, reached)
     end
 end

@@ -80,6 +80,7 @@ struct CallSite
     keywords::String     # keyword argument source text sorted by name, whitespace collapsed
     line::Int            # source line of the call
     loop_depth::Int      # loops, comprehensions and generators enclosing the call within its method
+    is_used::Bool        # the call's value is read
 end
 
 # One file's top-level defs and, per def, the names its body references - closures included.
@@ -248,6 +249,253 @@ function nested_bound(outer, extra, body)
     bound
 end
 
+# Names local in `body` plus `extra`, minus names the body declares global.
+function body_locals(sig, body, outer)
+    names = sig_argnames(sig)
+    nested_bound(outer, names, body)
+end
+
+function is_iteration_clause(node)
+    kind = JS.kind(node)
+    kind == K"iteration" || kind == K"in" || kind == K"="
+end
+
+function add_iteration_names!(bound, kids)
+    for child in kids
+        is_iteration_clause(child) || continue
+        iteration_names!(bound, child)
+    end
+end
+
+function iteration_names!(bound, node)
+    kind = JS.kind(node)
+    kids = child_nodes(node)
+    if (kind == K"in" || kind == K"=") && !isnothing(kids) && !isempty(kids)
+        _argname!(bound, kids[1])
+        return
+    end
+    isnothing(kids) && return
+    if kind == K"filter"
+        add_iteration_names!(bound, kids)
+        return
+    end
+    for child in kids
+        iteration_names!(bound, child)
+    end
+end
+
+# `outer`, plus the names `binder` finds from `first_position` through the child before `index`.
+function bound_before(outer, kids, index, binder, first_position)
+    bound = copy(outer)
+    last_earlier = index - 1
+    last_earlier < first_position && return bound
+    for position in first_position:last_earlier
+        binder(bound, kids[position])
+    end
+    bound
+end
+
+function binding_names!(bound, node)
+    kind = JS.kind(node)
+    if kind == K"="
+        pair = child_nodes(node)
+        (isnothing(pair) || isempty(pair)) && return
+        _argname!(bound, pair[1])
+        return
+    end
+    kind == K"block" || return
+    kids = child_nodes(node)
+    isnothing(kids) && return
+    for child in kids
+        binding_names!(bound, child)
+    end
+end
+
+function is_let_bindings(node)
+    parent = node.parent
+    isnothing(parent) && return false
+    JS.kind(parent) == K"let" || return false
+    kids = child_nodes(parent)
+    (isnothing(kids) || isempty(kids)) && return false
+    kids[1] === node
+end
+
+function bind_catch_name!(bound, node)
+    JS.kind(node) == K"catch" || return
+    kids = child_nodes(node)
+    (isnothing(kids) || isempty(kids)) && return
+    JS.kind(kids[1]) == K"block" && return
+    _argname!(bound, kids[1])
+end
+
+function method_child(node, index, outer)
+    kids = child_nodes(node)
+    (isnothing(kids) || index > length(kids)) && return copy(outer)
+    if index == 1
+        bound = copy(outer)
+        names = sig_argnames(kids[1])
+        union!(bound, names)
+        return bound
+    end
+    body_locals(kids[1], kids[index], outer)
+end
+
+function for_child(kids, index, outer)
+    last_index = length(kids)
+    if index == last_index
+        extra = bound_before(Set{Symbol}(), kids, last_index, iteration_names!, 1)
+        return nested_bound(outer, extra, kids[index])
+    end
+    bound_before(outer, kids, index, iteration_names!, 1)
+end
+
+function while_child(kids, index, outer)
+    if index == length(kids)
+        return nested_bound(outer, Symbol[], kids[index])
+    end
+    copy(outer)
+end
+
+function generator_child(kids, index, outer)
+    if index == 1
+        extra = Set{Symbol}()
+        for spec in kids[2:end]
+            iteration_names!(extra, spec)
+        end
+        return nested_bound(outer, extra, kids[1])
+    end
+    bound_before(outer, kids, index, iteration_names!, 2)
+end
+
+function filter_child(kids, index, outer)
+    child = kids[index]
+    is_iteration_clause(child) && return copy(outer)
+    bound = copy(outer)
+    add_iteration_names!(bound, kids)
+    bound
+end
+
+function lambda_child(kids, index, outer)
+    if index == 1
+        bound = copy(outer)
+        _argname!(bound, kids[1])
+        return bound
+    end
+    names = Symbol[]
+    _argname!(names, kids[1])
+    nested_bound(outer, names, kids[index])
+end
+
+function let_child(kids, index, outer)
+    if index == 1
+        return copy(outer)
+    end
+    seeded = copy(outer)
+    binding_names!(seeded, kids[1])
+    if index == length(kids)
+        return nested_bound(seeded, Symbol[], kids[index])
+    end
+    seeded
+end
+
+function try_child(kids, index, outer)
+    clause = kids[index]
+    seeded = copy(outer)
+    bind_catch_name!(seeded, clause)
+    nested_bound(seeded, Symbol[], clause)
+end
+
+# The left side binds a name. Later children read the names around the node.
+function lhs_child(kids, index, outer)
+    if index == 1
+        bound = copy(outer)
+        _argname!(bound, kids[1])
+        return bound
+    end
+    copy(outer)
+end
+
+# Names local to the child at `index` of `node`. `outer` is the names local around `node`.
+# Julia manual, "Scope of Variables": a `for` or generator reads its first iterator outside that scope.
+function child_locals(node, index, outer)
+    if is_method_form(node)
+        return method_child(node, index, outer)
+    end
+    if is_let_bindings(node)
+        kids = child_nodes(node)
+        isnothing(kids) && return copy(outer)
+        return bound_before(outer, kids, index, binding_names!, 1)
+    end
+    kids = child_nodes(node)
+    (isnothing(kids) || index < 1 || index > length(kids)) && return copy(outer)
+    kind = JS.kind(node)
+    if kind == K"for"
+        return for_child(kids, index, outer)
+    end
+    if kind == K"while"
+        return while_child(kids, index, outer)
+    end
+    if kind == K"generator"
+        return generator_child(kids, index, outer)
+    end
+    if kind == K"filter"
+        return filter_child(kids, index, outer)
+    end
+    if kind == K"->" || kind == K"do"
+        return lambda_child(kids, index, outer)
+    end
+    if kind == K"let"
+        return let_child(kids, index, outer)
+    end
+    if kind == K"try"
+        return try_child(kids, index, outer)
+    end
+    if kind == K"iteration"
+        return bound_before(outer, kids, index, iteration_names!, 1)
+    end
+    if kind == K"in" || kind == K"="
+        return lhs_child(kids, index, outer)
+    end
+    copy(outer)
+end
+
+function is_sync_macro(node)
+    JS.kind(node) == K"macrocall" || return false
+    kids = child_nodes(node)
+    (isnothing(kids) || isempty(kids)) && return false
+    head = kids[1]
+    JS.kind(head) == K"macro_name" || return false
+    parts = child_nodes(head)
+    (isnothing(parts) || isempty(parts)) && return false
+    parts[1].val === :sync
+end
+
+# Whether the child at `index` has its value discarded. `@sync` returns its enclosed block's value.
+function child_discarded(node, index, parent_discarded)
+    kids = child_nodes(node)
+    (isnothing(kids) || index < 1 || index > length(kids)) && return false
+    kind = JS.kind(node)
+    if kind == K"block"
+        parent_discarded && return true
+        return index != length(kids)
+    end
+    if kind == K"for" || kind == K"while"
+        return index == length(kids)
+    end
+    discards_tail = kind == K"if" || kind == K"elseif" || kind == K"let" || kind == K"&&" || kind == K"||"
+    if parent_discarded && discards_tail
+        return index >= 2
+    end
+    discards_clause = kind == K"try" || kind == K"catch" || kind == K"finally"
+    if parent_discarded && discards_clause
+        return true
+    end
+    if is_sync_macro(node) && JS.kind(kids[index]) == K"block"
+        return parent_discarded
+    end
+    false
+end
+
 # One scope of the source walk: which def the refs belong to, and which method the calls belong to.
 struct ScanScope
     target::Symbol                    # refs key for the body being walked
@@ -255,41 +503,41 @@ struct ScanScope
     depth::Int                        # function-def nesting
     loop_depth::Int                   # repeating for, while and generator scopes around the node
     site::Union{Nothing,MethodSite}   # method the calls belong to; nothing on a name-resolution walk
-end
-
-function with_bound(scope::ScanScope, bound)
-    ScanScope(scope.target, bound, scope.depth, scope.loop_depth, scope.site)
-end
-
-function deeper(scope::ScanScope)
-    ScanScope(scope.target, scope.bound, scope.depth + 1, scope.loop_depth, scope.site)
-end
-
-function enter_closure(scope::ScanScope, bound)
-    ScanScope(scope.target, bound, scope.depth + 1, scope.loop_depth, scope.site)
-end
-
-function enter_loop(scope::ScanScope, bound)
-    ScanScope(scope.target, bound, scope.depth, scope.loop_depth + 1, scope.site)
+    discarded::Bool                   # this node's value is discarded
 end
 
 function retarget(scope::ScanScope, target, bound)
-    ScanScope(target, bound, scope.depth + 1, scope.loop_depth, scope.site)
+    ScanScope(target, bound, scope.depth + 1, scope.loop_depth, scope.site, false)
 end
 
-function walk_iteration!(fs, n, scope, on_qualified = nothing)
-    k = JS.kind(n)
-    kids = child_nodes(n)
+function entered_scope(scope, node, index, depth, fn_depth)
+    bound = child_locals(node, index, scope.bound)
+    discarded = child_discarded(node, index, scope.discarded)
+    ScanScope(scope.target, bound, fn_depth, depth, scope.site, discarded)
+end
+
+function entered_scope(scope, node, index)
+    entered_scope(scope, node, index, scope.loop_depth, scope.depth)
+end
+
+function read_scope(scope, bound)
+    ScanScope(scope.target, bound, scope.depth, scope.loop_depth, scope.site, false)
+end
+
+function walk_iteration!(fs, node, scope, on_qualified = nothing)
+    kids = child_nodes(node)
     kids === nothing && return
-    if k == K"in" || k == K"="
-        if length(kids) >= 2
-            walk_scoped!(fs, kids[2], scope, on_qualified)
+    kind = JS.kind(node)
+    if kind == K"in" || kind == K"="
+        for index in 2:lastindex(kids)
+            child_scope = entered_scope(scope, node, index)
+            walk_scoped!(fs, kids[index], child_scope, on_qualified)
         end
-        _argname!(scope.bound, kids[1])
         return
     end
-    for c in kids
-        walk_iteration!(fs, c, scope, on_qualified)
+    for index in eachindex(kids)
+        child_scope = entered_scope(scope, node, index)
+        walk_iteration!(fs, kids[index], child_scope, on_qualified)
     end
 end
 
@@ -554,7 +802,8 @@ function record_written!(fs, callee::Symbol, qualifier::String, kids, op_form::B
     arguments = arguments_text(kids, op_form)
     keywords = keywords_text(kids)
     line = source_line(node)
-    call = CallSite(callee, qualifier, arguments, keywords, line, scope.loop_depth)
+    is_used = !scope.discarded
+    call = CallSite(callee, qualifier, arguments, keywords, line, scope.loop_depth, is_used)
     push_call!(fs.callsites, scope.site, call)
 end
 
@@ -583,20 +832,26 @@ function record_call!(fs, node, scope)
     end
 end
 
-# A filter's iterator stays in `scope`. Its predicate is walked in `body`.
-function walk_gen_spec!(fs, n, scope, body, on_qualified = nothing)
-    if JS.kind(n) != K"filter"
-        walk_iteration!(fs, n, scope, on_qualified)
+# A filter's iterator stays at `scope`'s loop depth. Its predicate is inside the loop.
+function walk_gen_spec!(fs, node, scope, interior_depth, on_qualified = nothing)
+    if JS.kind(node) != K"filter"
+        walk_iteration!(fs, node, scope, on_qualified)
         return
     end
-    kids = child_nodes(n)
+    kids = child_nodes(node)
     kids === nothing && return
-    for child in kids
-        kind = JS.kind(child)
-        if kind == K"iteration" || kind == K"in" || kind == K"="
-            walk_iteration!(fs, child, scope, on_qualified)
+    for index in eachindex(kids)
+        child = kids[index]
+        clause = is_iteration_clause(child)
+        depth = scope.loop_depth
+        if !clause
+            depth = interior_depth
+        end
+        child_scope = entered_scope(scope, node, index, depth, scope.depth)
+        if clause
+            walk_iteration!(fs, child, child_scope, on_qualified)
         else
-            walk_scoped!(fs, child, body, on_qualified)
+            walk_scoped!(fs, child, child_scope, on_qualified)
         end
     end
 end
@@ -625,7 +880,7 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
             return
         end
         if length(kids) >= 2
-            inner = deeper(scope)
+            inner = retarget(scope, scope.target, scope.bound)
             absorb_method!(fs, kids[1], kids[2], inner, on_qualified)
         end
         return
@@ -634,67 +889,33 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         if !isnothing(on_qualified)
             walk_assign_lhs!(fs, kids[1], scope, on_qualified)
         end
-        extra = Symbol[]
-        _argname!(extra, kids[1])
-        body = kids[2]
-        inner = nested_bound(scope.bound, extra, body)
-        closed = enter_closure(scope, inner)
-        walk_scoped!(fs, body, closed, on_qualified)
+        body_bound = child_locals(n, 2, scope.bound)
+        closed = retarget(scope, scope.target, body_bound)
+        walk_scoped!(fs, kids[2], closed, on_qualified)
         return
-    elseif k == K"let"
+    elseif k == K"let" || k == K"try"
         kids === nothing && return
-        nested = copy(scope.bound)
-        here = with_bound(scope, nested)
-        for (i, c) in enumerate(kids)
-            ck = child_nodes(c)
-            if JS.kind(c) == K"=" && ck !== nothing && length(ck) >= 2
-                walk_scoped!(fs, ck[2], here, on_qualified)
-                _argname!(nested, ck[1])
-            elseif i == length(kids)
-                collect_scope_assigns!(nested, c)
-                globals = Symbol[]
-                collect_scope_globals!(globals, c)
-                setdiff!(nested, globals)
-                walk_scoped!(fs, c, here, on_qualified)
-            else
-                walk_scoped!(fs, c, here, on_qualified)
-            end
+        for index in eachindex(kids)
+            child_scope = entered_scope(scope, n, index)
+            walk_scoped!(fs, kids[index], child_scope, on_qualified)
         end
         return
     elseif k == K"for" || k == K"while"
-        # The header runs at this depth. The body is one level deeper.
+        # The header runs at this depth. The body is one loop further in.
         (kids === nothing || isempty(kids)) && return
-        nested = copy(scope.bound)
-        body = last(kids)
-        header = with_bound(scope, nested)
-        if k == K"for"
-            for spec in kids[1:end-1]
-                walk_iteration!(fs, spec, header, on_qualified)
+        last_index = length(kids)
+        for index in eachindex(kids)
+            depth = scope.loop_depth
+            if index == last_index
+                depth = scope.loop_depth + 1
             end
-        else
-            walk_scoped!(fs, kids[1], scope, on_qualified)
-        end
-        collect_scope_assigns!(nested, body)
-        globals = Symbol[]
-        collect_scope_globals!(globals, body)
-        setdiff!(nested, globals)
-        body_scope = enter_loop(scope, nested)
-        walk_scoped!(fs, body, body_scope, on_qualified)
-        return
-    elseif k == K"try"
-        kids === nothing && return
-        for c in kids
-            nested = copy(scope.bound)
-            ck = child_nodes(c)
-            if JS.kind(c) == K"catch" && ck !== nothing && !isempty(ck)
-                JS.kind(ck[1]) != K"block" && _argname!(nested, ck[1])
+            child_scope = entered_scope(scope, n, index, depth, scope.depth)
+            header = k == K"for" && index != last_index
+            if header
+                walk_iteration!(fs, kids[index], child_scope, on_qualified)
+            else
+                walk_scoped!(fs, kids[index], child_scope, on_qualified)
             end
-            collect_scope_assigns!(nested, c)
-            globals = Symbol[]
-            collect_scope_globals!(globals, c)
-            setdiff!(nested, globals)
-            clause = with_bound(scope, nested)
-            walk_scoped!(fs, c, clause, on_qualified)
         end
         return
     elseif k == K"comprehension"
@@ -704,17 +925,17 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
     elseif k == K"generator"
         # One scope. The wrapper around a generator adds none, and the first iterator stays outside.
         (kids === nothing || isempty(kids)) && return
-        nested = copy(scope.bound)
-        header = with_bound(scope, nested)
-        inside = enter_loop(scope, nested)
-        specs = kids[2:end]
-        if !isempty(specs)
-            walk_gen_spec!(fs, specs[1], header, inside, on_qualified)
+        interior = scope.loop_depth + 1
+        for index in 2:length(kids)
+            depth = scope.loop_depth
+            if index > 2
+                depth = interior
+            end
+            child_scope = entered_scope(scope, n, index, depth, scope.depth)
+            walk_gen_spec!(fs, kids[index], child_scope, interior, on_qualified)
         end
-        for spec in specs[2:end]
-            walk_gen_spec!(fs, spec, inside, inside, on_qualified)
-        end
-        walk_scoped!(fs, kids[1], inside, on_qualified)
+        element_scope = entered_scope(scope, n, 1, interior, scope.depth)
+        walk_scoped!(fs, kids[1], element_scope, on_qualified)
         return
     elseif k == K"global" || k == K"local"
         kids === nothing && return
@@ -727,21 +948,26 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         end
         return
     elseif k == K"=" && kids !== nothing && length(kids) >= 2 && !is_sig(kids[1])
-        walk_assign_lhs!(fs, kids[1], scope, on_qualified)
-        walk_scoped!(fs, kids[2], scope, on_qualified)
+        read = read_scope(scope, scope.bound)
+        walk_assign_lhs!(fs, kids[1], read, on_qualified)
+        rhs_bound = child_locals(n, 2, scope.bound)
+        rhs = read_scope(scope, rhs_bound)
+        walk_scoped!(fs, kids[2], rhs, on_qualified)
         return
     elseif k == K"call" || k == K"dotcall" || k == K"parameters" || k == K"tuple"
         if k == K"call" || k == K"dotcall"
             record_call!(fs, n, scope)
         end
         n.val isa Symbol && !(n.val in scope.bound) && push!(fs.refs[scope.target], n.val)
-        walk_value_children!(c -> walk_scoped!(fs, c, scope, on_qualified), n)
+        arguments = read_scope(scope, scope.bound)
+        walk_value_children!(c -> walk_scoped!(fs, c, arguments, on_qualified), n)
         return
     end
     n.val isa Symbol && !(n.val in scope.bound) && push!(fs.refs[scope.target], n.val)
     kids === nothing && return
-    for c in kids
-        walk_scoped!(fs, c, scope, on_qualified)
+    for index in eachindex(kids)
+        child_scope = entered_scope(scope, n, index)
+        walk_scoped!(fs, kids[index], child_scope, on_qualified)
     end
 end
 
@@ -786,8 +1012,8 @@ function absorb_defaults!(fs, sig, scope, on_qualified = nothing)
     prefix = copy(scope.bound)
     where_vars!(prefix, sig)
     annotation_bound = copy(prefix)
-    noted = with_bound(scope, annotation_bound)
-    valued = with_bound(scope, prefix)
+    noted = read_scope(scope, annotation_bound)
+    valued = read_scope(scope, prefix)
     kd = JS.kind(sig)
     while kd == K"where" || kd == K"::"
         if !isnothing(on_qualified)
@@ -826,14 +1052,10 @@ end
 # Body refs minus this method's bindings, union default-value refs.
 function absorb_method!(fs, sig, body, scope, on_qualified = nothing)
     get!(fs.refs, scope.target, Set{Symbol}())
-    bound = copy(scope.bound)
-    union!(bound, sig_argnames(sig))
-    collect_scope_assigns!(bound, body)
-    globals = Symbol[]
-    collect_scope_globals!(globals, body)
-    setdiff!(bound, globals)
-    absorb_defaults!(fs, sig, scope, on_qualified)
-    body_scope = with_bound(scope, bound)
+    opened = read_scope(scope, scope.bound)
+    absorb_defaults!(fs, sig, opened, on_qualified)
+    bound = body_locals(sig, body, scope.bound)
+    body_scope = read_scope(scope, bound)
     walk_scoped!(fs, body, body_scope, on_qualified)
 end
 
@@ -904,19 +1126,19 @@ function walk_defs!(fs, n, depth, current)
             qualified = qualified_method_name(kids[1])
             if top
                 site = MethodSite(nm, def_line)
-                opened = ScanScope(nm, Set{Symbol}(), depth + 1, 0, site)
+                opened = ScanScope(nm, Set{Symbol}(), depth + 1, 0, site, false)
                 absorb_method!(fs, kids[1], kids[2], opened)
             elseif !isnothing(qualified)
                 site = MethodSite(qualified, def_line)
-                opened = ScanScope(qualified, Set{Symbol}(), depth + 1, 0, site)
+                opened = ScanScope(qualified, Set{Symbol}(), depth + 1, 0, site, false)
                 absorb_method!(fs, kids[1], kids[2], opened)
             elseif receiver !== nothing
                 site = MethodSite(receiver, def_line)
-                opened = ScanScope(receiver, Set{Symbol}(), depth + 1, 0, site)
+                opened = ScanScope(receiver, Set{Symbol}(), depth + 1, 0, site, false)
                 absorb_method!(fs, kids[1], kids[2], opened)
             elseif current !== nothing && current in fs.types
                 site = MethodSite(current, def_line)
-                opened = ScanScope(current, Set{Symbol}(), depth + 1, 0, site)
+                opened = ScanScope(current, Set{Symbol}(), depth + 1, 0, site, false)
                 absorb_method!(fs, kids[1], kids[2], opened)
             else
                 walk_defs!(fs, kids[2], depth + 1, current)
