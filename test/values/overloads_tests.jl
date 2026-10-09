@@ -175,6 +175,16 @@ boxed(xs::Matrix{Box{L}}) where {L} = xs
 
 const STORE_HEAP = load_package("StoreHeap", STORE_SPINE)
 
+# The heap method loads first; the fixed-size one sits in a module block a later file holds.
+const STORE_BLOCK = load_package("StoreBlock", """
+struct Fix{N,T} <: AbstractVector{T} end
+include("heap.jl")
+include("fixed.jl")
+""", [
+    "heap.jl" => "kernel(xs::Vector{Float64}) = xs\n",
+    "fixed.jl" => "module Blocky\nimport ..kernel, ..Fix\nkernel(xs::Fix{N,Float64}) where {N} = xs\nend\n",
+])
+
 # A method added outside the package. Its module is the test's, so the pair stays the package's.
 StoreHeap.kernel(xs::Matrix{Float64}) = xs
 
@@ -245,6 +255,10 @@ end
     @test length(shared_hits) == 1
     shared_hit = only(shared_hits)
     @test shared_hit.mod === :A
+    block_ctx = case_context(STORE_BLOCK)
+    block_found = ArchCheck.run(StorageOverloads(), block_ctx)
+    block_hit = only(block_found)
+    @test block_hit.file == joinpath("src", "heap.jl")
 end
 
 @testset "storage pairs drawn from the lattice match the verdict of the draw" begin

@@ -267,21 +267,10 @@ function walk_sites!(grouped, counts, node, method, path, min_nodes, bound)
     end
 end
 
-function file_order(index)
-    order = Dict{String,Tuple{Vector{Int},Int}}()
-    for file in index.files
-        order[file.path] = (file.modrank, file.filerank)
-    end
-    order
-end
+site_place(places, site) = get(places, (site.mod, site.file), Int[])
 
-function site_rank(order, file)
-    haskey(order, file) || return (Int[], 0)
-    order[file]
-end
-
-function sort_sites(sites, order)
-    sort(sites; by = site -> (site_rank(order, site.file), site.line, site.path))
+function sort_sites(sites, places)
+    sort(sites; by = site -> (site_place(places, site), site.line, site.path))
 end
 
 function method_keys(sites)
@@ -351,8 +340,8 @@ function keep_groups(grouped)
     kept
 end
 
-function clone_finding(group, order)
-    ranked = sort_sites(group.sites, order)
+function clone_finding(group, places)
+    ranked = sort_sites(group.sites, places)
     keys = method_keys(ranked)
     first_site = first(ranked)
     labels = joined_labels(keys)
@@ -371,7 +360,7 @@ end
 
 function expression_clone_findings(index, min_nodes)
     grouped = Dict{CloneDigest,Vector{CloneSite}}()
-    order = file_order(index)
+    places = load_places(index)
     for file in index.files
         counts = IdDict{JS.SyntaxNode,Int}()
         count_nodes!(counts, file.tree)
@@ -384,7 +373,7 @@ function expression_clone_findings(index, min_nodes)
     kept = keep_groups(grouped)
     found = Finding[]
     for group in kept
-        push!(found, clone_finding(group, order))
+        push!(found, clone_finding(group, places))
     end
     found
 end
