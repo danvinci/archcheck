@@ -1,8 +1,7 @@
 # Severities, worst first. An error blocks the gate; an advisory reports.
 const SEVERITIES = (:error, :advisory)
 
-# One structural problem, owned by the module whose code carries it. Its severity is not its own: the
-# emitting check declares it per kind, and the gate's `error_kinds` may promote it.
+"""One problem a check found: the module whose code carries it, its `kind`, where it is, what was seen (`detail`), and measurements as `evidence` pairs. Its check declares the kind's severity, and `gate`'s `error_kinds` may promote it."""
 struct Finding
     mod::Symbol      # module the offending code lives in
     kind::Symbol     # the check that produced it

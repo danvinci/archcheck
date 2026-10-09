@@ -9,8 +9,7 @@ function checks_in(checks, wanted::Symbol)
     Tuple(check for check in checks if phase(check) === wanted)
 end
 
-# One parse of `pkg`'s src/, the static checks, then `workload()` under `probes` and the checks that read it; one
-# JSONL report, and an error on any error finding. `entries` seed the method graph; `derived` declares values.
+"""Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()` with `probes` armed and the checks that read it. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names."""
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
