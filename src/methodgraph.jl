@@ -16,8 +16,7 @@ function method_graph(entries, modules, values)
     module_set = Set{Module}(modules)
     edges = Dict{Method,Set{Method}}()
     pending = Core.MethodInstance[]
-    seen = Set{Core.MethodInstance}()
-    walked = Set{Method}()
+    walked = Dict{Method,Any}()   # method -> the signature its walks cover
     for entry in entries
         instance = entry_instance(entry)
         push!(pending, instance)
@@ -26,15 +25,23 @@ function method_graph(entries, modules, values)
     interp = Core.Compiler.NativeInterpreter()
     while !isempty(pending)
         reached = pop!(pending)
-        # A method reached again at another specialization is walked once at its declared signature, which covers
-        # every narrower one; inference can otherwise nest argument types without bound.
-        instance = reached.def in walked ? declared_instance(reached.def) : reached
-        instance in seen && continue
-        push!(seen, instance)
-        push!(walked, instance.def)
+        instance = covering_instance(walked, reached)
+        isnothing(instance) && continue
+        walked[instance.def] = instance.specTypes
         expand_instance!(edges, pending, instance, module_set, values, interp)
     end
     MethodGraph(edges)
+end
+
+# A method reached outside the signature its walks cover is walked again at the join of both. Each join climbs the
+# type lattice, so argument types inference nests across walks stop at a signature covering every nesting.
+function covering_instance(walked, reached::Core.MethodInstance)
+    method = reached.def
+    haskey(walked, method) || return reached
+    covered = walked[method]
+    reached.specTypes <: covered && return nothing
+    joined = typejoin(covered, reached.specTypes)
+    instance_at(method, joined)
 end
 
 function entry_instance(@nospecialize(entry))
@@ -97,7 +104,7 @@ function record_resolved!(edges, pending, frame, caller, module_set)
 end
 
 # A call left to runtime dispatch can land on each package method its inferred types match. Each is an edge, walked
-# once at its declared signature, so a method reached only through such a call keeps its own calls in the graph.
+# at the types the call holds, so a method reached only through such a call keeps its own calls in the graph.
 function record_dispatched!(edges, pending, code, instance, caller, module_set, values)
     sptypes = Core.Compiler.sptypes_from_meth_instance(instance)
     for stmt in code.code
@@ -108,7 +115,7 @@ function record_dispatched!(edges, pending, code, instance, caller, module_set, 
         for match in package_matches(call, module_set, values)
             callee = written_method(match.method)
             add_edge!(edges, caller, callee)
-            target = declared_instance(match.method)
+            target = Core.Compiler.specialize_method(match)
             enqueue_target!(pending, target, module_set)
         end
     end
@@ -238,17 +245,14 @@ function connect_method!(edges, pending, caller, method, instances, module_set)
     end
 end
 
-# A method at its declared signature, type variables left free: the widest specialization, so its calls cover every
-# narrower one's.
-function declared_instance(method::Method)
-    variables = Any[]
-    signature = method.sig
-    while signature isa UnionAll
-        push!(variables, signature.var)
-        signature = signature.body
-    end
-    Core.Compiler.specialize_method(method, method.sig, Core.svec(variables...))
+# A method specialized to the part of `signature` its own signature admits, type variables it leaves open kept free.
+function instance_at(method::Method, @nospecialize(signature))
+    intersection = ccall(:jl_type_intersection_with_env, Any, (Any, Any), signature, method.sig)::Core.SimpleVector
+    Core.Compiler.specialize_method(method, intersection[1], intersection[2])
 end
+
+# A method at its declared signature: the widest specialization, so its calls cover every narrower one's.
+declared_instance(method::Method) = instance_at(method, method.sig)
 
 function enqueue_target!(pending, target, module_set)
     method = target.def
