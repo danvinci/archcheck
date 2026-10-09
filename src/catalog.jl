@@ -29,6 +29,7 @@ const CHECKS = (
     OneProducer(),
     CacheKeys(),
     CachedCalls(),
+    DerivedReaders(),
 )
 
 # A finding's kind must be one its check declares, or the gate has no severity for it.
