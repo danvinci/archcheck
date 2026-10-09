@@ -213,11 +213,18 @@ struct ModuleNames
     root::Union{Symbol,Nothing}      # the package's own name, which a path may open with; nothing when unknown
 end
 
-# The project module a name path reaches from `scope`, and how many names it spans. One leading dot opens in
-# `scope`, each more in its parent; lookup widens to the root, where `using ..Name` bindings point.
+# No leading dot is an absolute path and opens at the root. One dot opens in `scope`, each further dot in its
+# parent, and lookup then widens toward the root.
+function resolve_opening(scope, dots)
+    dots == 0 && return 0
+    climbed = length(scope) - (dots - 1)
+    max(climbed, 0)
+end
+
+# The project module a path reaches from `scope`, and how many names of that path it spans.
 function resolve_module(modules::ModuleNames, scope, path, dots)
     known = modules.known
-    opening = max(length(scope) - (dots - 1), 0)
+    opening = resolve_opening(scope, dots)
     for depth in opening:-1:0
         if depth == 0 && first(path) === modules.root   # the package itself; its modules sit below it
             length(path) == 1 && return modules.root, 1
@@ -388,6 +395,14 @@ struct FileNode
     tree::JS.SyntaxNode   # the file's one parse, kept so no check reads the file again
 end
 
+# A directory module keeps the rank stored for it. The package spine is the root's file and has no
+# directory of its own; its rank is earlier than every module rank, which starts at 1.
+function module_rank_of(owner, ranks, root)
+    haskey(ranks, owner) && return ranks[owner]
+    owner === root && return Int[0]
+    Int[]
+end
+
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
 struct SourceIndex
     repo::String                            # the root every path below is relative to
@@ -476,7 +491,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
         iswrapper = !isnothing(entry) && normpath(entry) == path
         inmod = relpath(path, moddirs[owner])
         filerank = get(franks[owner], inmod, 0)
-        modrank = get(ranks, owner, Int[])
+        modrank = module_rank_of(owner, ranks, root)
         name = basename(path)
         scan = scan_tree(tree)
         push!(nodes, FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, tree))
@@ -493,6 +508,19 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
         entry = get(wrappers, mod, nothing)
         if !isnothing(entry) && isfile(entry)
             add_file!(mod, entry)
+        end
+    end
+    # The spine sits above every module directory, so the directory walk has no owner for it.
+    if !isnothing(root)
+        spine_name = string(root) * ".jl"
+        spine_joined = joinpath(src_root, spine_name)
+        spine_path = normpath(spine_joined)
+        spine_key = (root, spine_path)
+        if isfile(spine_path) && !(spine_key in indexed)
+            get!(moddirs, root, src_root)
+            get!(franks, root, Dict{String,Int}())
+            get!(wrappers, root, spine_path)
+            add_file!(root, spine_path)
         end
     end
     for (root, _, files) in walkdir(src_root), fn in files
