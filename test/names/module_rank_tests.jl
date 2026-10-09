@@ -208,7 +208,12 @@ end
     @test !isempty(chain_edges)
 end
 
-@testset "nested module back edges match the generated finish order" begin
+function back_edge_pairs(check, ctx)
+    found = ArchCheck.run(check, ctx)
+    Set((string(finding.mod), finding.symbol) for finding in found)
+end
+
+@testset "nested module back edges match the generated finish order, and a reference to an enclosing module counts only when strict" begin
     for seed in 1:40
         rng = Xoshiro(seed)
         spec = random_package(rng)
@@ -217,10 +222,10 @@ end
         ctx = Base.invokelatest(case_context, case)
         rank_names = Set(string(key) for key in keys(ctx.index.rank))
         @test rank_names == Set(spec.modules)
-        found = ArchCheck.run(ModuleBackEdges(), ctx)
-        got = Set((string(finding.mod), finding.symbol) for finding in found)
-        expected = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])
-        @test got == expected
+        layered = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])
+        @test back_edge_pairs(ModuleBackEdges(strict = true), ctx) == layered
+        outward = Set((from, to) for (from, to) in layered if !startswith(from, to * "."))
+        @test back_edge_pairs(ModuleBackEdges(), ctx) == outward
     end
 end
 
@@ -230,7 +235,8 @@ end
         ctx = case_context(case)
         corpus = ArchCheck.run(Corpus(), ctx)
         @test !any(finding -> finding.kind === :unranked_module, corpus)
-        found = ArchCheck.run(ModuleBackEdges(), ctx)
+        @test isempty(ArchCheck.run(ModuleBackEdges(), ctx))
+        found = ArchCheck.run(ModuleBackEdges(strict = true), ctx)
         climb = only(found)
         @test climb.mod === inline
         @test climb.symbol == parent
