@@ -49,6 +49,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("sinkable", "src/shape/sinks.jl", "sink_a"),
     ("sinkable", "src/shape/sinks.jl", "sink_b"),
     ("sinkable", "src/shape/sinks.jl", "sink_c"),
+    ("stale_export", "src/Exhibits.jl", "not_here"),
     ("stale_export", "src/shape/Shape.jl", "never_defined"),
     ("storage_overload", "src/shape/plants.jl", "store_copy"),
     ("string_payload", "src/shape/payloads.jl", "Dict{String,Any}"),
