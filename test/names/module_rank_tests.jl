@@ -84,12 +84,17 @@ grow() = 1
     "tokens.jl" => "module Tokens\nclimb() = InlineRoot.grow()\nend\n",
 ])
 
-# A spine with one directory module and plain files at two include depths, one holding a module block.
+# A spine with one directory module and plain files at two include depths, one holding a module block, and a
+# module file behind a version check that fails, as an extension's fallback include is on current Julia.
 const SPINE_FILES = load_package("SpineFiles", """
 include("pkg/Versions.jl")
 using .Versions
 include("utils.jl")
+@static if false
+    include("guarded.jl")
+end
 """, [
+    "guarded.jl" => "module Guarded\nend\n",
     "pkg/Versions.jl" => "module Versions\nend\n",
     "utils.jl" => """
     include("deeper.jl")
@@ -233,7 +238,7 @@ end
     end
 end
 
-@testset "the root owns every file its spine includes outside a module directory" begin
+@testset "the root owns every file its spine includes outside a module directory, loaded or not" begin
     ctx = case_context(SPINE_FILES)
     corpus = ArchCheck.run(Corpus(), ctx)
     @test isempty(corpus)
