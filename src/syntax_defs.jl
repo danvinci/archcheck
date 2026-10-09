@@ -159,7 +159,7 @@ function record_top_method!(scan, name, children)
     if !haskey(scan.refs, name)
         scan.refs[name] = Set{Symbol}()
     end
-    scan.argtypes[name] = sig_argtypes(children[1])
+    scan.argtypes[name] = read_positionals(argtype_of, children[1])
     slots = 0
     if length(children) >= 2
         slots = tuple_tail_slots(children[2])

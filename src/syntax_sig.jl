@@ -108,15 +108,24 @@ function argtype_of(argument)
     nothing
 end
 
-# Positional-argument declared types. The keyword block is skipped.
-function sig_argtypes(signature)
+# The one name a positional argument binds at its slot. A splat, a destructured tuple and a bare `::T` bind none.
+function argname_of(argument)
+    JS.kind(argument) == K"..." && return nothing
+    names = Symbol[]
+    _argname!(names, argument)
+    length(names) == 1 || return nothing
+    only(names)
+end
+
+# One reading per positional argument, in order. The keyword block is skipped.
+function read_positionals(read, signature)
     found = Union{Symbol,Nothing}[]
     parts = call_parts(signature)
     isnothing(parts) && return found
     for argument in parts.arguments
         JS.kind(argument) == K"parameters" && continue
-        declared = argtype_of(argument)
-        push!(found, declared)
+        value = read(argument)
+        push!(found, value)
     end
     found
 end

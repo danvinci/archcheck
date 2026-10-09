@@ -129,33 +129,140 @@ function repeated_costs(index, ordered, caller, call)
     !name_mutates(call.callee)
 end
 
+# A method's body, the parameter name at each positional slot, and the loop elements each parameter yields. A name
+# the body binds again holds another value there, so its slot carries nothing.
+function method_flow(index, method)
+    located = method_form(index, method)
+    isnothing(located) && return nothing
+    form = located.form
+    body = method_body(form)
+    isnothing(body) && return nothing
+    signature = child_nodes(form)[1]
+    declared = read_positionals(argname_of, signature)
+    rebound = Symbol[]
+    bound_names!(rebound, body)
+    parameters = Union{Symbol,Nothing}[]
+    for name in declared
+        carried = name in rebound ? nothing : name
+        push!(parameters, carried)
+    end
+    elements = loop_elements(body, parameters, rebound)
+    (; body, parameters, elements)
+end
+
+# Each name a loop binds to the elements of a carried parameter, mapped to that parameter. A name bound anywhere
+# else as well holds other values too.
+function loop_elements(body, parameters, rebound)
+    elements = Dict{Symbol,Symbol}()
+    for node in walk_nodes(body)
+        is_bound_clause(node) || continue
+        parent = node.parent
+        (isnothing(parent) || JS.kind(parent) != K"iteration") && continue
+        children = child_nodes(node)
+        element = children[1].val
+        source = children[2].val
+        (element isa Symbol && source isa Symbol) || continue
+        source in parameters || continue
+        count(isequal(element), rebound) == 1 || continue
+        elements[element] = source
+    end
+    elements
+end
+
+# The parameter a positional argument carries: its bare name, or a loop element alone in a tuple, which asks the
+# parameter's question of one part.
+function carried_name(flow, argument)
+    value = argument.val
+    value isa Symbol && return value
+    JS.kind(argument) == K"tuple" || return nothing
+    items = child_nodes(argument)
+    (isnothing(items) || length(items) != 1) && return nothing
+    element = only(items).val
+    element isa Symbol || return nothing
+    get(flow.elements, element, nothing)
+end
+
+function carried_names(flow, call)
+    names = Union{Symbol,Nothing}[]
+    for argument in positional_arguments(call)
+        named = carried_name(flow, argument)
+        push!(names, named)
+    end
+    names
+end
+
+# Each carried value's slot in the callee: where the call passes an argument carrying its parameter.
+function moved_slots(parameters, slots, passed)
+    moved = Int[]
+    for slot in slots
+        name = get(parameters, slot, nothing)
+        isnothing(name) && return nothing
+        position = findfirst(isequal(name), passed)
+        isnothing(position) && return nothing
+        push!(moved, position)
+    end
+    moved
+end
+
+# A step is a method and, per argument of the caller's call, the parameter slot holding it there.
+function carried_steps(index, ordered, step)
+    method = step[1]
+    slots = step[2]
+    steps = Tuple{Method,Vector{Int}}[]
+    flow = method_flow(index, method)
+    isnothing(flow) && return steps
+    for node in walk_nodes(flow.body)
+        JS.kind(node) == K"call" || continue
+        naming = called_name(node)
+        isnothing(naming) && continue
+        passed = carried_names(flow, node)
+        moved = moved_slots(flow.parameters, slots, passed)
+        isnothing(moved) && continue
+        for callee in resolved_targets(ordered, method, naming)
+            push!(steps, (callee, moved))
+        end
+    end
+    steps
+end
+
+function arrives(step, goals)
+    step[1] in goals || return false
+    slots = step[2]
+    slots == eachindex(slots)
+end
+
 function rebuild_methods(previous, start, goal)
     path = Method[]
     cursor = goal
     limit = length(previous) + 1
     for _step in 1:limit
-        push!(path, cursor)
-        cursor === start && break
+        push!(path, cursor[1])
+        cursor == start && break
         cursor = previous[cursor]
     end
     reverse!(path)
     path
 end
 
-function first_path(ordered, start, goals)
-    previous = Dict{Method,Method}()
-    queue = Method[start]
-    seen = Set{Method}([start])
+# A path counts only when every argument the caller passed the helper reaches the inner method at its own slot.
+function first_path(index, ordered, start, goals)
+    opened = method_flow(index, start)
+    isnothing(opened) && return nothing
+    slots = collect(eachindex(opened.parameters))
+    origin = (start, slots)
+    previous = Dict{Tuple{Method,Vector{Int}},Tuple{Method,Vector{Int}}}()
+    queue = [origin]
+    seen = Set([origin])
     head = 1
     while head <= length(queue)
         current = queue[head]
         head += 1
-        for callee in callees_of(ordered, current)
-            callee in seen && continue
-            push!(seen, callee)
-            previous[callee] = current
-            callee in goals && return rebuild_methods(previous, start, callee)
-            push!(queue, callee)
+        for step in carried_steps(index, ordered, current)
+            step in seen && continue
+            push!(seen, step)
+            previous[step] = current
+            arrives(step, goals) && return rebuild_methods(previous, origin, step)
+            push!(queue, step)
         end
     end
     nothing
@@ -169,7 +276,7 @@ function reach_costing(index, ordered, helpers, inners)
     isempty(costing) && return nothing
     ordered_helpers = sort(collect(helpers); lt = method_before)
     for start in ordered_helpers
-        path = first_path(ordered, start, costing)
+        path = first_path(index, ordered, start, costing)
         isnothing(path) || return path
     end
     nothing
@@ -209,6 +316,12 @@ function earlier_line(found, pair)
     found
 end
 
+# Equal argument text names one value only while no name in it is bound again between the two calls.
+function asks_once(left, right)
+    left.bindings == right.bindings || return false
+    calls_join(left, right)
+end
+
 function joining_line(calls)
     found = nothing
     last_index = length(calls)
@@ -216,7 +329,7 @@ function joining_line(calls)
         left = calls[left_index]
         for right_index in (left_index + 1):last_index
             right = calls[right_index]
-            calls_join(left, right) || continue
+            asks_once(left, right) || continue
             pair = min(left.call.line, right.call.line)
             found = earlier_line(found, pair)
         end
@@ -228,7 +341,7 @@ function cross_line(helpers, inners)
     found = nothing
     for helper in helpers
         for inner in inners
-            calls_join(helper, inner) || continue
+            asks_once(helper, inner) || continue
             pair = min(helper.call.line, inner.call.line)
             found = earlier_line(found, pair)
         end

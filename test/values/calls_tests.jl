@@ -120,10 +120,88 @@ function falls_through(kind::Int, kids::Vector{Int}, index::Int, outer::Int)
     end
     while_child(kids, index, outer)
 end
+tail_part(xs::Vector{Int}) = inner(xs[2:end])
+ask_part(xs::Vector{Int}) = tail_part(xs) + inner(xs)
+function rebind_part(xs::Vector{Int})
+    xs = xs[2:end]
+    inner(xs)
+end
+ask_rebind(xs::Vector{Int}) = rebind_part(xs) + inner(xs)
+function scaled_sum(scale::Int, xs::Vector{Int})
+    total = 0
+    for x in xs
+        total += scale * x
+    end
+    total
+end
+scaled_tail(scale::Int, xs::Vector{Int}) = scaled_sum(scale, xs[2:end])
+ask_scaled(scale::Int, xs::Vector{Int}) = scaled_tail(scale, xs) + scaled_sum(scale, xs)
+flipped(xs::Vector{Int}, scale::Int) = scaled_sum(scale, xs)
+swapped(scale::Int, xs::Vector{Int}) = flipped(xs, scale)
+ask_swap(scale::Int, xs::Vector{Int}) = swapped(scale, xs) + scaled_sum(scale, xs)
+function two_loops(groups::Vector{Vector{Int}}, others::Vector{Vector{Int}})
+    total = 0
+    for xs in groups
+        total += inner(xs)
+    end
+    for xs in others
+        total += inner(xs)
+    end
+    total
+end
+function rebound_twice(xs::Vector{Int})
+    total = inner(xs)
+    xs = reverse(xs)
+    total + inner(xs)
+end
+function same_loops(groups::Vector{Vector{Int}})
+    total = 0
+    for xs in groups
+        total += inner(xs)
+    end
+    for xs in groups
+        total += inner(xs)
+    end
+    total
+end
+function gap_all(groups)
+    gap = 0
+    for group in groups, x in group
+        gap = max(gap, x)
+    end
+    gap
+end
+function gap_each(groups::Vector{Vector{Int}})
+    nearest = 0
+    for group in groups
+        nearest = max(nearest, gap_all((group,)))
+    end
+    nearest
+end
+ask_each(groups::Vector{Vector{Int}}) = gap_each(groups) + gap_all(groups)
+function gap_bare(groups::Vector{Vector{Int}})
+    nearest = 0
+    for group in groups
+        nearest = max(nearest, gap_all(group))
+    end
+    nearest
+end
+ask_bare(groups::Vector{Vector{Int}}) = gap_bare(groups) + gap_all(groups)
 """
 
 const BRANCH_ARGUMENTS = Tuple{Int,Vector{Int},Int,Int}
 const BRANCH_NAMES = (:child_locals, :arm_pair, :returned_twice, :same_arm, :falls_through)
+const FLOW_ENTRIES = (
+    (:ask_part, Tuple{Vector{Int}}),
+    (:ask_rebind, Tuple{Vector{Int}}),
+    (:ask_scaled, Tuple{Int,Vector{Int}}),
+    (:ask_swap, Tuple{Int,Vector{Int}}),
+    (:two_loops, Tuple{Vector{Vector{Int}},Vector{Vector{Int}}}),
+    (:rebound_twice, Tuple{Vector{Int}}),
+    (:same_loops, Tuple{Vector{Vector{Int}}}),
+    (:ask_each, Tuple{Vector{Vector{Int}}}),
+    (:ask_bare, Tuple{Vector{Vector{Int}}}),
+)
 const CALL_PROBE = load_package("CallProbe", CALL_BODY)
 
 function call_entries(pkg)
@@ -150,6 +228,10 @@ function call_entries(pkg)
     for name in BRANCH_NAMES
         func = getfield(pkg, name)
         push!(entries, (func, BRANCH_ARGUMENTS))
+    end
+    for (name, arguments) in FLOW_ENTRIES
+        func = getfield(pkg, name)
+        push!(entries, (func, arguments))
     end
     entries
 end
@@ -179,9 +261,10 @@ function random_edges(rng, count)
     edges
 end
 
+# Each call passes `x` itself, so the value reaches the callee; the keyword keeps one method's calls apart.
 function method_block(index, targets, has_loop)
     lines = String[]
-    push!(lines, "function m$(index)(x::Int)")
+    push!(lines, "function m$(index)(x::Int; slot::Int = 0)")
     push!(lines, "    total = 0")
     if has_loop
         push!(lines, "    for k in 1:x")
@@ -189,7 +272,7 @@ function method_block(index, targets, has_loop)
         push!(lines, "    end")
     end
     for (slot, target) in enumerate(targets)
-        push!(lines, "    total += m$(target)(x - $slot)")
+        push!(lines, "    total += m$(target)(x; slot = $slot)")
     end
     push!(lines, "    total")
     push!(lines, "end")
@@ -450,6 +533,31 @@ const KEEP_BARE = kept_case("KeepBare", BARE_VENDOR, BARE_USE)
         helpers = "for_child(kids, index, outer) while_child(kids, index, outer)"
         @test ("same_arm", helpers, "for_child while_child") in got
         @test ("falls_through", helpers, "for_child while_child") in got
+    end
+
+    @testset "a helper that reaches the callee on another value stays quiet, and one that passes the value on fires" begin
+        got = overlap_records(CALL_PROBE_FOUND)
+        symbols = record_symbols(got)
+        for symbol in ("ask_part", "ask_rebind", "ask_scaled")
+            @test !(symbol in symbols)
+        end
+        swapped = ("ask_swap", "swapped(scale, xs) scaled_sum(scale, xs)", "swapped flipped scaled_sum")
+        @test swapped in got
+    end
+
+    @testset "a helper asking each element as a one-element collection fires, and one asking each bare element stays quiet" begin
+        got = overlap_records(CALL_PROBE_FOUND)
+        symbols = record_symbols(got)
+        @test ("ask_each", "gap_each(groups) gap_all(groups)", "gap_each gap_all") in got
+        @test !("ask_bare" in symbols)
+    end
+
+    @testset "equal calls over two collections or around an assignment are two questions, and over one collection one" begin
+        got = overlap_records(CALL_PROBE_FOUND)
+        symbols = record_symbols(got)
+        @test !("two_loops" in symbols)
+        @test !("rebound_twice" in symbols)
+        @test ("same_loops", "inner(xs)", "inner") in got
     end
 
     @testset "overlapping calls need entries" begin
