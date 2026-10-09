@@ -140,18 +140,18 @@ function observe(workload, probes, ctx)
         elapsed = @elapsed workload()
     else
         armed = arm!(probes, ctx)
-        # arm! defines the probed methods after the caller's world began, so the workload runs in the latest one.
-        # disarm! still runs when the workload throws, and that exception propagates.
+        # arm! and disarm! define methods and keyword bodies after the caller's world began, so the workload and
+        # every read of the method table run in the latest one. disarm! still runs when the workload throws.
         try
             elapsed = @elapsed Base.invokelatest(workload)
-            probed_compiled = compiled_probed(probes, modules)
+            probed_compiled = Base.invokelatest(compiled_probed, probes, modules)
         finally
             traced = disarm!(armed)
             records = traced.records
             waits = traced.waits
         end
     end
-    reached = compiled_methods(modules)
-    credit_restored!(reached, probed_compiled)
+    reached = Base.invokelatest(compiled_methods, modules)
+    Base.invokelatest(credit_restored!, reached, probed_compiled)
     Observation(reached, records, waits, elapsed)
 end
