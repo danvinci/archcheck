@@ -23,6 +23,31 @@ end
 # evidence is a fixed key/value vocabulary per kind, so tests read it by key
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
+# A package loaded into Main from a fresh `src/`: `spine` is the body of `module name`, `files` the other sources by
+# path under `src/`. A test runs a check on it with `run(check, case_context(case))`.
+function load_package(name::AbstractString, spine::AbstractString, files = Pair{String,String}[])
+    root = mktempdir()
+    src = joinpath(root, "src")
+    mkpath(src)
+    for (relative, source) in files
+        path = joinpath(src, relative)
+        mkpath(dirname(path))
+        write(path, source)
+    end
+    spine_path = joinpath(src, name * ".jl")
+    write(spine_path, "module $name\n$spine\nend\n")
+    pkg = Base.include(Main, spine_path)
+    (; pkg, root, src)
+end
+
+case_context(case; options...) = Context(case.pkg; src = case.src, options...)
+
+# Findings as sorted rows of kind, symbol, and the named evidence values.
+function evidence_rows(found, keys::Symbol...)
+    rows = [(f.kind, f.symbol, (ev(f, key) for key in keys)...) for f in found]
+    sort!(rows)
+end
+
 # every engine check at its declared severity, with no consumer promotion
 function default_severity()
     engine = (ArchCheck.CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))

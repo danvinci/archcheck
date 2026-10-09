@@ -128,10 +128,9 @@ function collect_const_aliases!(aliases, n, known)
     end
 end
 
-# Each scanned file's path and parse: the index's own trees, then the entry-dir scripts, which the index reads
-# only for names and so parses here.
-function scanned_trees(index::SourceIndex, entry_dirs)
-    trees = Pair{String,JS.SyntaxNode}[f.path => f.tree for f in index.files]
+# Each entry-dir script's path and parse. The index reads these only for names, so they are parsed here.
+function entry_trees(index::SourceIndex, entry_dirs)
+    trees = Pair{String,JS.SyntaxNode}[]
     seen = Set(resolve_scan_path(index, f.path) for f in index.files)
     for d in entry_dirs
         isdir(d) || continue   # a missing entry dir contributes nothing, as in the index
@@ -150,11 +149,42 @@ function scanned_trees(index::SourceIndex, entry_dirs)
     trees
 end
 
-function check_reaches_internal(index::SourceIndex, mods; entry_dirs)
+function reaches_internal(mod_name, path, member, line)
+    symbol = "$mod_name.$member"
+    detail = "reference to a name its module does not declare public"
+    Finding(mod_name, :reaches_internal, path, symbol, line, detail)
+end
+
+# An entry script's using or import clause binds an internal name the way a qualified path reaches it. A source
+# file's clauses are the declared-names check's.
+function imported_internals!(findings, path, tree, modules::ModuleNames, by_key)
+    refs = ModRef[]
+    walk_modrefs!(refs, :_, Symbol[], path, modules, tree)
+    for ref in refs
+        ref.via === :using || ref.via === :import || continue
+        M = get(by_key, ref.to, nothing)
+        isnothing(M) && continue
+        for member in ref.names
+            isdefined(M, member) || continue
+            Base.ispublic(M, member) && continue
+            push!(findings, reaches_internal(ref.to, path, member, ref.line))
+        end
+    end
+end
+
+function check_reaches_internal(index::SourceIndex, mods, root::Symbol; entry_dirs)
     known = loaded_modules(mods)
     tracked = Set(mods)
     findings = Finding[]
-    for (path, tree) in scanned_trees(index, entry_dirs)
+    scripts = entry_trees(index, entry_dirs)
+    by_key = Dict(module_key(M) => M for M in mods)
+    keys_known = Set{Symbol}(keys(by_key))
+    modules = ModuleNames(keys_known, root)
+    for (path, tree) in scripts
+        imported_internals!(findings, path, tree, modules, by_key)
+    end
+    sources = Pair{String,JS.SyntaxNode}[f.path => f.tree for f in index.files]
+    for (path, tree) in [sources; scripts]
         aliases = Dict{Symbol,Module}()
         collect_const_aliases!(aliases, tree, known)
         fs = empty_scan()
@@ -167,9 +197,7 @@ function check_reaches_internal(index::SourceIndex, mods; entry_dirs)
             isdefined(M, member) || return
             Base.ispublic(M, member) && return
             mod_name = module_key(M)
-            symbol = "$mod_name.$member"
-            detail = "reference to a name its module does not declare public"
-            push!(findings, Finding(mod_name, :reaches_internal, path, symbol, line, detail))
+            push!(findings, reaches_internal(mod_name, path, member, line))
         end
         scope = ScanScope(placeholder, Set{Symbol}(), 0, 0, nothing, false)
         walk_scoped!(fs, tree, scope, on_qualified)

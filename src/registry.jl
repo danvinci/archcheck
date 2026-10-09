@@ -173,7 +173,7 @@ kinds(::BlanketExports) = (:blanket_export => :advisory,)
 run(::StaleExports, ctx) = check_stale_exports(ctx.mods)
 kinds(::StaleExports) = (:stale_export => :advisory,)
 
-run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods; entry_dirs = ctx.entry_dirs)
+run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods, nameof(ctx.root); entry_dirs = ctx.entry_dirs)
 kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
 
 run(::PrivateImports, ctx) = check_private_imports(ctx.index)
