@@ -30,16 +30,7 @@ function gate(pkg::Module;
         isempty(observing) || throw(ArgumentError("workload checks $waiting need a workload"))
         isnothing(probes) || throw(ArgumentError("probes observe a workload, and none is declared"))
     end
-    pkg_name = string(nameof(pkg))
-    spine = joinpath(src, pkg_name * ".jl")
-    root = nameof(pkg)
-    rank, dir2mod = package_layout(spine, root)
-    index = build_source_index(src, rank, dir2mod; entry_dirs, root)   # the one parse, src/ and entry dirs
-    ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
-    mods = [loaded_module(pkg, m) for m in ordered]
-
-    methods = isempty(entries) ? nothing : method_graph(entries, package_modules(pkg, mods))
-    ctx = Context(index, pkg, mods; entry_dirs, methods, derived)
+    ctx = Context(pkg; src, entry_dirs, entries, derived)   # the one parse, src/ and entry dirs
     findings = run_checks(ctx, static)
     if !isnothing(workload)
         observed = observe(workload, probes, ctx)
@@ -54,7 +45,7 @@ function gate(pkg::Module;
     current = Set(fingerprint(f) for f in findings)
     new = new_findings(findings, previous)
     fixed = isnothing(previous) ? 0 : length(setdiff(previous, current))
-    print_architecture(io, findings, new, fixed, index.rank, severity)
+    print_architecture(io, findings, new, fixed, ctx.index.rank, severity)
     open(handle -> emit_jsonl(handle, findings, severity), report_path, "w")
 
     errors = filter(f -> severity[f.kind] === :error, findings)

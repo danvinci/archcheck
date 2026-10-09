@@ -22,6 +22,20 @@ function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[], 
     Context(index, graph, root, mods, sites, callgraphs, entry_dirs, methods, nothing, derived)
 end
 
+"""What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
+function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = String[], entries = (), derived = ())
+    pkg_name = string(nameof(pkg))
+    spine = joinpath(src, pkg_name * ".jl")
+    root = nameof(pkg)
+    rank, dir2mod = package_layout(spine, root)
+    index = build_source_index(src, rank, dir2mod; entry_dirs, root)
+    ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
+    mods = Module[loaded_module(pkg, m) for m in ordered]
+    project = package_modules(pkg, mods)
+    methods = isempty(entries) ? nothing : method_graph(entries, project)
+    Context(index, pkg, mods; entry_dirs, methods, derived)
+end
+
 # The same context once the workload has run.
 function Context(ctx::Context; observed::Observation)
     Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.entry_dirs, ctx.methods,
