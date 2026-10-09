@@ -22,12 +22,13 @@ include("checks_overloads.jl")
 include("checks_clones.jl")
 include("checks_reach.jl")
 include("checks_opt.jl")
+include("checks_trace.jl")
 include("catalog.jl")
 include("gate.jl")
 
 export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
 public kinds, phase, gate
-export MethodSite, CallSite, MethodGraph, Probes, ProbeRecord, Observation
+export MethodSite, CallSite, MethodGraph, Probes, ProbeRecord, WaitRecord, ProbeTrace, Observation
 public method_graph, arm!, disarm!, observe, package_layout
 export FindingKey, fingerprint, previous_fingerprints, new_findings
 export ModRef, ModuleGraph, build_module_graph, scan_modrefs
@@ -38,6 +39,7 @@ export CallerWhitelist, SentinelReturns, StringPayloads
 export StorageOverloads, ExpressionClones, ToleranceSearch
 export OverlappingCalls, KeptBuilders
 export UnreachedMethods
+export Rebuilds, TwoNames, Waits
 export Independent
 export check_corpus, check_backedges, is_backedge, is_downrank, find_cycles, check_cycles
 export check_contracts_logic

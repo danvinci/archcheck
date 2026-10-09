@@ -1,9 +1,10 @@
 # The workload phase: the package's own run between the static checks and the checks that read what it did.
 
-"""What the method table holds after one run of the workload, and the probed calls that run made."""
+"""What the method table holds after one run of the workload, the probed calls that run made, and the waits those calls logged."""
 struct Observation
     reached::Set{Method}             # live methods compiled during the run or earlier; a keyword body or a restored probe credits its method
     records::Vector{ProbeRecord}     # probed calls of at least the probes' slow threshold; empty when nothing is probed
+    waits::Vector{WaitRecord}        # waits those calls logged; empty when nothing is probed
     seconds::Float64                 # the workload's wall time (s)
 end
 
@@ -131,6 +132,7 @@ end
 which of the package's methods it compiled."""
 function observe(workload, probes, ctx)
     records = ProbeRecord[]
+    waits = WaitRecord[]
     elapsed = 0.0
     probed_compiled = Method[]
     modules = package_modules(ctx)
@@ -144,10 +146,12 @@ function observe(workload, probes, ctx)
             elapsed = @elapsed Base.invokelatest(workload)
             probed_compiled = compiled_probed(probes, modules)
         finally
-            records = disarm!(armed)
+            traced = disarm!(armed)
+            records = traced.records
+            waits = traced.waits
         end
     end
     reached = compiled_methods(modules)
     credit_restored!(reached, probed_compiled)
-    Observation(reached, records, elapsed)
+    Observation(reached, records, waits, elapsed)
 end
