@@ -265,7 +265,10 @@ kinds(::TypeBranches) = (:type_branch => :advisory,)
 run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
 kinds(::FileBackEdges) = (:file_backedge => :advisory,)
 
-run(::FileSinkable, ctx) = collect_modules(cg -> check_file_sinkable(cg, ctx.sites), ctx)
+function run(::FileSinkable, ctx)
+    judge = cg -> check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.index.repo)
+    collect_modules(judge, ctx)
+end
 kinds(::FileSinkable) = (:file_sinkable => :advisory,)
 
 # sinkable and extract-candidate are one analysis at two granularities, so one check emits both.
