@@ -459,7 +459,7 @@ function child_locals(node, index, outer)
     copy(outer)
 end
 
-function is_sync_macro(node)
+function is_sync_macro(node::JS.SyntaxNode)
     JS.kind(node) == K"macrocall" || return false
     kids = child_nodes(node)
     (isnothing(kids) || isempty(kids)) && return false

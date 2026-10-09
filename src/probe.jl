@@ -26,6 +26,25 @@ struct ProbeRecord
     result_id::UInt              # objectid of a non-bits result; 0 for a bits value
     reads::Vector{UInt}          # objectids of the non-bits objects the arguments reach within three container levels
     is_fed::Bool                 # an argument is a Channel: workers fed from one share their arguments by design
+    is_ambient::Bool             # this call is a non-probed function, or one encloses it
+end
+
+"""One wait a probed method made for a task. The result identity is an `objectid`, so it matches the same object only."""
+struct WaitRecord
+    consumer::Symbol             # function that waited
+    site::Tuple{String,Int}      # that method's file and line
+    task::UInt                   # objectid of the waiting task
+    child::UInt                  # objectid of the task that was waited
+    start_s::Float64             # time() when the wait began (s)
+    stop_s::Float64              # time() when the wait ended (s)
+    result_id::UInt              # objectid of a non-bits result; 0 for a bits value
+    reads::Vector{UInt}          # objectids the result reaches within three container levels
+end
+
+"""The calls and the waits collected while a probe handle was armed."""
+struct ProbeTrace
+    records::Vector{ProbeRecord}  # probed calls
+    waits::Vector{WaitRecord}     # waits those calls logged
 end
 
 const CONTENT_DEPTH_MAX = 24
@@ -35,6 +54,7 @@ const FRAME_KEY = :archcheck_probe_frames
 const ARGUMENT_KEY = :archcheck_probe_arguments
 const SKIPPED_MACROS = (Symbol("@generated"), Symbol("@kwdef"), Symbol("@enum"))
 const ROOT_CALLER = Symbol("")
+const PARENT_CALL = Base.ScopedValues.ScopedValue{Symbol}(ROOT_CALLER)
 
 struct ProbeSkip
     method::String     # printed method that was not rewritten
@@ -42,8 +62,10 @@ struct ProbeSkip
 end
 
 struct MethodSource
-    mod::Module        # where the statement evaluates
-    definition::Expr   # statement put back on the way out
+    mod::Module         # where the statement evaluates
+    definition::Expr    # statement put back on the way out
+    name::Symbol        # function the method belongs to
+    signature::String   # printed signature of the wrapper
 end
 
 struct LocatedMethod
@@ -60,12 +82,14 @@ struct OpenFrame
     caller::Symbol               # nearest recorded caller at entry
     enclosing::Vector{Symbol}    # calls already open, outermost first
     is_probed::Bool              # true when this call was asked for
+    is_ambient::Bool             # this call is a non-probed function, or one encloses it
 end
 
 mutable struct ProbeSession
     slow_s::Float64                 # minimum duration that leaves a record (s)
     records::Vector{ProbeRecord}    # calls that met the duration
-    lock::ReentrantLock             # guards the record list
+    waits::Vector{WaitRecord}       # waits logged while armed
+    lock::ReentrantLock             # guards the record list and the wait list
 end
 
 struct ProbeHandle
@@ -246,18 +270,40 @@ function nearest_caller(frames)
     ROOT_CALLER
 end
 
+function ancestor_names(frames)
+    names = Symbol[]
+    for frame in frames
+        push!(names, frame.name)
+    end
+    names
+end
+
+function ambient_call(frames, is_probed::Bool)
+    is_probed || return true
+    for frame in frames
+        frame.is_probed || return true
+    end
+    false
+end
+
+function caller_of(frames)
+    caller = nearest_caller(frames)
+    if caller !== ROOT_CALLER
+        return caller
+    end
+    PARENT_CALL[]
+end
+
 function probe_enter(name::Symbol, file::String, line::Int, arguments::Tuple, is_probed::Bool)
     session = ACTIVE[]
     isnothing(session) && return false
     frames = current_frames()
     held = current_arguments()
-    open_names = Symbol[]
-    for frame in frames
-        push!(open_names, frame.name)
-    end
-    caller = nearest_caller(frames)
+    names = ancestor_names(frames)
+    caller = caller_of(frames)
+    covered = ambient_call(frames, is_probed)
     started = time()
-    entered = OpenFrame(name, file, line, started, caller, open_names, is_probed)
+    entered = OpenFrame(name, file, line, started, caller, names, is_probed, covered)
     push!(frames, entered)
     push!(held, arguments)
     true
@@ -271,13 +317,22 @@ function make_record(frame::OpenFrame, arguments, result, stopped::Float64)
     fed = arguments_fed(arguments)
     task_id = objectid(current_task())
     site = (frame.file, frame.line)
-    ProbeRecord(frame.name, site, frame.caller, frame.enclosing, task_id,
-                frame.started, stopped, argument_hash, result_hash, identity, reached, fed)
+    names = copy(frame.enclosing)
+    ProbeRecord(frame.name, site, frame.caller, names, task_id,
+                frame.started, stopped, argument_hash, result_hash, identity, reached, fed,
+                frame.is_ambient)
 end
 
 function push_record(session::ProbeSession, record::ProbeRecord)
     lock(session.lock) do
         push!(session.records, record)
+    end
+    nothing
+end
+
+function push_wait(session::ProbeSession, record::WaitRecord)
+    lock(session.lock) do
+        push!(session.waits, record)
     end
     nothing
 end
@@ -305,6 +360,137 @@ function probe_abort(session_active::Bool)
     pop!(frames)
     pop!(held)
     nothing
+end
+
+function active_frames()
+    stored = stored_local(FRAME_KEY)
+    isnothing(stored) && return nothing
+    stored::Vector{OpenFrame}
+end
+
+function probed_frame()
+    frames = active_frames()
+    isnothing(frames) && return nothing
+    slot = length(frames)
+    while slot >= 1
+        frame = frames[slot]
+        frame.is_probed && return frame
+        slot -= 1
+    end
+    nothing
+end
+
+function result_reads(result)
+    found = Set{UInt}()
+    collect_reads!(found, result, 0)
+    collect(found)
+end
+
+function record_wait(frame::OpenFrame, child::Task, started::Float64, stopped::Float64, result)
+    identity = result_identity(result)
+    reached = result_reads(result)
+    site = (frame.file, frame.line)
+    consumer_task = objectid(current_task())
+    child_task = objectid(child)
+    WaitRecord(frame.name, site, consumer_task, child_task, started, stopped, identity, reached)
+end
+
+function finish_wait(child::Task, started::Float64, result)
+    frame = probed_frame()
+    isnothing(frame) && return result
+    session = ACTIVE[]
+    isnothing(session) && return result
+    stopped = time()
+    record = record_wait(frame, child, started, stopped, result)
+    push_wait(session, record)
+    result
+end
+
+function probe_fetch(child::Task)
+    started = time()
+    try
+        result = Base.fetch(child)
+        return finish_wait(child, started, result)
+    catch
+        finish_wait(child, started, nothing)
+        rethrow()
+    end
+end
+
+function probe_fetch(value)
+    Base.fetch(value)
+end
+
+function probe_wait(child::Task)
+    started = time()
+    try
+        Base.wait(child)
+    catch
+        finish_wait(child, started, nothing)
+        rethrow()
+    end
+    finish_wait(child, started, nothing)
+    nothing
+end
+
+function probe_wait(value)
+    Base.wait(value)
+end
+
+function wait_synced(item::Task, errors)
+    started = time()
+    Base._wait(item)
+    finish_wait(item, started, nothing)
+    Base.istaskfailed(item) || return nothing
+    failed = Base.TaskFailedException(item)
+    push!(errors, failed)
+    nothing
+end
+
+function wait_synced(item, errors)
+    try
+        Base.wait(item)
+    catch error
+        push!(errors, error)
+    end
+    nothing
+end
+
+function take_synced(channel, errors)
+    while isready(channel)
+        item = take!(channel)
+        wait_synced(item, errors)
+    end
+    nothing
+end
+
+function late_synced(channel, errors)
+    isready(channel) || return nothing
+    raced = Any[]
+    for item in channel
+        push!(raced, item)
+    end
+    isempty(raced) && return nothing
+    late = Base.ScheduledAfterSyncException(raced)
+    pushfirst!(errors, late)
+    nothing
+end
+
+function throw_synced(errors)
+    isempty(errors) && return nothing
+    collected = CompositeException()
+    for error in errors
+        push!(collected, error)
+    end
+    throw(collected)
+end
+
+function log_sync_end(channel)
+    errors = Any[]
+    take_synced(channel, errors)
+    close(channel)
+    late_synced(channel, errors)
+    throw_synced(errors)
 end
 
 macro_symbol(macro_name::Symbol) = macro_name
@@ -382,6 +568,104 @@ function argument_names(signature::Expr)
     names
 end
 
+function is_wait_name(name)
+    name === :fetch && return true
+    name === :wait && return true
+    false
+end
+
+function wait_probe(name::Symbol)
+    if name === :fetch
+        return GlobalRef(@__MODULE__, :probe_fetch)
+    end
+    GlobalRef(@__MODULE__, :probe_wait)
+end
+
+is_sync_macro(::Any) = false
+
+function is_sync_macro(node::Expr)
+    node.head === :macrocall || return false
+    isempty(node.args) && return false
+    name = macro_symbol(node.args[1])
+    name === Symbol("@sync")
+end
+
+function rewrite_broadcast(node)
+    length(node.args) < 2 && return nothing
+    tail = node.args[2]
+    tail isa Expr || return nothing
+    tail.head === :tuple || return nothing
+    name = macro_symbol(node.args[1])
+    is_wait_name(name) || return nothing
+    probe = wait_probe(name)
+    rewritten_tail = rewrite_waits(tail)
+    Expr(:., probe, rewritten_tail)
+end
+
+function rewrite_dot(node)
+    rewritten = rewrite_broadcast(node)
+    isnothing(rewritten) || return rewritten
+    args = Any[]
+    for child in node.args
+        walked = rewrite_waits(child)
+        push!(args, walked)
+    end
+    Expr(:., args...)
+end
+
+function rewrite_wait_head(node)
+    name = macro_symbol(node)
+    is_wait_name(name) || return node
+    wait_probe(name)
+end
+
+function rewrite_call(node)
+    isempty(node.args) && return node
+    args = Any[]
+    for child in node.args
+        walked = rewrite_waits(child)
+        replaced = rewrite_wait_head(walked)
+        push!(args, replaced)
+    end
+    Expr(:call, args...)
+end
+
+function rewrite_sync(node)
+    body = last(node.args)
+    rewritten = rewrite_waits(body)
+    channel = GlobalRef(Base, :Channel)
+    finish = GlobalRef(@__MODULE__, :log_sync_end)
+    bound = Base.sync_varname
+    opened = Expr(:call, channel, Inf)
+    binding = Expr(:(=), bound, opened)
+    value = gensym(:sync_value)
+    assign = Expr(:(=), value, rewritten)
+    logged = Expr(:call, finish, bound)
+    block = Expr(:block, assign, logged, value)
+    Expr(:let, binding, block)
+end
+
+rewrite_waits(node) = node
+
+function rewrite_waits(node::Expr)
+    node.head === :quote && return node
+    if is_sync_macro(node)
+        return rewrite_sync(node)
+    end
+    if node.head === :.
+        return rewrite_dot(node)
+    end
+    if node.head === :call
+        return rewrite_call(node)
+    end
+    args = Any[]
+    for child in node.args
+        walked = rewrite_waits(child)
+        push!(args, walked)
+    end
+    Expr(node.head, args...)
+end
+
 function probe_body(name::Symbol, file::String, line::Int, arg_names::Vector{Symbol}, is_probed::Bool, body)
     session_active = gensym(:session_active)
     result = gensym(:probe_result)
@@ -389,15 +673,36 @@ function probe_body(name::Symbol, file::String, line::Int, arg_names::Vector{Sym
     for arg_name in arg_names
         push!(arguments.args, arg_name)
     end
+    rewritten = rewrite_waits(body)
     enter = GlobalRef(@__MODULE__, :probe_enter)
     leave = GlobalRef(@__MODULE__, :probe_leave)
     abort = GlobalRef(@__MODULE__, :probe_abort)
     quoted_name = QuoteNode(name)
+    scope = GlobalRef(Base.ScopedValues, :with)
+    parent = GlobalRef(@__MODULE__, :PARENT_CALL)
+    parent_pair = gensym(:parent_pair)
+    if is_probed
+        return quote
+            $session_active = $enter($quoted_name, $file, $line, $arguments, $is_probed)
+            local $result
+            try
+                $parent_pair = $parent => $quoted_name
+                $result = $scope($parent_pair) do
+                    (() -> $rewritten)()
+                end
+            catch
+                $abort($session_active)
+                rethrow()
+            end
+            $leave($session_active, $result)
+            $result
+        end
+    end
     quote
         $session_active = $enter($quoted_name, $file, $line, $arguments, $is_probed)
         local $result
         try
-            $result = (() -> $body)()
+            $result = (() -> $rewritten)()
         catch
             $abort($session_active)
             rethrow()
@@ -539,8 +844,7 @@ function skip_error(skipped)
     ArgumentError(text)
 end
 
-# The index parses files under repo-relative names. Every definition this file evaluates records the file the
-# original method recorded, so a reader of `method.file` sees the same path before, during and after the probe.
+# The saved definition is retagged to the method's file, so the restored method records that path.
 retag_lines!(node, ::Symbol) = node
 
 function retag_lines!(node::Expr, file::Symbol)
@@ -553,6 +857,40 @@ function retag_lines!(node::Expr, file::Symbol)
         end
     end
     node
+end
+
+function keyword_method(method)
+    decls = Base.kwarg_decl(method)
+    isempty(decls) && return nothing
+    body = Base.unwrap_unionall(method.sig)
+    params = body.parameters
+    tail = params[2:end]
+    owner = params[1]
+    bare = Tuple{NamedTuple, owner, tail...}
+    # The method's where-clause binds the parameters of the query.
+    query = Base.rewrap_unionall(bare, method.sig)
+    which(Core.kwcall, query)
+end
+
+# Deleting first makes the following definition a fresh method.
+function drop_method!(method)
+    keyword = keyword_method(method)
+    if !isnothing(keyword)
+        Base.delete_method(keyword)
+    end
+    Base.delete_method(method)
+    nothing
+end
+
+# The evaluated wrapper keeps this signature. Its file and line are the probe source.
+function lookup_method(source)
+    fn = getfield(source.mod, source.name)
+    for method in methods(fn)
+        method.module === source.mod || continue
+        label = string(method.sig)
+        label == source.signature && return method
+    end
+    nothing
 end
 
 function install_method!(method, is_probed::Bool, index, originals, skipped)
@@ -572,8 +910,18 @@ function install_method!(method, is_probed::Bool, index, originals, skipped)
         note_skip!(skipped, method, "a form the rewrite does not take")
         return nothing
     end
-    Core.eval(method.module, probed)
-    push!(originals, MethodSource(method.module, saved))
+    home = method.module
+    name = method.name
+    label = string(method.sig)
+    source = MethodSource(home, saved, name, label)
+    drop_method!(method)
+    try
+        Core.eval(home, probed)
+    catch
+        Core.eval(home, saved)
+        rethrow()
+    end
+    push!(originals, source)
     nothing
 end
 
@@ -592,6 +940,10 @@ end
 
 function restore_originals(originals)
     for source in originals
+        current = lookup_method(source)
+        if !isnothing(current)
+            drop_method!(current)
+        end
         Core.eval(source.mod, source.definition)
     end
     nothing
@@ -603,7 +955,8 @@ function arm!(probes::Probes, ctx)
     active = ACTIVE[]
     isnothing(active) || throw(ArgumentError("a probe session is already armed"))
     records = ProbeRecord[]
-    session = ProbeSession(probes.slow_s, records, ReentrantLock())
+    waits = WaitRecord[]
+    session = ProbeSession(probes.slow_s, records, waits, ReentrantLock())
     originals = MethodSource[]
     skipped = ProbeSkip[]
     ACTIVE[] = session
@@ -619,12 +972,14 @@ function arm!(probes::Probes, ctx)
     ProbeHandle(session, originals)
 end
 
-"""Restores every method a handle probed to its source definition and returns the records collected while armed."""
+"""Restores every method a handle probed to its source definition and returns the calls and the waits collected while armed."""
 function disarm!(armed::ProbeHandle)
     restore_originals(armed.originals)
     active = ACTIVE[]
     if active === armed.session
         ACTIVE[] = nothing
     end
-    copy(armed.session.records)
+    records = copy(armed.session.records)
+    waits = copy(armed.session.waits)
+    ProbeTrace(records, waits)
 end

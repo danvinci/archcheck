@@ -62,7 +62,8 @@ function probing(body, functions; ambient = (), slow_s = 0.0)
     try
         body(armed)
     finally
-        records = ArchCheck.disarm!(armed)
+        traced = ArchCheck.disarm!(armed)
+        records = traced.records
     end
     records
 end
@@ -272,6 +273,76 @@ end
     @test occursin("synthed", unsourced_text)
     @test occursin("no source site", unsourced_text)
     @test call(Probed.synthed, 4) == 5
+end
+
+function indexed_module(name::Symbol, source::String)
+    directory = mktempdir()
+    src = joinpath(directory, "src")
+    mkdir(src)
+    file_name = string(name) * ".jl"
+    path = joinpath(src, file_name)
+    write(path, source)
+    mod = Module(name)
+    Base.include(mod, path)
+    layout = ArchCheck.package_layout(path, name)
+    rank = layout[1]
+    dir2mod = layout[2]
+    index = build_source_index(src, rank, dir2mod; root = name)
+    ctx = Context(index, mod, Module[mod])
+    (; mod, ctx)
+end
+
+@testset "probes: a spawned task's probed call names its parent" begin
+    source = """
+    function parent(x)
+        task = Threads.@spawn child(x)
+        fetch(task)
+    end
+
+    function child(x)
+        x + 1
+    end
+    """
+    loaded = indexed_module(:ParentLink, source)
+    probes = Probes(functions = (loaded.mod.parent, loaded.mod.child), slow_s = 0.0)
+    armed = ArchCheck.arm!(probes, loaded.ctx)
+    local records
+    try
+        got = Base.invokelatest(loaded.mod.parent, 3)
+        @test got == 4
+    finally
+        traced = ArchCheck.disarm!(armed)
+        records = traced.records
+    end
+    children = [record for record in records if record.name === :child]
+    child_record = only(children)
+    @test child_record.caller === :parent
+end
+
+@testset "probes: a parametric keyword method is armed and restored" begin
+    source = """
+    function scaled(xs::Vector{T}; scale::T = one(T)) where {T<:Real}
+        xs .* scale
+    end
+    """
+    loaded = indexed_module(:ScaledKw, source)
+    probes = Probes(functions = (loaded.mod.scaled,), slow_s = 0.0)
+    armed = ArchCheck.arm!(probes, loaded.ctx)
+    sample = [1.0]
+    local traced
+    try
+        got = Base.invokelatest(loaded.mod.scaled, sample; scale = 2.0)
+        @test got == [2.0]
+    finally
+        traced = ArchCheck.disarm!(armed)
+    end
+    names = [record.name for record in traced.records]
+    @test names == [:scaled]
+    restored = loaded.mod.scaled(sample; scale = 2.0)
+    @test restored == [2.0]
+    method = only(methods(loaded.mod.scaled))
+    source_file = String(method.file)
+    @test endswith(source_file, "ScaledKw.jl")
 end
 
 @testset "probes: padding bytes stay out of an argument hash" begin
