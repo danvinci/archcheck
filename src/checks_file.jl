@@ -171,27 +171,37 @@ function add_unresolved_targets!(targets, cg, caller_name, pending)
     end
 end
 
-# A callee counts when its name is a top-level def whose file this module ranks.
-function add_callee_target!(targets, cg, caller_name, callee, repo)
+# A callee with no top-level name is a closure. Its body's callee files belong to the caller.
+function add_callee_target!(targets, cg, caller_name, callee, methods, repo, seen)
+    if !haskey(cg.files, callee.name)
+        add_body_targets!(targets, cg, caller_name, callee, methods, repo, seen)
+        return
+    end
     located = method_site(callee, repo)
     path = located[1]
     haskey(cg.rank, path) || return
-    haskey(cg.files, callee.name) || return
     callee.name === caller_name && return
     push!(targets, path)
 end
 
-function add_method_targets!(targets, cg, method, methods, repo)
-    caller_name = method.name
+function add_body_targets!(targets, cg, caller_name, method, methods, repo, seen)
+    method in seen && return
+    push!(seen, method)
     callees = get(methods.edges, method, nothing)
     if !isnothing(callees)
         for callee in callees
-            add_callee_target!(targets, cg, caller_name, callee, repo)
+            add_callee_target!(targets, cg, caller_name, callee, methods, repo, seen)
         end
     end
     pending = get(methods.unresolved, method, nothing)
     isnothing(pending) && return
     add_unresolved_targets!(targets, cg, caller_name, pending)
+end
+
+function add_method_targets!(targets, cg, method, methods, repo)
+    caller_name = method.name
+    seen = Set{Method}()
+    add_body_targets!(targets, cg, caller_name, method, methods, repo, seen)
 end
 
 function method_findings(cg, methods, judged, repo)
