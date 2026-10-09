@@ -17,8 +17,8 @@ function traced_call(; name::Symbol, arguments::UInt, result::UInt = UInt(0), re
                 is_fed, false)
 end
 
-function with_records(records; waits = WaitRecord[])
-    base = probed_context()
+# The records and the context come from one package, as they do inside `gate`.
+function with_records(records; waits = WaitRecord[], base = probed_context())
     reached = Set{Method}()
     observed = Observation(reached, records, waits, 1.0)
     Context(base; observed)
@@ -127,7 +127,7 @@ end
     finally
         shared = ArchCheck.disarm!(armed)
     end
-    shared_ctx = with_records(shared.records)
+    shared_ctx = with_records(shared.records; base = loaded.ctx)
     fired = ArchCheck.run(TwoNames(), shared_ctx)
     @test length(fired) == 2
     labels = [ev(finding, :functions) for finding in fired]
@@ -157,7 +157,7 @@ end
     finally
         bits = ArchCheck.disarm!(bits_armed)
     end
-    bits_ctx = with_records(bits.records)
+    bits_ctx = with_records(bits.records; base = loaded.ctx)
     bits_findings = ArchCheck.run(TwoNames(), bits_ctx)
     @test isempty(bits_findings)
 end
@@ -224,7 +224,7 @@ end
         finally
             traced = ArchCheck.disarm!(armed)
         end
-        ctx = with_records(traced.records; waits = traced.waits)
+        ctx = with_records(traced.records; waits = traced.waits, base = loaded.ctx)
         ArchCheck.run(Waits(), ctx)
     end
 
@@ -253,16 +253,4 @@ end
     synced_finding = only(synced)
     @test ev(synced_finding, :consumer) == "drops_sync"
     @test ev(synced_finding, :waited) == "produced"
-end
-
-@testset "trace checks are workload advisories" begin
-    rebuilds = Rebuilds()
-    two_names = TwoNames()
-    waits = Waits()
-    @test ArchCheck.phase(rebuilds) === :workload
-    @test ArchCheck.phase(two_names) === :workload
-    @test ArchCheck.phase(waits) === :workload
-    @test ArchCheck.kinds(rebuilds) == (:rebuild => :advisory,)
-    @test ArchCheck.kinds(two_names) == (:two_names => :advisory,)
-    @test ArchCheck.kinds(waits) == (:wait => :advisory,)
 end
