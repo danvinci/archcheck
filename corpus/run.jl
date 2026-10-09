@@ -420,9 +420,11 @@ function write_spec(path, host, report, log, status, checks, workload_file, work
     end
 end
 
+# The state's process runs in its cache directory, so whatever the workload writes stays there.
 function run_process(env, spec_path)
     drive = joinpath(@__DIR__, "drive_main.jl")
-    command = `julia --project=$env $drive $spec_path`
+    directory = dirname(spec_path)
+    command = Cmd(`julia --project=$env $drive $spec_path`; dir = directory)
     started = time()
     crashed = ""
     try

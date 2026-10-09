@@ -61,21 +61,13 @@ types = "Tuple{Contour, Point2D}"
 function = "Geometry.Shapes.classify"
 types = "Tuple{Vector{Vector{SVector{3,Float64}}}, Point2D}"
 
-# The solid rebuilt per call on stack; the builders commit keeps it on its owner.
+# The swept solid rebuilt per call. The builders commit kept other builders and left this one, so its repeats there
+# depend on the workload's call order; the KeptBuilders rows pin the fix.
 [[expectations]]
 case = "1"
 check = "Rebuilds"
 state = "stack"
 expect = "fire"
-kind = "rebuild"
-file = "lofts/brep.jl"
-symbol = "Shape"
-
-[[expectations]]
-case = "1"
-check = "Rebuilds"
-state = "builders"
-expect = "quiet"
 kind = "rebuild"
 file = "lofts/brep.jl"
 symbol = "Shape"
