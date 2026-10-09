@@ -1,65 +1,87 @@
 # The report: a kind's severity, and the delta against the previous run.
 
-# A consumer check whose declaration leaves out the kind its run emits.
-module FConsumer
-    using ArchCheck
-    struct Undeclared <: ArchCheck.Check end
-    ArchCheck.run(::Undeclared, ctx) = [Finding(:M, :uncounted_drop, "a.jl", "g", "guard")]
-    ArchCheck.kinds(::Undeclared) = ()
+struct UndeclaredDrop <: Check end
+
+function ArchCheck.run(::UndeclaredDrop, ctx)
+    [Finding(:M, :uncounted_drop, "a.jl", "g", "guard")]
 end
 
-@testset "severity: a kind its check does not declare is refused" begin
-    @test_throws ArgumentError ArchCheck.run_checks(nothing, (FConsumer.Undeclared(),))
+function ArchCheck.kinds(::UndeclaredDrop)
+    ()
 end
 
-@testset "severity: error_kinds promotes a consumer's kinds" begin
+struct ScriptedReport <: Check end
+
+const SCRIPTED_FOUND = Ref{Vector{Finding}}(Finding[])
+
+function ArchCheck.run(::ScriptedReport, ctx)
+    SCRIPTED_FOUND[]
+end
+
+function ArchCheck.kinds(::ScriptedReport)
+    (:tuple_return => :advisory, :dead_code => :advisory, :file_backedge => :advisory)
+end
+
+const REPORT_HOST = load_package("ReportHost", "ready() = 1\n")
+
+function gate_scripted(found, report, io)
+    SCRIPTED_FOUND[] = found
+    ArchCheck.gate(REPORT_HOST.pkg; report_path = report, io, checks = (ScriptedReport(),))
+end
+
+@testset "a kind its check does not declare is refused" begin
     report = joinpath(mktempdir(), "architecture.jsonl")
-    checks = (ArchCheck.StaleExports(),)
+    @test_throws ArgumentError ArchCheck.gate(REPORT_HOST.pkg; report_path = report,
+                                              io = devnull, checks = (UndeclaredDrop(),))
+end
+
+@testset "error_kinds promotes a declared kind and refuses an unknown one" begin
+    report = joinpath(mktempdir(), "architecture.jsonl")
+    checks = (StaleExports(),)
     passed = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
-    @test any(f -> f.kind === :stale_export, passed)
+    @test any(finding -> finding.kind === :stale_export, passed)
     @test_throws ErrorException ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks,
                                                 error_kinds = (:stale_export,))
     records = [JSON.parse(line) for line in eachline(report)]
-    @test all(r -> r["severity"] == "error", records)
-    # a kind no running check declares is a typo, so it throws
+    @test all(record -> record["severity"] == "error", records)
     @test_throws ArgumentError ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks,
                                                error_kinds = (:stale_exprt,))
 end
 
-@testset "delta vs the previous run" begin
-    old = [Finding(:Geo, :tuple_return, "a.jl", "wide", 10, "3 slots"),
-           Finding(:Geo, :dead_code, "a.jl", "gone", 20, "unused")]
-    # same finding, moved down the file: the line drifts, the ArchCheck.fingerprint does not
+@testset "the report counts a moved finding as standing and a new symbol of a known kind as new" begin
+    wide = Finding(:Geo, :tuple_return, "a.jl", "wide", 10, "3 slots")
+    gone = Finding(:Geo, :dead_code, "a.jl", "gone", 20, "unused")
     moved = Finding(:Geo, :tuple_return, "a.jl", "wide", 99, "3 slots")
     fresh = Finding(:Aero, :file_backedge, "solve.jl", "model.jl", 0, "up-rank")
+    later = Finding(:Aero, :file_backedge, "solve.jl", "influence.jl", 0, "up-rank")
+    report = joinpath(mktempdir(), "architecture.jsonl")
 
-    severity = default_severity()
-    mktempdir() do dir
-        path = joinpath(dir, "architecture.jsonl")
-        @test isnothing(ArchCheck.previous_fingerprints(path))        # no previous run -> nothing is new
+    first_io = IOBuffer()
+    gate_scripted([wide, gone], report, first_io)
+    first_text = String(take!(first_io))
+    @test occursin("new 0", first_text)
+    @test occursin("fixed 0", first_text)
+    @test occursin("standing 2", first_text)
 
-        open(io -> emit_jsonl(io, old, severity), path, "w")
-        prev = ArchCheck.previous_fingerprints(path)
-        @test isempty(ArchCheck.new_findings([moved], prev))       # same finding, drifted line -> not new
+    second_io = IOBuffer()
+    gate_scripted([moved], report, second_io)
+    second_text = String(take!(second_io))
+    @test occursin("new 0", second_text)
+    @test occursin("fixed 1", second_text)
+    @test occursin("standing 1", second_text)
 
-        # a kind absent from the previous run belongs to a check added since: its findings enter
-        # as standing, so adding a check leaves that kind off the new-finding list
-        @test isempty(ArchCheck.new_findings([fresh], prev))
-        withknown = vcat(old, fresh)
-        open(io -> emit_jsonl(io, withknown, severity), path, "w")
-        prev2 = ArchCheck.previous_fingerprints(path)
-        later = Finding(:Aero, :file_backedge, "solve.jl", "influence.jl", 0, "up-rank")
-        @test [f.symbol for f in ArchCheck.new_findings([fresh, later], prev2)] == ["influence.jl"]
+    third_io = IOBuffer()
+    gate_scripted([moved, fresh], report, third_io)
+    third_text = String(take!(third_io))
+    @test !occursin("NEW", third_text)
+    @test occursin("file_backedge 1", third_text)
 
-        current = Set(ArchCheck.fingerprint(f) for f in [moved, fresh])
-        @test length(setdiff(prev, current)) == 1        # dead_code disappeared -> fixed
-    end
-
-    # the report prints the delta in full and the standing set as counts
-    io = IOBuffer()
-    print_architecture(io, [moved, fresh], [fresh], 1, Dict(:Aero => [1], :Geo => [2]), severity)
-    out = String(take!(io))
-    @test occursin("new 1", out) && occursin("fixed 1", out) && occursin("standing 1", out)
-    @test occursin("NEW", out) && occursin("solve.jl", out)   # new one named
-    @test occursin("tuple_return 1", out) && !occursin("wide", out)   # standing counted, not listed
+    fourth_io = IOBuffer()
+    gate_scripted([moved, fresh, later], report, fourth_io)
+    fourth_text = String(take!(fourth_io))
+    @test occursin("new 1", fourth_text)
+    @test occursin("NEW", fourth_text)
+    @test occursin("solve.jl", fourth_text)
+    @test occursin("tuple_return 1", fourth_text)
+    @test !occursin("wide", fourth_text)
 end

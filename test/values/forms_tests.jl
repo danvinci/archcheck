@@ -1,43 +1,33 @@
 # A method nested in another method's body is its own form.
 # Calls written in that body stay on the enclosing method.
 
-function line_holding(source, text)
-    lines = split(source, "\n")
-    for (index, line) in enumerate(lines)
-        occursin(text, line) && return index
+const FORMS_LONG = load_package("FormsLong", """
+function outer(x)
+    function inner(y)
+        g(y)
     end
-    0
+    inner(x)
 end
+""")
 
-function callee_names(scan, site)
-    calls = scan.callsites[site]
-    names = Symbol[]
-    for call in calls
-        push!(names, call.callee)
+const FORMS_SHORT = load_package("FormsShort", """
+function outer(x)
+    inner(y) = g(y)
+    inner(x)
+end
+""")
+
+@testset "a nested method is its own form, and the calls in its body stay on the enclosing method" begin
+    for case in (FORMS_LONG, FORMS_SHORT)
+        ctx = case_context(case)
+        spine_name = string(nameof(case.pkg)) * ".jl"
+        scan = file_scans(ctx)[spine_name]
+        outer = only(site for site in keys(scan.forms) if site.name === :outer)
+        inner = only(site for site in keys(scan.forms) if site.name === :inner)
+        callees = [call.callee for call in scan.callsites[outer]]
+        @test :g in callees
+        @test :inner in callees
+        @test !haskey(scan.callsites, inner)
+        @test :g in scan.refs[:outer]
     end
-    names
-end
-
-function assert_nested_form(source, outer_text, inner_text)
-    scan = ArchCheck.scan_defs(source)
-    outer_line = line_holding(source, outer_text)
-    inner_line = line_holding(source, inner_text)
-    outer_site = MethodSite(:outer, outer_line)
-    inner_site = MethodSite(:inner, inner_line)
-    @test haskey(scan.forms, outer_site)
-    form = scan.forms[inner_site]
-    body = ArchCheck.method_body(form)
-    @test !isnothing(body)
-    names = callee_names(scan, outer_site)
-    @test :g in names
-    @test :inner in names
-    @test !haskey(scan.callsites, inner_site)
-    @test :g in scan.refs[:outer]
-end
-
-@testset "a nested method is recorded on its own site" begin
-    long_source = "function outer(x)\n    function inner(y)\n        g(y)\n    end\n    inner(x)\nend\n"
-    assert_nested_form(long_source, "function outer", "function inner")
-    short_source = "function outer(x)\n    inner(y) = g(y)\n    inner(x)\nend\n"
-    assert_nested_form(short_source, "function outer", "inner(y)")
 end

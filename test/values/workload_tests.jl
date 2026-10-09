@@ -1,152 +1,101 @@
 # What one workload run compiled, and that a throwing workload still propagates.
 
-module WorkedReach
+const COMPILED_METHODS = load_package("CompiledMethods", """
     hit(x::Int) = x + 1
     miss(x::Int) = x + 2
     function keyed(x::Int; extra = 0)
         x + extra
     end
     onlykw(; extra = 0) = extra + 1
-end
+    """)
 
-module WorkedEarly
+const COMPILED_EARLY = load_package("CompiledEarly", """
     early(x::Int) = x + 3
     during(x::Int) = x + 4
-end
+    """)
 
-module WorkedShow
-    struct Mark end
+const SHOWN_MARK = load_package("ShownMark", """
+    struct Mark
+    end
     Base.show(io::IO, ::Mark) = print(io, "mark")
     other(x::Int) = x + 1
-end
+    """)
 
-module FWorkload
-    using ArchCheck
-    struct SeesReached <: ArchCheck.Check end
-    const REACHED = Ref{Union{Nothing,Set{Method}}}(nothing)
-    function ArchCheck.run(::SeesReached, ctx)
-        REACHED[] = ctx.observed.reached
-        Finding[]
+@testset "reached is the package methods compiled so far, and records stay empty when nothing is probed" begin
+    reached_pkg = COMPILED_METHODS.pkg
+    call_reached = function ()
+        reached_pkg.hit(1)
+        reached_pkg.keyed(1; extra = 2)
+        reached_pkg.onlykw(; extra = 4)
     end
-    ArchCheck.kinds(::SeesReached) = (:seen_reached => :advisory,)
-    ArchCheck.phase(::SeesReached) = :workload
-    struct SeesRecords <: ArchCheck.Check end
-    const RECORDS = Ref{Union{Nothing,Vector{ProbeRecord}}}(nothing)
-    function ArchCheck.run(::SeesRecords, ctx)
-        RECORDS[] = ctx.observed.records
-        Finding[]
-    end
-    ArchCheck.kinds(::SeesRecords) = (:seen_records => :advisory,)
-    ArchCheck.phase(::SeesRecords) = :workload
-end
-
-function workload_context(root::Module)
-    rank = Dict{Symbol,Vector{Int}}(nameof(root) => [1])
-    dirs = Dict{String,Symbol}()
-    files = FileNode[]
-    refs = ArchCheck.ModRef[]
-    external = Set{Symbol}()
-    unparsed = Tuple{Symbol,String}[]
-    missing = Tuple{Symbol,String,String,Int}[]
-    nonliteral = Tuple{Symbol,String,Int}[]
-    index = SourceIndex("", rank, dirs, files, refs, external, unparsed, missing, nonliteral)
-    Context(index, root, Module[root])
-end
-
-@testset "reached is exactly the methods compiled in the package, and records stay empty when nothing is probed" begin
-    reach_ctx = workload_context(WorkedReach)
-    function call_reached()
-        WorkedReach.hit(1)
-        WorkedReach.keyed(1; extra = 2)
-        WorkedReach.onlykw(; extra = 4)
-    end
-    called = ArchCheck.observe(call_reached, nothing, reach_ctx)
-    hit = only(methods(WorkedReach.hit))
-    keyed = only(methods(WorkedReach.keyed))
-    onlykw = only(methods(WorkedReach.onlykw))
+    reached_run = observed_gate(reached_pkg; workload = call_reached)
+    called = reached_run.observed
+    hit = only(methods(reached_pkg.hit))
+    keyed = only(methods(reached_pkg.keyed))
+    onlykw = only(methods(reached_pkg.onlykw))
     @test called.reached == Set([hit, keyed, onlykw])
     @test isempty(called.records)
 
-    show_ctx = workload_context(WorkedShow)
-    show_method = which(Base.show, (IO, WorkedShow.Mark))
-    quiet = ArchCheck.observe(() -> WorkedShow.other(1), nothing, show_ctx)
-    function show_mark()
+    shown_pkg = SHOWN_MARK.pkg
+    show_method = which(Base.show, (IO, shown_pkg.Mark))
+    quiet_run = observed_gate(shown_pkg; workload = () -> shown_pkg.other(1))
+    quiet = quiet_run.observed
+    show_mark = function ()
         buffer = IOBuffer()
-        show(buffer, WorkedShow.Mark())
+        show(buffer, shown_pkg.Mark())
     end
-    shown = ArchCheck.observe(show_mark, nothing, show_ctx)
+    shown_run = observed_gate(shown_pkg; workload = show_mark)
+    shown = shown_run.observed
+    @test !(show_method in quiet.reached)
+    @test show_method in shown.reached
 
-    early_ctx = workload_context(WorkedEarly)
-    WorkedEarly.early(1)
-    early = only(methods(WorkedEarly.early))
-    compiled_before = ArchCheck.observe(() -> WorkedEarly.during(1), nothing, early_ctx)
-
-    rows = (
-        (reached = quiet.reached, method = show_method, is_in = false),
-        (reached = shown.reached, method = show_method, is_in = true),
-        (reached = compiled_before.reached, method = early, is_in = true),
-    )
-    for row in rows
-        present = row.method in row.reached
-        @test present == row.is_in
-    end
+    early_pkg = COMPILED_EARLY.pkg
+    early_pkg.early(1)
+    early = only(methods(early_pkg.early))
+    early_run = observed_gate(early_pkg; workload = () -> early_pkg.during(1))
+    compiled_before = early_run.observed
+    @test early in compiled_before.reached
 end
 
 @testset "a throwing workload propagates out of the gate" begin
-    report = joinpath(mktempdir(), "architecture.jsonl")
-    quiet = IOBuffer()
     err = ErrorException("workload failed")
-    checks = ()
-    @test_throws err ArchCheck.gate(Nested; report_path = report, io = quiet, checks, workload = () -> throw(err))
+    @test_throws err gate_findings(Nested; checks = (), workload = () -> throw(err))
 end
 
-@testset "a workload check reads the methods the workload reached" begin
-    report = joinpath(mktempdir(), "architecture.jsonl")
-    quiet = IOBuffer()
+@testset "a method in the root module of a package with submodules counts as reached" begin
     target = which(Nested.root_measure, (Int,))
-    checks = (FWorkload.SeesReached(),)
-    ArchCheck.gate(Nested; report_path = report, io = quiet, checks, workload = () -> Nested.root_measure(1))
-    seen = FWorkload.REACHED[]
-    @test target in seen
+    reached_run = observed_gate(Nested; workload = () -> Nested.root_measure(1))
+    seen = reached_run.observed
+    @test target in seen.reached
 end
 
-@testset "a workload check reads the probed call, the restored method keeps its file, and the probe is gone afterwards" begin
-    report = joinpath(mktempdir(), "architecture.jsonl")
+@testset "a probed submodule method is recorded, then restored to its file and body and counted as reached" begin
     squared = Nested.Geo.Cuts.squared
     probes = Probes(functions = (squared,), slow_s = 0.0)
-    checks = (FWorkload.SeesRecords(),)
     before = which(squared, (Int,))
-    quiet = IOBuffer()
-    ArchCheck.gate(Nested; report_path = report, io = quiet, checks, probes, workload = () -> squared(3))
-    records = FWorkload.RECORDS[]
-    @test only(records).name === :squared
-    @test only(records).caller === Symbol("")
+    body_before = only(code_lowered(squared, (Int,)))
+    probed_run = observed_gate(Nested; probes, workload = () -> squared(3))
+    seen = probed_run.observed
+    record = only(seen.records)
+    @test record.name === :squared
+    @test record.caller === Symbol("")
     after = which(squared, (Int,))
     @test after.file === before.file
-    lowered = only(code_lowered(squared, (Int,)))
-    printed = string(lowered)
-    @test !occursin("probe_enter", printed)
-end
-
-@testset "a probed method counts as reached after its methods are restored" begin
-    report = joinpath(mktempdir(), "architecture.jsonl")
-    squared = Nested.Geo.Cuts.squared
-    probes = Probes(functions = (squared,), slow_s = 0.0)
-    checks = (FWorkload.SeesReached(),)
-    quiet = IOBuffer()
-    ArchCheck.gate(Nested; report_path = report, io = quiet, checks, probes, workload = () -> squared(3))
-    restored = which(squared, (Int,))
-    @test restored in FWorkload.REACHED[]
+    body_after = only(code_lowered(squared, (Int,)))
+    @test string(body_after) == string(body_before)
+    @test after in seen.reached
 end
 
 @testset "a probed keyword method counts as reached after its methods are restored" begin
-    report = joinpath(mktempdir(), "architecture.jsonl")
     keyed = Probed.keyed
     probes = Probes(functions = (keyed,), slow_s = 0.0)
-    checks = (FWorkload.SeesReached(), UnreachedMethods())
+    checks = (UnreachedMethods(),)
     workload = () -> keyed(3; scale = 4)
-    quiet = IOBuffer()
-    ArchCheck.gate(Probed; report_path = report, io = quiet, checks, probes, workload)
-    restored = only(Base.invokelatest(methods, keyed))
-    @test restored in FWorkload.REACHED[]
+    probed_run = observed_gate(Probed; checks, probes, workload)
+    seen = probed_run.observed
+    methods_of = Base.invokelatest(methods, keyed)
+    restored = only(methods_of)
+    @test restored in seen.reached
+    rows = evidence_rows(probed_run.findings)
+    @test !((:unreached_method, "keyed") in rows)
 end

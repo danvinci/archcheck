@@ -1,39 +1,67 @@
 # Members of an independent set do not reference one another.
-@testset "independent modules: no member of the set references another" begin
-    src = joinpath(pkgdir(Nested), "src")
-    graph = ArchCheck.build_module_graph(src, joinpath(src, "Nested.jl"))
-    edges(modules...) = ArchCheck.run_checks((graph = graph,), (Independent(modules...),))
+
+const EARLIER_SHARED = load_package("EarlierShared", """
+include("shared/Shared.jl")
+using .Shared
+include("aa/Aa.jl")
+using .Aa
+include("bb/Bb.jl")
+using .Bb
+""", [
+    "shared/Shared.jl" => "module Shared\nf() = 1\nend\n",
+    "aa/Aa.jl" => "module Aa\nusing ..Shared\nend\n",
+    "bb/Bb.jl" => "module Bb\ng() = Shared.f()\nend\n",
+])
+
+const SIBLING_PAIR = load_package("SiblingPair", """
+include("aa/Aa.jl")
+using .Aa
+include("bb/Bb.jl")
+using .Bb
+""", [
+    "aa/Aa.jl" => "module Aa\nuse() = Bb.f()\nend\n",
+    "bb/Bb.jl" => "module Bb\nf() = 1\nend\n",
+])
+
+@testset "members of an independent set do not reference one another" begin
+    nested = Context(Nested)
     curves = Symbol("Geo.Curves")
     cuts = Symbol("Geo.Cuts")
 
-    # Geo reaches Low, which is outside the set; Contracts reaches nothing
-    @test isempty(edges(:Contracts, :Geo))
+    apart = Independent(:Contracts, :Geo)
+    apart_found = ArchCheck.run(apart, nested)
+    @test isempty(apart_found)
 
-    # Curves calls `Cuts.cut_only` by its qualified name
-    between = edges(curves, cuts)
-    qualified = only(f for f in between if ev(f, :via) == "qualified")
-    @test qualified.kind === :sibling_edge && qualified.mod === curves
+    between_check = Independent(curves, cuts)
+    between = ArchCheck.run(between_check, nested)
+    qualified = only(finding for finding in between if ev(finding, :via) == "qualified")
+    @test qualified.kind === :sibling_edge
+    @test qualified.mod === curves
     @test (qualified.file, qualified.line) == ("src/geo/curves/curve.jl", 15)
     @test (ev(qualified, :from), ev(qualified, :to)) == ("Geo.Curves", "Geo.Cuts")
 
-    # Geo.Curves imports Low from inside Geo, apart from Geo's own `using ..Low`
-    through = edges(:Low, :Geo)
-    inner = only(f for f in through if f.mod === curves && ev(f, :via) == "using")
+    through_check = Independent(:Low, :Geo)
+    through = ArchCheck.run(through_check, nested)
+    inner = only(finding for finding in through if finding.mod === curves && ev(finding, :via) == "using")
     @test (inner.file, inner.line) == ("src/geo/curves/Curves.jl", 3)
     @test (ev(inner, :from), ev(inner, :to)) == ("Geo", "Low")
-    # and Hi's `Geo.Curves._secret` reaches into Geo's tree
-    into = edges(:Hi, :Geo)
-    @test any(f -> f.symbol == "Geo.Curves" && ev(f, :to) == "Geo", into)
 
-    # both reach Shared, which sits below the set
-    rank = Dict(:Shared => [1], :A => [2], :B => [3])
-    dir2mod = Dict("shared" => :Shared, "a" => :A, "b" => :B)
-    refs = [ArchCheck.ModRef(:A, :Shared, "src/a/a.jl", 1, :using), ArchCheck.ModRef(:B, :Shared, "src/b/b.jl", 2, :qualified)]
-    lower = ArchCheck.ModuleGraph(rank, dir2mod, refs)
-    @test isempty(ArchCheck.run_checks((graph = lower,), (Independent(:A, :B),)))
+    into_check = Independent(:Hi, :Geo)
+    into = ArchCheck.run(into_check, nested)
+    @test any(finding -> finding.symbol == "Geo.Curves" && ev(finding, :to) == "Geo", into)
 
-    # a set that cannot constrain anything, or names a module the graph lacks, is refused
+    lower_ctx = case_context(EARLIER_SHARED)
+    lower_check = Independent(:Aa, :Bb)
+    lower = ArchCheck.run(lower_check, lower_ctx)
+    @test isempty(lower)
+
+    sibling_ctx = case_context(SIBLING_PAIR)
+    sibling_check = Independent(:Aa, :Bb)
+    siblings = ArchCheck.run(sibling_check, sibling_ctx)
+    @test any(finding -> finding.kind === :sibling_edge, siblings)
+
     @test_throws ArgumentError Independent(:Geo)
     @test_throws ArgumentError Independent(:Geo, curves)
-    @test_throws ArgumentError edges(:Contracts, :Goe)
+    misspelled = Independent(:Contracts, :Goe)
+    @test_throws ArgumentError ArchCheck.run(misspelled, nested)
 end

@@ -1,18 +1,5 @@
 # Each unread join form. A fetch whose value is read, and a method on the allowlist, stay quiet.
 
-function waits_context(source)
-    root = mktempdir()
-    src = joinpath(root, "src")
-    joins = joinpath(src, "joins")
-    mkpath(joins)
-    path = joinpath(joins, "Joins.jl")
-    write(path, source)
-    rank = Dict(:Joins => 1)
-    dir2mod = Dict("joins" => :Joins)
-    index = ArchCheck.build_source_index(src, rank, dir2mod)
-    ArchCheck.Context(index, Main, Module[])
-end
-
 function wait_rows(found)
     rows = Tuple{String,Symbol,String,String,Int,Symbol}[]
     for finding in found
@@ -22,10 +9,10 @@ function wait_rows(found)
         push!(rows, row)
     end
     sort!(rows)
+    rows
 end
 
-const JOINS_SOURCE = """
-module Joins
+const WAIT_JOINS = load_package("WaitJoins", """
 function dropped(task)
     fetch(task)
     nothing
@@ -73,21 +60,20 @@ end
 function signed(fetch)
     identity(1)
 end
-end
-"""
+""")
 
 @testset "each unread join form fires, and a used fetch or an allowed method stays quiet" begin
-    ctx = waits_context(JOINS_SOURCE)
-    check = ArchCheck.UnreadWaits(; allowed = (:barrier,))
+    ctx = case_context(WAIT_JOINS)
+    check = UnreadWaits(; allowed = (:barrier,))
     found = ArchCheck.run(check, ctx)
     rows = wait_rows(found)
     expected = [
-        ("dropped", :Joins, "fetch", "fetch(task)", 3, :unread_wait),
-        ("mapped", :Joins, "passed", "map(fetch, tasks)", 20, :unread_wait),
-        ("named", :Joins, "passed", "foldl(+, tasks; init = fetch)", 32, :unread_wait),
-        ("passed", :Joins, "passed", "foreach(fetch, tasks)", 17, :unread_wait),
-        ("synced", :Joins, "sync", "@sync begin identity(1) end", 24, :unread_wait),
-        ("waited", :Joins, "wait", "wait(task)", 14, :unread_wait),
+        ("dropped", :WaitJoins, "fetch", "fetch(task)", 3, :unread_wait),
+        ("mapped", :WaitJoins, "passed", "map(fetch, tasks)", 20, :unread_wait),
+        ("named", :WaitJoins, "passed", "foldl(+, tasks; init = fetch)", 32, :unread_wait),
+        ("passed", :WaitJoins, "passed", "foreach(fetch, tasks)", 17, :unread_wait),
+        ("synced", :WaitJoins, "sync", "@sync begin identity(1) end", 24, :unread_wait),
+        ("waited", :WaitJoins, "wait", "wait(task)", 14, :unread_wait),
     ]
     @test rows == expected
 end

@@ -1,66 +1,83 @@
 # A method on a foreign function needs an argument type its module owns.
-# module-piracy corpus: two siblings and their parent, each adding methods to functions and types the others own
-module FFam
+
+const METHOD_FAMILY = load_package("MethodFamily", """
+include("siba/SibA.jl")
+using .SibA
+include("sibb/SibB.jl")
+using .SibB
+Base.length(::SibB.Twig) = 2
+SibA.spread(x::String; pad = 0) = x
+""", [
+    "siba/SibA.jl" => """
     module SibA
-        struct Leaf end
-        spread(x::Int) = x
-        Base.show(io::IO, ::Leaf) = print(io, "leaf")
+    struct Leaf end
+    spread(x::Int) = x
+    Base.show(io::IO, ::Leaf) = print(io, "leaf")
     end
+    """,
+    "sibb/SibB.jl" => """
     module SibB
-        using ..SibA
-        struct Twig end
-        SibA.spread(x::Twig) = x
-        Base.show(io::IO, ::Twig) = print(io, "twig")
-        Base.zero(::Type{Twig}) = Twig()
-        const PIRATE_AT = @__LINE__() + 1
-        SibA.spread(x::SibA.Leaf) = x
-        SibA.spread(x::Float64) = x
-        Base.length(::SibA.Leaf) = 1
-        Base.one(::Type{SibA.Leaf}) = SibA.Leaf()
-        SibA.spread(x::Union{Twig,Char}) = x
+    using ..SibA
+    struct Twig end
+    SibA.spread(x::Twig) = x
+    Base.show(io::IO, ::Twig) = print(io, "twig")
+    Base.zero(::Type{Twig}) = Twig()
+    SibA.spread(x::SibA.Leaf) = x
+    SibA.spread(x::Float64) = x
+    Base.length(::SibA.Leaf) = 1
+    Base.one(::Type{SibA.Leaf}) = SibA.Leaf()
+    SibA.spread(x::Union{Twig,Char}) = x
     end
-    Base.length(::SibB.Twig) = 2
-    SibA.spread(x::String; pad = 0) = x
+    """,
+])
+
+function method_signature(parts...)
+    string(Tuple{parts...})
 end
 
-@testset "module piracy: a method on a foreign function needs an argument type its module owns" begin
-    repo = normpath(joinpath(@__DIR__, ".."))
-    here = relpath(@__FILE__, repo)
-    found = ArchCheck.check_module_piracy([FFam, FFam.SibA, FFam.SibB]; repo)
-    by_signature = Dict(ev(f, :signature) => f for f in found)
-    flagged = Set((f.mod, ev(f, :signature)) for f in found)
-    sig(parts...) = string(Tuple{parts...})
-    sib_a = Symbol("FFam.SibA")
-    sib_b = Symbol("FFam.SibB")
-    Leaf = FFam.SibA.Leaf
-    Twig = FFam.SibB.Twig
-    spread = FFam.SibA.spread
+@testset "a method on a foreign function needs an argument type its module owns" begin
+    ctx = case_context(METHOD_FAMILY)
+    found = ArchCheck.run(ModulePiracy(), ctx)
+    flagged = Set((finding.mod, ev(finding, :signature)) for finding in found)
+    pkg = METHOD_FAMILY.pkg
+    leaf = pkg.SibA.Leaf
+    twig = pkg.SibB.Twig
+    spread = pkg.SibA.spread
+    sib_b = :SibB
+    root = :MethodFamily
 
-    # a module's own function, or any function on a type the module owns
-    @test !any(f -> f.mod === sib_a, found)
-    @test !((sib_b, sig(typeof(spread), Twig)) in flagged)
-    @test !((sib_b, sig(typeof(show), IO, Twig)) in flagged)
-    @test !((sib_b, sig(typeof(zero), Type{Twig})) in flagged)
-    # a parent owns the types of the modules nested in it
-    @test !((:FFam, sig(typeof(length), Twig)) in flagged)
+    on_twig = method_signature(typeof(spread), twig)
+    on_show = method_signature(typeof(show), IO, twig)
+    on_zero = method_signature(typeof(zero), Type{twig})
+    parent_length = method_signature(typeof(length), twig)
+    @test !any(finding -> finding.mod === :SibA, found)
+    @test !((sib_b, on_twig) in flagged)
+    @test !((sib_b, on_show) in flagged)
+    @test !((sib_b, on_zero) in flagged)
+    @test !((root, parent_length) in flagged)
 
-    # a foreign function on a sibling's type, on no owned type, and Base's function on a sibling's type
-    @test (sib_b, sig(typeof(spread), Leaf)) in flagged
-    @test (sib_b, sig(typeof(spread), Float64)) in flagged
-    @test (sib_b, sig(typeof(length), Leaf)) in flagged
-    # Type{T} belongs where T does; a Union that also claims a foreign type is foreign
-    @test (sib_b, sig(typeof(one), Type{Leaf})) in flagged
-    @test (sib_b, sig(typeof(spread), Union{Twig,Char})) in flagged
-    # a keyword method is judged by the function it wraps
-    @test (:FFam, sig(typeof(spread), String)) in flagged
-    @test (:FFam, sig(typeof(Core.kwcall), NamedTuple, typeof(spread), String)) in flagged
+    on_leaf = method_signature(typeof(spread), leaf)
+    on_float = method_signature(typeof(spread), Float64)
+    on_length = method_signature(typeof(length), leaf)
+    on_one = method_signature(typeof(one), Type{leaf})
+    on_union = method_signature(typeof(spread), Union{twig,Char})
+    on_string = method_signature(typeof(spread), String)
+    on_kw = method_signature(typeof(Core.kwcall), NamedTuple, typeof(spread), String)
+    @test (sib_b, on_leaf) in flagged
+    @test (sib_b, on_float) in flagged
+    @test (sib_b, on_length) in flagged
+    @test (sib_b, on_one) in flagged
+    @test (sib_b, on_union) in flagged
+    @test (root, on_string) in flagged
+    @test (root, on_kw) in flagged
     @test length(found) == 7
 
-    # the finding sits at the method and names the function's owner
-    on_leaf = by_signature[sig(typeof(spread), Leaf)]
-    @test on_leaf.file == here && on_leaf.line == FFam.SibB.PIRATE_AT
-    @test on_leaf.symbol == "spread"
-    @test ev(on_leaf, :owner) == "Main.FFam.SibA"
-    on_base = by_signature[sig(typeof(length), Leaf)]
-    @test ev(on_base, :owner) == "Base"
+    by_signature = Dict(ev(finding, :signature) => finding for finding in found)
+    leaf_finding = by_signature[on_leaf]
+    @test endswith(leaf_finding.file, "SibB.jl")
+    @test leaf_finding.line == 7
+    @test leaf_finding.symbol == "spread"
+    @test ev(leaf_finding, :owner) == "MethodFamily.SibA"
+    length_finding = by_signature[on_length]
+    @test ev(length_finding, :owner) == "Base"
 end

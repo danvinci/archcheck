@@ -1,61 +1,87 @@
 # Module rank: include order, the edges between modules, and a cycle in that graph.
-# a parent holding one submodule its spine declares and one it does not
-module FNest
-    module Declared end
-    module Stray end
-end
 
-@testset "module graph" begin
-    # the module name comes from the paired `using`, so a wrapper filename may differ from it, and a
-    # module may sit nested inside another module's subdirectory
-    mktemp() do path, io
-        write(io, "include(\"aa/Entry.jl\")\nusing .Aa\ninclude(\"bb/inner/Inner.jl\")\nusing .Inner\n")
-        flush(io)
-        rank, dir2mod = ArchCheck.parse_spine_order(path)
-        @test rank == Dict(:Aa => 1, :Inner => 2)
-        @test dir2mod == Dict("aa" => :Aa, "bb/inner" => :Inner)
+const FORWARD_CALL = load_package("ForwardCall", """
+include("aa/Aa.jl")
+using .Aa
+include("bb/Bb.jl")
+using .Bb
+""", [
+    "aa/Aa.jl" => """
+    module Aa
+    climb() = Bb.later()
+    self() = Aa.climb()
+    quiet() = SomePkg.foo()
     end
-    # relative import = edge, qualified X.f = edge, external pkg skipped, self-ref dropped
-    refs = ArchCheck.scan_modrefs("using ..Aa, ..Bb, QuadGK\nq = Cc.foo(1)", :Aa, "x.jl", Set([:Aa, :Bb, :Cc]))
-    @test Set((r.to, r.via) for r in refs) == Set([(:Bb, :using), (:Cc, :qualified)])
+    """,
+    "bb/Bb.jl" => "module Bb\nlater() = 1\nend\n",
+])
+
+const DOWNWARD_CALL = load_package("DownwardCall", """
+include("aa/Aa.jl")
+using .Aa
+include("bb/Bb.jl")
+using .Bb
+""", [
+    "aa/Aa.jl" => "module Aa\nf() = 1\nend\n",
+    "bb/Bb.jl" => "module Bb\ng() = Aa.f()\nend\n",
+])
+
+const MUTUAL_CALL = load_package("MutualCall", """
+include("aa/Aa.jl")
+using .Aa
+include("bb/Bb.jl")
+using .Bb
+""", [
+    "aa/Aa.jl" => "module Aa\nf() = Bb.g()\nend\n",
+    "bb/Bb.jl" => "module Bb\ng() = Aa.f()\nend\n",
+])
+
+const FORWARD_CHAIN = load_package("ForwardChain", """
+include("aa/Aa.jl")
+using .Aa
+include("bb/Bb.jl")
+using .Bb
+include("cc/Cc.jl")
+using .Cc
+""", [
+    "aa/Aa.jl" => "module Aa\nf() = Bb.g()\nend\n",
+    "bb/Bb.jl" => "module Bb\ng() = Cc.h()\nend\n",
+    "cc/Cc.jl" => "module Cc\nh() = 1\nend\n",
+])
+
+const STRAY_CHILD = load_package("StrayChild", """
+include("inner/Inner.jl")
+using .Inner
+""", [
+    "inner/Inner.jl" => """
+    module Inner
+    include("deep/Deep.jl")
+    using .Deep
+    module Stray end
+    end
+    """,
+    "inner/deep/Deep.jl" => "module Deep\nend\n",
+])
+
+function module_edge_rows(case)
+    ctx = case_context(case)
+    found = ArchCheck.run(ModuleBackEdges(), ctx)
+    evidence_rows(found, :include_order, :via)
 end
 
-
-@testset "cycle: a mutual reference is a cycle and a chain is not" begin
-    chain_rank = Dict(:a => [1], :b => [2], :c => [3])
-    chain_dirs = Dict("a" => :a, "b" => :b, "c" => :c)
-    chain_refs = [
-        ArchCheck.ModRef(:a, :b, "a.jl", 1, :using),
-        ArchCheck.ModRef(:b, :c, "b.jl", 1, :using),
-    ]
-    chain = ArchCheck.ModuleGraph(chain_rank, chain_dirs, chain_refs)
-    @test isempty(ArchCheck.check_cycles(chain))
-
-    loop_rank = Dict(:a => [1], :b => [2])
-    loop_dirs = Dict("a" => :a, "b" => :b)
-    loop_refs = [
-        ArchCheck.ModRef(:a, :b, "a.jl", 1, :using),
-        ArchCheck.ModRef(:b, :a, "b.jl", 1, :using),
-    ]
-    loop = ArchCheck.ModuleGraph(loop_rank, loop_dirs, loop_refs)
-    found = only(ArchCheck.check_cycles(loop))
-    @test found.kind === :cycle
-    @test ev(found, :loop) == "a->b->a"
-end
-
-# A random package nested two deep, each module one wrapper calling others by dotted name. The order the
-# generator finishes modules in (each after everything it includes) is the back-edge oracle.
-function random_package(rng, src)
-    keys = String[]
+# A random package nested two deep. Finish order, children before the parent, is the back-edge oracle.
+function random_package(rng)
+    modules = String[]
     children = Dict{String,Vector{String}}("" => String[])
     function grow!(parent, name, depth)
         key = isempty(parent) ? name : "$parent.$name"
-        push!(keys, key)
+        push!(modules, key)
         push!(children[parent], key)
         children[key] = String[]
         depth < 2 || return
         for j in 1:rand(rng, 0:2)
-            grow!(key, "$(name)s$j", depth + 1)
+            child = "$(name)s$j"
+            grow!(key, child, depth + 1)
         end
     end
     for i in 1:rand(rng, 2:4)
@@ -74,62 +100,92 @@ function random_package(rng, src)
     position = Dict(key => i for (i, key) in enumerate(finished))
 
     leaf(key) = String(last(split(key, '.')))
-    function directory(key)
+    function relative_wrapper(key)
         segments = lowercase.(split(key, '.'))
-        joinpath(src, segments...)
+        name = leaf(key)
+        joinpath(segments..., name * ".jl")
     end
-    function include_lines(kids)
+    function include_spec(parent, kid)
+        full = relative_wrapper(kid)
+        isempty(parent) && return full
+        parent_segments = lowercase.(split(parent, '.'))
+        parent_dir = joinpath(parent_segments...)
+        relpath(full, parent_dir)
+    end
+    function include_lines(parent, kids)
         lines = String[]
         for kid in kids
+            spec = include_spec(parent, kid)
             name = leaf(kid)
-            wrapper = joinpath(lowercase(name), name * ".jl")
-            push!(lines, "include(\"$wrapper\")\nusing .$name")
+            push!(lines, "include(\"$spec\")\nusing .$name")
         end
         join(lines, "\n")
     end
-    mkpath(src)
-    spine = "module Pkg\n" * include_lines(children[""]) * "\nend\n"
-    write(joinpath(src, "Pkg.jl"), spine)
 
+    files = Pair{String,String}[]
     truth = Set{Tuple{String,String}}()
-    for key in keys
+    for key in modules
         calls = String[]
         for _ in 1:rand(rng, 0:3)
-            target = rand(rng, keys)
+            target = rand(rng, modules)
             target == key && continue
             push!(calls, "$target.f()")
             push!(truth, (key, target))
         end
         body = isempty(calls) ? "1" : join(calls, " + ")
-        nested = include_lines(children[key])
-        mkpath(directory(key))
-        wrapper = joinpath(directory(key), leaf(key) * ".jl")
-        write(wrapper, "module $(leaf(key))\n$nested\nf() = $body\nend\n")
+        nested = include_lines(key, children[key])
+        name = leaf(key)
+        source = "module $name\n$nested\nf() = $body\nend\n"
+        push!(files, relative_wrapper(key) => source)
     end
-    (keys = keys, truth = truth, position = position)
+    spine = include_lines("", children[""])
+    (; modules, truth, position, spine, files)
 end
 
-@testset "fuzz: nested module back-edges against the generated load order" begin
+@testset "a reference to a later module is a back edge and a self or external name is not" begin
+    forward = module_edge_rows(FORWARD_CALL)
+    @test (:back_edge, "Bb", "1->2", "qualified") in forward
+    @test !any(row -> row[2] == "Aa", forward)
+    @test !any(row -> row[2] == "SomePkg", forward)
+    down = module_edge_rows(DOWNWARD_CALL)
+    @test isempty(down)
+end
+
+@testset "a mutual reference is a cycle and a forward chain is not" begin
+    cycle_ctx = case_context(MUTUAL_CALL)
+    cycles = ArchCheck.run(ModuleCycles(), cycle_ctx)
+    cycle = only(cycles)
+    @test cycle.kind === :cycle
+    loop = ev(cycle, :loop)
+    @test loop == "Aa->Bb->Aa" || loop == "Bb->Aa->Bb"
+    chain_ctx = case_context(FORWARD_CHAIN)
+    chain = ArchCheck.run(ModuleCycles(), chain_ctx)
+    @test isempty(chain)
+    chain_edges = ArchCheck.run(ModuleBackEdges(), chain_ctx)
+    @test !isempty(chain_edges)
+end
+
+@testset "nested module back edges match the generated finish order" begin
     for seed in 1:40
-        rng = MersenneTwister(seed)
-        mktempdir() do root
-            src = joinpath(root, "src")
-            spec = random_package(rng, src)
-            rank, dir2mod = ArchCheck.parse_spine_order(joinpath(src, "Pkg.jl"))
-            index = ArchCheck.build_source_index(src, rank, dir2mod)
-            @test Set(string.(keys(index.rank))) == Set(spec.keys)   # every declared module, at every depth
-
-            found = ArchCheck.check_backedges(ArchCheck.build_module_graph(index))
-            got = Set((string(f.mod), f.symbol) for f in found)
-            # the oracle: a reference climbs exactly when its target finishes loading at or after its source
-            expected = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])
-            @test got == expected
-        end
+        rng = Xoshiro(seed)
+        spec = random_package(rng)
+        case_name = "RankOrder$seed"
+        case = load_package(case_name, spec.spine, spec.files)
+        ctx = Base.invokelatest(case_context, case)
+        rank_names = Set(string(key) for key in keys(ctx.index.rank))
+        @test rank_names == Set(spec.modules)
+        found = ArchCheck.run(ModuleBackEdges(), ctx)
+        got = Set((string(finding.mod), finding.symbol) for finding in found)
+        expected = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])
+        @test got == expected
     end
 end
 
-@testset "submodules: a loaded submodule the spine does not declare" begin
-    rank = Dict(:FNest => [1], Symbol("FNest.Declared") => [1, 1])
-    stray = only(ArchCheck.check_module_corpus([FNest, FNest.Declared], rank))
-    @test stray.kind === :unranked_module && stray.mod === :FNest && stray.symbol == "Stray"
+@testset "a loaded submodule the wrapper does not declare is unranked" begin
+    ctx = case_context(STRAY_CHILD)
+    found = ArchCheck.run(Corpus(), ctx)
+    stray = only(finding for finding in found if finding.kind === :unranked_module)
+    @test stray.mod === :Inner
+    @test stray.symbol == "Stray"
+    @test !any(finding -> finding.symbol == "Deep", found)
 end
