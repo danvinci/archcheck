@@ -25,7 +25,7 @@ By default (`ArchCheck.CHECKS`), the gate holds that:
 - Modules and files depend only on what loads before them, with no cycles; a module may use the modules that enclose it (`ModuleBackEdges`, `ModuleCycles`, `FileBackEdges`, and `strict = true` to hold enclosing modules to the order too). A definition that needs only lower layers is reported as one to move down (`Sinkable`, `FileSinkable`).
 - Code reaches another module through its exported or `public` names, declared in its `using` and `import` lines, and reads no field of a struct another module owns (`ReachesInternal`, `DeclaredNames`, `DeclaredModules`, `PrivateImports`, `ForeignFields`).
 - A method on a function from outside the package takes a type the package owns (`ModulePiracy`, and `strict = true` to judge each module alone).
-- Each exported name has one owner and a definition, nothing is exported wholesale, and every definition is used (`OwnerUniqueness`, `StaleExports`, `BlanketExports`, `DeadCode`).
+- Each exported name has one owner and a definition, nothing is exported wholesale, and every definition is used; a module and the modules it encloses count as one owner, and exported or `public` names count as used (`OwnerUniqueness`, `StaleExports`, `BlanketExports`, `DeadCode`, and `strict = true` or `public_is_entry = false` to tighten each).
 - Struct fields have concrete types, closures do not box captured locals, and dispatch picks a method's path rather than a runtime type test (`AbstractFields`, `BoxedCaptures`, `TypeBranches`).
 - No function returns a bare tuple of three or more values, no expression is copied across methods, and no function takes the same values in two array storages (`TupleReturns`, `ExpressionClones`, `StorageOverloads`).
 
