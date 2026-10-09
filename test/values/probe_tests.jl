@@ -389,3 +389,119 @@ end
     @test length(records) == 2
     @test records[1].arguments == records[2].arguments
 end
+
+function archcheck_context(; methods = nothing)
+    src = joinpath(pkgdir(ArchCheck), "src")
+    root = nameof(ArchCheck)
+    spine = joinpath(src, string(root) * ".jl")
+    layout = ArchCheck.package_layout(spine, root)
+    rank = layout[1]
+    dir2mod = layout[2]
+    index = build_source_index(src, rank, dir2mod; root)
+    ordered = sort(collect(keys(index.rank)); by = name -> index.rank[name])
+    mods = Module[]
+    for name in ordered
+        loaded = ArchCheck.loaded_module(ArchCheck, name)
+        push!(mods, loaded)
+    end
+    Context(index, ArchCheck, mods; methods)
+end
+
+function keyword_functions()
+    found = Function[]
+    for name in Base.names(ArchCheck; all = true)
+        isdefined(ArchCheck, name) || continue
+        value = getfield(ArchCheck, name)
+        value isa Function || continue
+        has_keyword = false
+        for method in methods(value)
+            method.module === ArchCheck || continue
+            isempty(Base.kwarg_decl(method)) && continue
+            has_keyword = true
+        end
+        has_keyword || continue
+        push!(found, value)
+    end
+    found
+end
+
+function binding_warning(func, ctx)
+    path = tempname()
+    open(path, "w") do warn_io
+        redirect_stderr(warn_io) do
+            probes = Probes(; functions = (func,), slow_s = 0.0)
+            workload = () -> nothing
+            ArchCheck.observe(workload, probes, ctx)
+            chosen = nothing
+            for method in methods(func)
+                method.module === ArchCheck || continue
+                isempty(Base.kwarg_decl(method)) && continue
+                chosen = method
+            end
+            Base.bodyfunction(chosen)
+        end
+    end
+    read(path, String)
+end
+
+@testset "probes: an unassigned Memory slot stays out of the content hash" begin
+    slots = Memory{Any}(undef, 2)
+    slots[2] = :kept
+    digest = ArchCheck.content_hash(slots)
+    twin = Memory{Any}(undef, 2)
+    twin[2] = :kept
+    twin_digest = ArchCheck.content_hash(twin)
+    @test digest == twin_digest
+    filled = Memory{Any}(undef, 2)
+    filled[1] = nothing
+    filled[2] = :kept
+    filled_digest = ArchCheck.content_hash(filled)
+    @test digest != filled_digest
+end
+
+@testset "probes: method_graph and observe arguments have a content hash" begin
+    entries = Any[(ArchCheck.gate, Tuple{Module})]
+    modules = (ArchCheck,)
+    graph = ArchCheck.method_graph(entries, modules)
+    graph_digest = ArchCheck.content_hash(graph)
+    @test graph_digest isa UInt
+    ctx = archcheck_context(; methods = graph)
+    probes = Probes(; functions = (ArchCheck.method_graph, ArchCheck.observe), slow_s = 0.0)
+    workload = () -> 1
+    observe_arguments = (workload, nothing, ctx)
+    observe_digest = ArchCheck.content_hash(observe_arguments)
+    @test observe_digest isa UInt
+    armed = ArchCheck.arm!(probes, ctx)
+    local traced
+    try
+        built = Base.invokelatest(ArchCheck.method_graph, entries, modules)
+        observed = Base.invokelatest(ArchCheck.observe, workload, nothing, ctx)
+        @test built isa ArchCheck.MethodGraph
+        @test observed isa ArchCheck.Observation
+    finally
+        traced = ArchCheck.disarm!(armed)
+    end
+    names = Symbol[record.name for record in traced.records]
+    @test :method_graph in names
+    @test :observe in names
+end
+
+@testset "probes: arming a keyword method leaves the body binding in this world" begin
+    ctx = archcheck_context()
+    functions = keyword_functions()
+    @test !isempty(functions)
+    for func in functions
+        text = binding_warning(func, ctx)
+        warned = occursin("WARNING:", text) || occursin("Warning:", text)
+        @test !warned
+    end
+    path = joinpath(pkgdir(ArchCheck), "src", "ArchCheck.jl")
+    before = ArchCheck.file_rank(path)
+    probes = Probes(; functions = (ArchCheck.file_rank,), slow_s = 0.0)
+    workload = () -> ArchCheck.file_rank(path)
+    observed = ArchCheck.observe(workload, probes, ctx)
+    names = Symbol[record.name for record in observed.records]
+    @test :file_rank in names
+    after = Base.invokelatest(ArchCheck.file_rank, path)
+    @test before == after
+end
