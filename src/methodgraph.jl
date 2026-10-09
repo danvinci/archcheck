@@ -230,7 +230,7 @@ function written_from_kwcall(method::Method)
     parts = split_signature(method.sig)
     func = function_instance(parts[1])
     isnothing(func) && return method
-    found = method_for(func, parts[2])
+    found = method_for(func, parts[2], method)
     isnothing(found) && return method
     found
 end
@@ -250,7 +250,7 @@ function written_from_body(method::Method)
     end
     isnothing(func) && return method
     positional = params[func_index+1:end]
-    found = method_for(func, positional)
+    found = method_for(func, positional, method)
     isnothing(found) && return method
     found
 end
@@ -263,9 +263,10 @@ function function_instance(@nospecialize(type))
     value
 end
 
-function method_for(func, positional)
-    argtype = Tuple{positional...}
-    instance = Base.method_instance(func, argtype)
-    isnothing(instance) && return nothing
-    instance.def
+# Positional types read from a keyword method can hold the written method's type variables; wrap them again.
+function method_for(func, positional, keyword_method::Method)
+    open_types = Tuple{positional...}
+    argtype = Base.rewrap_unionall(open_types, keyword_method.sig)
+    hasmethod(func, argtype) || return nothing
+    which(func, argtype)
 end

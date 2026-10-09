@@ -21,6 +21,11 @@ module MGKw
     use(x::Int) = add(x; y = 2)
 end
 
+module MGKwWhere
+    scaled(xs::Vector{T}; scale::T = one(T)) where {T<:Real} = xs .* scale
+    use(xs::Vector{Float64}) = scaled(xs; scale = 2.0)
+end
+
 module MGClose
     leaf(x::Int) = x
     function outer(x::Int)
@@ -288,11 +293,17 @@ function closure_in(callees, written, mod)
 end
 
 @testset "method graph: a keyword call credits the method the source wrote" begin
-    graph = ArchCheck.method_graph(((MGKw.use, Tuple{Int}),), (MGKw,))
-    caller = only(methods(MGKw.use))
-    written = only(methods(MGKw.add))
-    owned = edges_in(graph, MGKw)
-    @test get(owned, caller, Set{Method}()) == Set([written])
+    rows = (
+        (mod = MGKw, use = MGKw.use, written = MGKw.add, argument = Int),
+        (mod = MGKwWhere, use = MGKwWhere.use, written = MGKwWhere.scaled, argument = Vector{Float64}),
+    )
+    for row in rows
+        graph = ArchCheck.method_graph(((row.use, Tuple{row.argument}),), (row.mod,))
+        caller = only(methods(row.use))
+        written = only(methods(row.written))
+        owned = edges_in(graph, row.mod)
+        @test get(owned, caller, Set{Method}()) == Set([written])
+    end
 end
 
 @testset "method graph: a closure's call is an edge from that closure" begin
