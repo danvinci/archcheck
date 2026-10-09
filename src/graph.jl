@@ -431,6 +431,19 @@ end
 
 files_of(index::SourceIndex, mod::Symbol) = [file for file in index.files if file.mod === mod]
 
+# A node's place in load order: its module's rank, then its position there. Compared as vectors, the order is
+# the one Julia loads the code in.
+load_place(file::FileNode) = [file.modrank; file.filerank]
+
+# Each node's load place by module and path; a module block shares its file's path, so the path alone is ambiguous.
+function load_places(index::SourceIndex)
+    places = Dict{Tuple{Symbol,String},Vector{Int}}()
+    for file in index.files
+        places[(file.mod, file.path)] = load_place(file)
+    end
+    places
+end
+
 function line_span(node)
     first_line = source_line(node)
     source = JS.sourcefile(node)

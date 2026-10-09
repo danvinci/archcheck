@@ -73,21 +73,14 @@ function storage_labels(earlier::Method, later::Method, texts)
     join(labels, " ")
 end
 
-function file_positions(index)
-    positions = Dict{String,Int}()
-    for file in index.files
-        positions[file.path] = file.filerank
-    end
-    positions
-end
-
-# Include rank, then path, then line: the order a reader meets each method.
-function order_methods(owned, positions, repo)
-    keyed = Vector{Pair{Tuple{Int,String,Int},Method}}()
+# Load place, then path, then line: the order a reader meets each method.
+function order_methods(owned, places, repo)
+    keyed = Vector{Pair{Tuple{Vector{Int},String,Int},Method}}()
     for method in owned
         file, line = method_site(method, repo)
-        position = get(positions, file, 0)
-        key = (position, file, line)
+        owner = module_key(method.module)
+        place = get(places, (owner, file), Int[])
+        key = (place, file, line)
         push!(keyed, key => method)
     end
     sort!(keyed; by = first)
@@ -135,7 +128,7 @@ function append_pairs!(findings, ordered, repo, texts)
 end
 
 # eval and include are bindings every module carries. Their methods sit outside the package.
-function scan_module!(findings, mod, seen, project, positions, repo, texts)
+function scan_module!(findings, mod, seen, project, places, repo, texts)
     for name in names(mod; all = true, imported = false)
         text = string(name)
         startswith(text, "#") && continue
@@ -149,7 +142,7 @@ function scan_module!(findings, mod, seen, project, positions, repo, texts)
         push!(seen, value)
         owned = methods_in(value, project)
         length(owned) < 2 && continue
-        ordered = order_methods(owned, positions, repo)
+        ordered = order_methods(owned, places, repo)
         append_pairs!(findings, ordered, repo, texts)
     end
 end
@@ -158,11 +151,11 @@ function check_storage_overloads(modules, index)
     findings = Finding[]
     seen = IdSet{Function}()
     project = Set{Module}(modules)
-    positions = file_positions(index)
+    places = load_places(index)
     repo = index.repo
     texts = IdDict{Any,String}()
     for mod in modules
-        scan_module!(findings, mod, seen, project, positions, repo, texts)
+        scan_module!(findings, mod, seen, project, places, repo, texts)
     end
     findings
 end
