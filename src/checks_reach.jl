@@ -1,6 +1,6 @@
-# Methods the workload left uncompiled. A resolved call, or a name left to runtime dispatch, accounts for one the run skipped.
+# Methods the workload left uncompiled. A call in the method graph that can land on one accounts for it.
 
-"""Configured through `gate(...; checks)` beside a workload. A method the workload left uncompiled, and that no resolved call names, is a finding. `public_is_entry` counts an exported or public name as reached."""
+"""Configured through `gate(...; checks)` beside a workload. A method the workload left uncompiled, and that no call in the method graph can land on, is a finding. `public_is_entry` counts an exported or public name as reached."""
 struct UnreachedMethods <: Check
     public_is_entry::Bool   # an exported or public name counts as an entry point
 end
@@ -21,14 +21,13 @@ function run(check::UnreachedMethods, ctx)
     graph = ctx.methods
     repo = ctx.index.repo
     modules = package_modules(ctx)
-    named = named_methods(graph)
-    unresolved = unresolved_names(graph)
+    landed = landed_methods(graph)
     sites = compiled_any_sites(modules)
     findings = Finding[]
     defined = project_methods(modules)
     for method in defined
         is_public_entry(check, method) && continue
-        is_unreached(method, reached, named, unresolved, sites) || continue
+        is_unreached(method, reached, landed, sites) || continue
         finding = unreached_finding(method, repo, graph)
         push!(findings, finding)
     end
@@ -110,44 +109,27 @@ function constructor_recorded(method, sites)
     site in sites
 end
 
-function is_unreached(method, reached, named, unresolved, sites)
+function is_unreached(method, reached, landed, sites)
     is_live_method(method) || return false
     is_generated(method) && return false
     is_constructor_twin(method) && return false
     method in reached && return false
     constructor_recorded(method, sites) && return false
-    graph_names(method, named, unresolved) && return false
-    true
+    !(method in landed)
 end
 
-# An unresolved call is stored under the callee's name, and every live method of that name stays out.
-function graph_names(method, named, unresolved)
-    method in named && return true
-    method.name in unresolved
-end
-
-function named_methods(graph::MethodGraph)
-    named = Set{Method}()
+function landed_methods(graph::MethodGraph)
+    landed = Set{Method}()
     for callees in values(graph.edges)
-        union!(named, callees)
+        union!(landed, callees)
     end
-    named
+    landed
 end
 
-named_methods(::Nothing) = Set{Method}()
-
-function unresolved_names(graph::MethodGraph)
-    unresolved = Set{Symbol}()
-    for called in values(graph.unresolved)
-        union!(unresolved, called)
-    end
-    unresolved
-end
-
-unresolved_names(::Nothing) = Set{Symbol}()
+landed_methods(::Nothing) = Set{Method}()
 
 function unreached_detail(::MethodGraph)
-    "the workload compiled no specialization of this method, and no resolved call names it"
+    "the workload compiled no specialization of this method, and no call in the method graph can land on it"
 end
 
 function unreached_detail(::Nothing)

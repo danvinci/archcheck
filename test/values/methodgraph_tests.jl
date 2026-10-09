@@ -1,4 +1,4 @@
-# Inference resolves a concrete call to one method, and a call it cannot resolve stays a name.
+# A call is an edge to each method it can land on: the one inference resolved, or each its inferred types match.
 # A generator records the edges it writes, so the oracle is that source.
 
 function graph_of(case, entries)
@@ -19,6 +19,8 @@ const WIDE_DISPATCH = load_package("WideDispatch", """
     dest(x::Int64) = x
     anycall(x) = dest(x)
     dyn(f, x::Int) = f(x)
+    splat(xs::Vector{Any}) = dest(xs...)
+    const HELD = (anycall,)
     """)
 
 const NARROW_DISPATCH = load_package("NarrowDispatch", """
@@ -260,42 +262,31 @@ end
     @test graph.edges[caller] == Set([callee])
 end
 
-@testset "three matching methods are edges and four stay a name" begin
-    rows = (
-        (case = NARROW_DISPATCH, is_resolved = true),
-        (case = WIDE_DISPATCH, is_resolved = false),
-    )
-    for row in rows
-        pkg = row.case.pkg
+@testset "a call inference splits, or leaves to runtime dispatch, is an edge to each method its types match" begin
+    for case in (NARROW_DISPATCH, WIDE_DISPATCH)
+        pkg = case.pkg
         entry = (pkg.wide, Tuple{Integer})
         entries = (entry,)
-        graph = graph_of(row.case, entries)
+        graph = graph_of(case, entries)
         caller = only(methods(pkg.wide))
-        if row.is_resolved
-            callees = Set(methods(pkg.dest))
-            @test graph.edges[caller] == callees
-            @test !haskey(graph.unresolved, caller)
-        else
-            @test graph.unresolved[caller] == Set([:dest])
-            @test !haskey(graph.edges, caller)
-        end
+        @test graph.edges[caller] == Set(methods(pkg.dest))
     end
 end
 
-@testset "an Any or dynamic call stays an unresolved name" begin
+@testset "an Any or splatted argument lands on each method its types match, and an unknown callee on functions held as values" begin
     pkg = WIDE_DISPATCH.pkg
     any_entry = (pkg.anycall, Tuple{Any})
     dyn_entry = (pkg.dyn, Tuple{Any,Int})
-    entries = (any_entry, dyn_entry)
+    splat_entry = (pkg.splat, Tuple{Vector{Any}})
+    entries = (any_entry, dyn_entry, splat_entry)
     graph = graph_of(WIDE_DISPATCH, entries)
-    rows = (
-        (func = pkg.anycall, name = :dest),
-        (func = pkg.dyn, name = :f),
-    )
-    for row in rows
-        caller = only(methods(row.func))
-        @test graph.unresolved[caller] == Set([row.name])
-    end
+    anycall = only(methods(pkg.anycall))
+    dyn = only(methods(pkg.dyn))
+    splat = only(methods(pkg.splat))
+    every_dest = Set(methods(pkg.dest))
+    @test graph.edges[anycall] == every_dest
+    @test graph.edges[dyn] == Set([anycall])
+    @test graph.edges[splat] == every_dest
 end
 
 @testset "a call whose result is unused stays an edge" begin

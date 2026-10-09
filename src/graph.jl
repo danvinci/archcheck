@@ -286,6 +286,27 @@ end
 
 build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, index.refs)
 
+# Names written anywhere but as a callee: stored, passed, returned, exported, or read by an entry script. A function
+# called through a value unknown at its call site was written as one of these.
+function value_names(index::SourceIndex)
+    names = Set{Symbol}()
+    for file in index.files
+        callees = Base.IdSet{JS.SyntaxNode}()
+        for node in walk_nodes(file.tree)
+            kind = JS.kind(node)
+            (kind == K"call" || kind == K"dotcall") || continue
+            callee = callee_node(node)
+            isnothing(callee) || push!(callees, callee)
+        end
+        for node in walk_nodes(file.tree)
+            node in callees && continue
+            name = node_symbol(node)
+            isnothing(name) || push!(names, name)
+        end
+    end
+    union!(names, index.external)
+end
+
 files_of(index::SourceIndex, mod::Symbol) = [file for file in index.files if file.mod === mod]
 
 # The indexed file at a repo-relative path; nothing for a path the index does not hold.

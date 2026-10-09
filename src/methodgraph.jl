@@ -1,24 +1,23 @@
-# The method zoom of the call graph: which method each call lands on, as inference resolves it. The name graph
-# merges every method of a function into one node; this one keeps them apart.
+# The method zoom of the call graph: the methods each call can land on. The name graph merges every method of a
+# function into one node; this one keeps them apart.
 
-"""Calls between methods. An edge is a call inference resolved to one method; a call it left to runtime dispatch
-stays a name under its caller, so a gap in the graph is counted rather than silent."""
+"""Calls between methods. An edge joins a caller to a method a call can land on: the one inference resolved, or, for
+a call left to runtime dispatch, each package method the call's inferred types match."""
 struct MethodGraph
-    edges::Dict{Method,Set{Method}}        # caller -> callees inference resolved to one method
-    unresolved::Dict{Method,Set{Symbol}}   # caller -> names of calls left to runtime dispatch
+    edges::Dict{Method,Set{Method}}   # caller -> methods its calls can land on; every walked method is a key
 end
 
 # A keyword body is the generated `#name#N` function. Its edges belong to the method the source wrote.
 const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
 
-"""The calls between methods reached from `entries`, each a `Core.MethodInstance` or a `(function, argument tuple
-type)` pair, read from that instance's inference edges; only methods `modules` define expand."""
-function method_graph(entries, modules)
+"""The calls between methods reached from `entries`, each a `Core.MethodInstance` or a `(function, argument types)`
+pair; only methods `modules` define expand, and `values` names the functions a callee unknown at its site can hold."""
+function method_graph(entries, modules, values)
     module_set = Set{Module}(modules)
     edges = Dict{Method,Set{Method}}()
-    unresolved = Dict{Method,Set{Symbol}}()
     pending = Core.MethodInstance[]
     seen = Set{Core.MethodInstance}()
+    walked = Set{Method}()
     for entry in entries
         instance = entry_instance(entry)
         push!(pending, instance)
@@ -26,12 +25,16 @@ function method_graph(entries, modules)
     # A resolved call is an edge on the inference frame, including one the optimized code drops.
     interp = Core.Compiler.NativeInterpreter()
     while !isempty(pending)
-        instance = pop!(pending)
+        reached = pop!(pending)
+        # A method reached again at another specialization is walked once at its declared signature, which covers
+        # every narrower one; inference can otherwise nest argument types without bound.
+        instance = reached.def in walked ? declared_instance(reached.def) : reached
         instance in seen && continue
         push!(seen, instance)
-        expand_instance!(edges, unresolved, pending, instance, module_set, interp)
+        push!(walked, instance.def)
+        expand_instance!(edges, pending, instance, module_set, values, interp)
     end
-    MethodGraph(edges, unresolved)
+    MethodGraph(edges)
 end
 
 function entry_instance(@nospecialize(entry))
@@ -46,7 +49,7 @@ function entry_instance(@nospecialize(entry))
     instance
 end
 
-function expand_instance!(edges, unresolved, pending, instance, module_set, interp)
+function expand_instance!(edges, pending, instance, module_set, values, interp)
     frame = inference_frame(instance, interp)
     if is_kwcall_method(instance.def)
         body = keyword_body_from(frame)
@@ -54,10 +57,11 @@ function expand_instance!(edges, unresolved, pending, instance, module_set, inte
         return
     end
     caller = written_method(instance.def)
+    get!(edges, caller, Set{Method}())
     record_resolved!(edges, pending, frame, caller, module_set)
     code = inferred_code(instance, interp)
     isnothing(code) && return
-    scan_unresolved!(unresolved, code, caller, module_set, frame)
+    record_dispatched!(edges, pending, code, instance, caller, module_set, values)
 end
 
 function inference_frame(instance::Core.MethodInstance, interp)
@@ -92,29 +96,58 @@ function record_resolved!(edges, pending, frame, caller, module_set)
     end
 end
 
-function resolved_names(frame)
-    names = Set{Symbol}()
-    for edge in frame.edges
-        target = called_instance(edge)
-        isnothing(target) && continue
-        push!(names, target.def.name)
-    end
-    names
-end
-
-function scan_unresolved!(unresolved, code, caller, module_set, frame)
-    resolved = resolved_names(frame)
-    slot_names = code.slotnames
+# A call left to runtime dispatch can land on each package method its inferred types match. Each is an edge, walked
+# once at its declared signature, so a method reached only through such a call keeps its own calls in the graph.
+function record_dispatched!(edges, pending, code, instance, caller, module_set, values)
+    sptypes = Core.Compiler.sptypes_from_meth_instance(instance)
     for stmt in code.code
         stmt isa Expr || continue
         stmt.head === :call || continue
-        name = callee_name(stmt.args[1], slot_names)
-        if !isnothing(name) && name in resolved
-            continue
+        call = dispatch_signature(code, sptypes, stmt.args)
+        isnothing(call) && continue
+        for match in package_matches(call, module_set, values)
+            callee = written_method(match.method)
+            add_edge!(edges, caller, callee)
+            target = declared_instance(match.method)
+            enqueue_target!(pending, target, module_set)
         end
-        record_call!(unresolved, stmt, caller, module_set, slot_names)
     end
 end
+
+# The callee and argument types inference holds at a call; nothing for a builtin, or for a call it proved unreachable.
+function dispatch_signature(code, sptypes, args)
+    types = Any[]
+    for arg in args
+        inferred = Core.Compiler.argextype(arg, code, sptypes)
+        widened = Core.Compiler.widenconst(inferred)
+        widened === Union{} && return nothing
+        push!(types, widened)
+    end
+    callee = first(types)
+    # A splatted call left to runtime dispatch runs through `_apply_iterate`, which passes the function third.
+    callee === typeof(Core._apply_iterate) && return Tuple{types[3], Vararg{Any}}
+    callee <: Core.Builtin && return nothing
+    Tuple{types...}
+end
+
+# The methods dispatch could pick for `call`, kept to those the package defines. A callee unknown at the site holds
+# a function the package writes as a value, or an anonymous one.
+function package_matches(call, module_set, values)
+    world = Base.get_world_counter()
+    matches = Base._methods_by_ftype(call, -1, world)::Vector
+    callee = fieldtype(call, 1)
+    is_known = isconcretetype(callee) || Base.isType(callee)
+    kept = Core.MethodMatch[]
+    for match in matches
+        written = written_method(match.method)
+        written.module in module_set || continue
+        is_known || can_be_value(written, values) || continue
+        push!(kept, match)
+    end
+    kept
+end
+
+can_be_value(method::Method, values) = startswith(string(method.name), "#") || method.name in values
 
 function inferred_code(instance::Core.MethodInstance, interp)
     asts = Base.code_typed_by_type(instance.specTypes; interp)
@@ -171,7 +204,6 @@ end
 function connect_declared!(edges, pending, caller, owned, module_set)
     for method in owned
         instance = declared_instance(method)
-        isnothing(instance) && continue
         instances = Core.MethodInstance[instance]
         connect_method!(edges, pending, caller, method, instances, module_set)
     end
@@ -206,10 +238,16 @@ function connect_method!(edges, pending, caller, method, instances, module_set)
     end
 end
 
+# A method at its declared signature, type variables left free: the widest specialization, so its calls cover every
+# narrower one's.
 function declared_instance(method::Method)
+    variables = Any[]
     signature = method.sig
-    signature isa DataType || return nothing
-    Core.Compiler.specialize_method(method, signature, Core.svec())
+    while signature isa UnionAll
+        push!(variables, signature.var)
+        signature = signature.body
+    end
+    Core.Compiler.specialize_method(method, method.sig, Core.svec(variables...))
 end
 
 function enqueue_target!(pending, target, module_set)
@@ -222,62 +260,6 @@ function enqueue_target!(pending, target, module_set)
     end
     method.module in module_set || return
     push!(pending, target)
-end
-
-function record_call!(unresolved, stmt, caller, module_set, slot_names)
-    callee = stmt.args[1]
-    is_builtin_callee(callee) && return
-    name = callee_name(callee, slot_names)
-    isnothing(name) && return
-    owned = is_owned_callee(callee, module_set)
-    dynamic = is_dynamic_callee(callee)
-    owned || dynamic || return
-    names = get!(unresolved, caller, Set{Symbol}())
-    push!(names, name)
-end
-
-function constant_function(callee::GlobalRef)
-    isdefined(callee.mod, callee.name) || return nothing
-    value = getfield(callee.mod, callee.name)
-    value isa Function || return nothing
-    value
-end
-
-constant_function(callee::Function) = callee
-constant_function(@nospecialize(::Any)) = nothing
-
-is_builtin_value(::Core.Builtin) = true
-is_builtin_value(::Core.IntrinsicFunction) = true
-is_builtin_value(@nospecialize(::Any)) = false
-
-function is_builtin_callee(@nospecialize(callee))
-    value = constant_function(callee)
-    isnothing(value) && return false
-    is_builtin_value(value)
-end
-
-function is_owned_callee(@nospecialize(callee), module_set)
-    callee isa GlobalRef && return callee.mod in module_set
-    value = constant_function(callee)
-    isnothing(value) && return false
-    parentmodule(value) in module_set
-end
-
-is_dynamic_callee(::Core.Argument) = true
-is_dynamic_callee(::Core.SlotNumber) = true
-is_dynamic_callee(::Core.SSAValue) = true
-is_dynamic_callee(::Expr) = true
-is_dynamic_callee(@nospecialize(::Any)) = false
-
-callee_name(callee::GlobalRef, slot_names) = callee.name
-callee_name(callee::Function, slot_names) = nameof(callee)
-callee_name(callee::Core.Argument, slot_names) = slot_symbol(slot_names, callee.n)
-callee_name(callee::Core.SlotNumber, slot_names) = slot_symbol(slot_names, callee.id)
-callee_name(@nospecialize(::Any), slot_names) = nothing
-
-function slot_symbol(slot_names, index)
-    index in eachindex(slot_names) || return nothing
-    slot_names[index]
 end
 
 is_kwcall_method(method::Method) = is_kwcall_signature(method.sig)
