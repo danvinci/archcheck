@@ -33,9 +33,7 @@ end
 function entry_location(entry::OptEntry, repo)
     m = which(entry.f, entry.argtypes)
     mod = module_key(m.module)
-    method_file = string(m.file)
-    file = relpath(method_file, repo)
-    line = Int(m.line)
+    file, line = method_site(m, repo)
     (mod = mod, file = file, line = line)
 end
 

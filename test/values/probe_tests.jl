@@ -395,3 +395,11 @@ end
     record = only(seen.observed.records)
     @test record.name === :keep
 end
+
+@testset "a stdlib method, recorded at the build machine's path, is probed from its local source" begin
+    probes = Probes(; functions = (Random.randperm,), slow_s = 0.0)
+    workload = () -> Random.randperm(Xoshiro(1), 4)
+    seen = observed_gate(Random; workload, probes)
+    names = [record.name for record in seen.observed.records]
+    @test :randperm in names
+end

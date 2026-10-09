@@ -120,8 +120,13 @@ function split_signature(@nospecialize(sig))
     (params[slot], params[slot + 1:end])
 end
 
-# A method's definition site, repo-relative like an indexed site.
-method_site(method::Method, repo) = (relpath(string(method.file), repo), Int(method.line))
+# A method's definition site, repo-relative like an indexed site. A system image records a stdlib's files at the
+# build machine's path; the fixup maps them to this installation.
+function method_site(method::Method, repo)
+    recorded = string(method.file)
+    local_path = Base.fixup_stdlib_path(recorded)
+    (relpath(local_path, repo), Int(method.line))
+end
 
 # A scan site names a method by its own name, or by a qualified name ending in it (`Base.show`).
 function site_names_method(site::MethodSite, method::Method)
