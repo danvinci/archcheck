@@ -99,6 +99,10 @@ const BOXED_VALUE = load_package("BoxedValue", """
     twice(box::Boxed) = 2 * box.value
     """)
 
+const SLOT_HOLDER = load_package("SlotHolder", """
+    keep(slots) = slots
+    """)
+
 @testset "equal values share an argument hash and a result hash, and the record names the method" begin
     method = only(methods(Probed.same))
     site = (joinpath("src", "Probed.jl"), method.line)
@@ -377,4 +381,17 @@ end
     records = seen.observed.records
     @test length(records) == 2
     @test records[1].arguments == records[2].arguments
+end
+
+@testset "an argument holding an unassigned slot is recorded" begin
+    pkg = SLOT_HOLDER.pkg
+    probes = Probes(; functions = (pkg.keep,), slow_s = 0.0)
+    holding_call = function ()
+        slots = Memory{Any}(undef, 2)
+        slots[2] = 1
+        pkg.keep(slots)
+    end
+    seen = observed_gate(pkg; checks = (Rebuilds(),), workload = holding_call, probes)
+    record = only(seen.observed.records)
+    @test record.name === :keep
 end
