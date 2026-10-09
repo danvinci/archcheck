@@ -21,8 +21,7 @@ function module_body(block)
     parts[2]
 end
 
-# The module blocks among a code root's own statements, docstring included. A block under a branch or a macro
-# loads only on a condition, so the index leaves it unplaced.
+# The module blocks among a code root's own statements, docstring included: an entry file's module is its one.
 function module_blocks(root)
     blocks = JS.SyntaxNode[]
     statements = child_nodes(root)
@@ -205,9 +204,9 @@ end
 
 # A prefix call's own arguments, keyword block excluded.
 function call_args(node)
+    found = JS.SyntaxNode[]
     children = child_nodes(node)
-    isnothing(children) && return Any[]
-    found = Any[]
+    isnothing(children) && return found
     for child in children[2:end]
         JS.kind(child) == K"parameters" && continue
         push!(found, child)

@@ -26,8 +26,8 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     pkg_name = string(nameof(pkg))
     spine = joinpath(src, pkg_name * ".jl")
     root = nameof(pkg)
-    rank, dir2mod = package_layout(spine, root)
-    index = build_source_index(src, rank, dir2mod; entry_dirs, root)
+    dir2mod = package_layout(spine, root)
+    index = build_source_index(src, dir2mod; entry_dirs, root)
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
     mods = Module[]
     for key in ordered
