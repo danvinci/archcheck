@@ -1,5 +1,14 @@
-# One exported tree: construct the named checks, run the gate, record what happened.
+# Construct the checks, probes, entries and derived values, then run the gate and record the status.
 using TOML
+
+function named_check(name)
+    binding = Symbol(name)
+    isdefined(ArchCheck, binding) || return nothing
+    value = getfield(ArchCheck, binding)
+    value isa Type || return nothing
+    value <: ArchCheck.Check || return nothing
+    value
+end
 
 # A config argument is a name, or a list of names that the check takes as one tuple.
 check_argument(value::AbstractString) = Symbol(value)
@@ -26,11 +35,8 @@ function keyword_pairs(keywords)
 end
 
 function construct_check(name, args, keywords)
-    binding = Symbol(name)
-    isdefined(ArchCheck, binding) || return nothing
-    check_type = getfield(ArchCheck, binding)
-    check_type isa Type || return nothing
-    check_type <: ArchCheck.Check || return nothing
+    check_type = named_check(name)
+    isnothing(check_type) && return nothing
     positional = Any[]
     for arg in args
         push!(positional, check_argument(arg))
@@ -51,6 +57,28 @@ function try_construct(entry)
         shown = sprint(showerror, err)
         (status = :failed, name = name, value = shown)
     end
+end
+
+function partition_checks(spec)
+    missing = String[]
+    built = String[]
+    failed = Dict{String,String}()
+    instances = Any[]
+    for entry in spec["checks"]
+        outcome = try_construct(entry)
+        status = outcome.status
+        name = outcome.name
+        value = outcome.value
+        if status === :missing
+            push!(missing, name)
+        elseif status === :failed
+            failed[name] = value
+        else
+            push!(built, name)
+            push!(instances, value)
+        end
+    end
+    (missing = missing, built = built, failed = failed, instances = instances)
 end
 
 function collect_modules!(found, mod)
@@ -183,11 +211,20 @@ function build_derived(pkg, listed)
     Tuple(built)
 end
 
-function run_gate(pkg, instances, report, log, workload, probes, entries, derived)
+function drive_loaded(spec, pkg, instances)
+    workload = nothing
+    probes = nothing
+    if needs_workload(instances)
+        workload = workload_from(spec["workload_file"], spec["workload_call"])
+        isnothing(workload) && throw(ArgumentError("workload checks have no workload"))
+        probes = build_probes(pkg, spec["probes"])
+    end
+    entries = method_entries(pkg, spec["entries"])
+    derived = build_derived(pkg, spec["derived"])
     checks = (instances...,)
-    open(log, "w") do io
-        ArchCheck.gate(pkg; checks = checks, report_path = report, io = io, workload = workload,
-                       probes = probes, entries = entries, derived = derived)
+    open(spec["log"], "w") do io
+        ArchCheck.gate(pkg; checks = checks, report_path = spec["report"], io = io,
+                       workload = workload, probes = probes, entries = entries, derived = derived)
     end
 end
 
@@ -203,48 +240,18 @@ function write_status(path, missing, built, failed, red, message)
     end
 end
 
-function drive_loaded(spec, pkg)
-    missing = String[]
-    built = String[]
-    failed = Dict{String,String}()
-    instances = Any[]
-    for entry in spec["checks"]
-        outcome = try_construct(entry)
-        status = outcome.status
-        name = outcome.name
-        value = outcome.value
-        if status === :missing
-            push!(missing, name)
-        elseif status === :failed
-            failed[name] = value
-        else
-            push!(built, name)
-            push!(instances, value)
-        end
-    end
+function record_drive(spec, pkg)
+    parts = partition_checks(spec)
     red = false
     message = ""
     try
-        if !isempty(instances)
+        if !isempty(parts.instances)
             rm(spec["report"]; force = true)
-            workload = nothing
-            probes = nothing
-            if needs_workload(instances)
-                workload = workload_from(spec["workload_file"], spec["workload_call"])
-                isnothing(workload) && throw(ArgumentError("workload checks have no workload"))
-                probes = build_probes(pkg, spec["probes"])
-            end
-            entries = method_entries(pkg, spec["entries"])
-            derived = build_derived(pkg, spec["derived"])
-            run_gate(pkg, instances, spec["report"], spec["log"], workload, probes, entries, derived)
+            drive_loaded(spec, pkg, parts.instances)
         end
     catch err
         message = sprint(showerror, err)
         red = startswith(message, "architecture gate RED")
     end
-    write_status(spec["status"], missing, built, failed, red, message)
-end
-
-function read_host_spec(path)
-    TOML.parsefile(path)
+    write_status(spec["status"], parts.missing, parts.built, parts.failed, red, message)
 end
