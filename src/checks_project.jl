@@ -144,13 +144,6 @@ function defined_name(node)
     callable_receiver(children[1])
 end
 
-function method_body(node)
-    children = child_nodes(node)
-    isnothing(children) && return nothing
-    length(children) < 2 && return nothing
-    children[2]
-end
-
 function is_dict_head(node)
     node.val === :Dict && return true
     JS.kind(node) == K"." || return false
