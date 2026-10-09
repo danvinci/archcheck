@@ -19,8 +19,13 @@ const SKIPPED_S = 0.0          # a state whose checks are all unbuilt (s)
 
 struct CheckSpec
     name::String                       # check type name
-    min_nodes::Union{Nothing,Int}      # clone-check node floor; nothing when the check has none
-    args::Vector{String}               # positional symbol arguments
+    args::Vector{Any}                  # positional arguments: a name, or a list of names taken as one tuple
+    keywords::Dict{String,Any}         # keyword arguments as the config writes them
+end
+
+struct EntrySpec
+    function_path::String              # dotted path below the package to the entry function
+    types::String                      # argument tuple type, read in that function's module
 end
 
 struct ProbeSpec
@@ -63,6 +68,8 @@ struct Host
     checks::Dict{String,CheckSpec}     # how to construct each check
     expectations::Vector{Expectation}  # rows to score
     probes::ProbeSpec                  # probe names for a workload run
+    entries::Vector{EntrySpec}         # method-graph entries the gate expands
+    derived::Vector{Dict{String,Any}}  # derived-value tables, passed to the driver as written
 end
 
 struct Found
@@ -110,18 +117,21 @@ end
 function parse_checks(table)
     specs = Dict{String,CheckSpec}()
     for (name, body) in table
-        min_nodes = nothing
-        if haskey(body, "min_nodes")
-            min_nodes = Int(body["min_nodes"])
-        end
-        args = String[]
-        if haskey(body, "args")
-            listed = string_list(body["args"])
-            append!(args, listed)
-        end
-        specs[name] = CheckSpec(name, min_nodes, args)
+        args = Vector{Any}(get(body, "args", Any[]))
+        keywords = Dict{String,Any}(get(body, "keywords", Dict{String,Any}()))
+        specs[name] = CheckSpec(name, args, keywords)
     end
     specs
+end
+
+function parse_entries(rows)
+    entries = EntrySpec[]
+    for row in rows
+        path = string(row["function"])
+        types = string(row["types"])
+        push!(entries, EntrySpec(path, types))
+    end
+    entries
 end
 
 function parse_probes(table)
@@ -207,7 +217,8 @@ end
 
 function parse_host(path)
     parsed = TOML.parsefile(path)
-    base = dirname(path)
+    absolute = abspath(path)
+    base = dirname(absolute)
     states = parse_states(parsed["states"], base)
     mutants = MutantSpec[]
     if haskey(parsed, "mutants")
@@ -216,9 +227,13 @@ function parse_host(path)
     checks = parse_checks(parsed["checks"])
     expectations = parse_expectations(parsed["expectations"])
     probes = parse_probes(parsed)
+    entry_rows = get(parsed, "entries", Any[])
+    entries = parse_entries(entry_rows)
+    derived_rows = get(parsed, "derived", Any[])
+    derived = Vector{Dict{String,Any}}(derived_rows)
     module_name = string(parsed["module"])
     repo = string(parsed["repo"])
-    host = Host(module_name, repo, states, mutants, checks, expectations, probes)
+    host = Host(module_name, repo, states, mutants, checks, expectations, probes, entries, derived)
     validate_host(host)
 end
 
@@ -378,18 +393,28 @@ function check_payload(spec)
     payload = Dict{String,Any}()
     payload["name"] = spec.name
     payload["args"] = spec.args
-    if !isnothing(spec.min_nodes)
-        payload["min_nodes"] = spec.min_nodes
-    end
+    payload["keywords"] = spec.keywords
     payload
 end
 
-function write_spec(path, module_name, report, log, status, checks, workload_file, workload_call, probes)
+function entry_payloads(entries)
+    payloads = Dict{String,Any}[]
+    for entry in entries
+        payload = Dict{String,Any}("function" => entry.function_path, "types" => entry.types)
+        push!(payloads, payload)
+    end
+    payloads
+end
+
+function write_spec(path, host, report, log, status, checks, workload_file, workload_call)
+    probes = host.probes
     probe_payload = Dict("functions" => probes.functions, "ambient" => probes.ambient,
                          "slow_s" => probes.slow_s)
-    payload = Dict("module" => module_name, "report" => report, "log" => log, "status" => status,
+    entries = entry_payloads(host.entries)
+    payload = Dict("module" => host.module_name, "report" => report, "log" => log, "status" => status,
                    "checks" => checks, "workload_file" => workload_file,
-                   "workload_call" => workload_call, "probes" => probe_payload)
+                   "workload_call" => workload_call, "probes" => probe_payload, "entries" => entries,
+                   "derived" => host.derived)
     open(path, "w") do io
         TOML.print(io, payload)
     end
@@ -480,8 +505,7 @@ function score_state(host, name, directory)
         push!(payloads, check_payload(host.checks[check_name]))
     end
     workload = workload_pair(host, name)
-    write_spec(spec_path, host.module_name, report, log, status_path, payloads, workload.file,
-               workload.call, host.probes)
+    write_spec(spec_path, host, report, log, status_path, payloads, workload.file, workload.call)
     rm(status_path; force = true)
     outcome = run_process(env, spec_path)
     status = empty_status("drive wrote no status")

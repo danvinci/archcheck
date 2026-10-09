@@ -30,13 +30,14 @@ call = "corpus_build"
 [checks.OverlappingCalls]
 
 [checks.KeptBuilders]
-args = ["OpenCascade.Shape", "src/geometry/opencascade"]
+args = ["OpenCascade.Shape"]
+keywords = { exempt_dirs = ["src/geometry/opencascade"] }
 
 [checks.ExpressionClones]
-min_nodes = 20
+keywords = { min_nodes = 20 }
 
 [checks.ToleranceSearch]
-args = ["GEOM_EPS", "RESOLUTION_M", "LOFT_GEO_M"]
+args = [["GEOM_EPS", "RESOLUTION_M", "LOFT_GEO_M"]]
 
 [checks.UnreachedMethods]
 
@@ -51,8 +52,37 @@ functions = ["offset", "duct_flow_section", "Shape", "_filled", "emit_artifacts"
 ambient = ["_session"]
 slow_s = 0.005
 
+# The two methods of the region classifier: the chain form forwards to the span form.
+[[entries]]
+function = "Geometry.Shapes.classify"
+types = "Tuple{Contour, Point2D}"
+
+[[entries]]
+function = "Geometry.Shapes.classify"
+types = "Tuple{Vector{Vector{SVector{3,Float64}}}, Point2D}"
+
+# The solid rebuilt per call on stack; the builders commit keeps it on its owner.
 [[expectations]]
 case = "1"
+check = "Rebuilds"
+state = "stack"
+expect = "fire"
+kind = "rebuild"
+file = "lofts/brep.jl"
+symbol = "Shape"
+
+[[expectations]]
+case = "1"
+check = "Rebuilds"
+state = "builders"
+expect = "quiet"
+kind = "rebuild"
+file = "lofts/brep.jl"
+symbol = "Shape"
+
+# The contour offset repeats its arguments in both states; the builders commit left it.
+[[expectations]]
+case = "offset"
 check = "Rebuilds"
 state = "stack"
 expect = "fire"
@@ -61,31 +91,13 @@ file = "shapes/contour.jl"
 symbol = "offset"
 
 [[expectations]]
-case = "1"
+case = "offset"
 check = "Rebuilds"
 state = "builders"
-expect = "quiet"
+expect = "fire"
 kind = "rebuild"
 file = "shapes/contour.jl"
 symbol = "offset"
-
-[[expectations]]
-case = "1"
-check = "Rebuilds"
-state = "stack"
-expect = "fire"
-kind = "rebuild"
-file = "airframe/queries.jl"
-symbol = "duct_flow_section"
-
-[[expectations]]
-case = "1"
-check = "Rebuilds"
-state = "builders"
-expect = "quiet"
-kind = "rebuild"
-file = "airframe/queries.jl"
-symbol = "duct_flow_section"
 
 [[expectations]]
 case = "1"

@@ -1,37 +1,50 @@
 # One exported tree: construct the named checks, run the gate, record what happened.
 using TOML
 
-function entry_min_nodes(entry)
-    haskey(entry, "min_nodes") || return nothing
-    Int(entry["min_nodes"])
+# A config argument is a name, or a list of names that the check takes as one tuple.
+check_argument(value::AbstractString) = Symbol(value)
+
+function check_argument(values::AbstractVector)
+    names = Symbol[]
+    for value in values
+        push!(names, Symbol(value))
+    end
+    Tuple(names)
 end
 
-function construct_check(name, min_nodes, args)
+# A config keyword is a number or a string as written; a list becomes a tuple.
+keyword_value(value::AbstractVector) = Tuple(value)
+keyword_value(value) = value
+
+function keyword_pairs(keywords)
+    pairs = Pair{Symbol,Any}[]
+    for (key, value) in keywords
+        converted = keyword_value(value)
+        push!(pairs, Symbol(key) => converted)
+    end
+    pairs
+end
+
+function construct_check(name, args, keywords)
     binding = Symbol(name)
     isdefined(ArchCheck, binding) || return nothing
     check_type = getfield(ArchCheck, binding)
     check_type isa Type || return nothing
     check_type <: ArchCheck.Check || return nothing
-    symbols = Symbol[]
+    positional = Any[]
     for arg in args
-        push!(symbols, Symbol(arg))
+        push!(positional, check_argument(arg))
     end
-    if !isnothing(min_nodes)
-        return check_type(; min_nodes = min_nodes)
-    end
-    if isempty(symbols)
-        return check_type()
-    end
-    packed = (symbols...,)
-    check_type(packed)
+    named = keyword_pairs(keywords)
+    check_type(positional...; named...)
 end
 
 function try_construct(entry)
     name = entry["name"]
-    min_nodes = entry_min_nodes(entry)
     args = entry["args"]
+    keywords = entry["keywords"]
     try
-        instance = construct_check(name, min_nodes, args)
+        instance = construct_check(name, args, keywords)
         isnothing(instance) && return (status = :missing, name = name, value = nothing)
         (status = :built, name = name, value = instance)
     catch err
@@ -53,13 +66,18 @@ function collect_modules!(found, mod)
     found
 end
 
+# A probe name is a function, or a type whose constructors are probed.
+is_probe_target(value::Function) = true
+is_probe_target(value::Type) = true
+is_probe_target(value) = false
+
 function functions_named(modules, name)
     target = Symbol(name)
     found = Any[]
     for mod in modules
         isdefined(mod, target) || continue
         value = getfield(mod, target)
-        value isa Function || continue
+        is_probe_target(value) || continue
         push!(found, value)
     end
     unique!(found)
@@ -87,11 +105,33 @@ function build_probes(pkg, entry)
     ArchCheck.Probes(; functions = function_tuple, ambient = ambient_tuple, slow_s = slow_s)
 end
 
+# The included file defines the call in a later world than this function's.
 function workload_from(file, call)
     isempty(file) && return nothing
     Base.include(Main, file)
     binding = Symbol(call)
-    getfield(Main, binding)
+    Base.invokelatest(getfield, Main, binding)
+end
+
+# `function` is a dotted path below the package; `types` is a tuple type read in that function's module.
+function method_entry(pkg, entry)
+    path = split(entry["function"], ".")
+    owner = pkg
+    for part in path[1:end-1]
+        owner = getfield(owner, Symbol(part))
+    end
+    func = getfield(owner, Symbol(last(path)))
+    parsed = Meta.parse(entry["types"])
+    types = Core.eval(owner, parsed)
+    (func, types)
+end
+
+function method_entries(pkg, listed)
+    entries = Tuple[]
+    for entry in listed
+        push!(entries, method_entry(pkg, entry))
+    end
+    entries
 end
 
 function needs_workload(instances)
@@ -101,11 +141,11 @@ function needs_workload(instances)
     false
 end
 
-function run_gate(pkg, instances, report, log, workload, probes)
+function run_gate(pkg, instances, report, log, workload, probes, entries)
     checks = (instances...,)
     open(log, "w") do io
         ArchCheck.gate(pkg; checks = checks, report_path = report, io = io, workload = workload,
-                       probes = probes)
+                       probes = probes, entries = entries)
     end
 end
 
@@ -152,7 +192,8 @@ function drive_loaded(spec, pkg)
                 isnothing(workload) && throw(ArgumentError("workload checks have no workload"))
                 probes = build_probes(pkg, spec["probes"])
             end
-            run_gate(pkg, instances, spec["report"], spec["log"], workload, probes)
+            entries = method_entries(pkg, spec["entries"])
+            run_gate(pkg, instances, spec["report"], spec["log"], workload, probes, entries)
         end
     catch err
         message = sprint(showerror, err)
