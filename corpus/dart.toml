@@ -85,7 +85,7 @@ key = "swept_solid_key"
 [probes]
 functions = ["offset", "duct_flow_section", "Shape", "_filled", "emit_artifacts", "write_renders", "_emit_component"]
 ambient = ["_session"]
-slow_s = 0.005
+slow_s = 0.0
 
 # The two methods of the region classifier: the chain form forwards to the span form.
 [[entries]]
