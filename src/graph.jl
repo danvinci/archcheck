@@ -6,16 +6,17 @@ struct ModuleGraph
     refs::Vector{ModRef}            # every cross-module reference in src/
 end
 
-# One source file. (modrank, filerank) is the layer coordinate the rank checks compare.
+# One module's code in one source file: a whole file, or a module block inside one, which shares its path.
+# (modrank, filerank) is the layer coordinate the rank checks compare.
 struct FileNode
     mod::Symbol       # owning module
     path::String      # repo-relative path
     name::String      # basename
-    modrank::Vector{Int}   # module rank: package-spine position, then its place in each enclosing wrapper
+    modrank::Vector{Int}   # module rank: package-spine position, then its place in each enclosing module
     filerank::Int     # file position in the wrapper's depth-first include order; 0 when nothing includes it
-    iswrapper::Bool   # this module's entry file, resolved from its directory rather than by name
-    scan::FileScan    # this file's defs and the names each references
-    tree::JS.SyntaxNode   # the file's one parse, kept so no check reads the file again
+    iswrapper::Bool   # this module's entry: its directory's entry file, or its module block
+    scan::FileScan    # this code's defs and the names each references
+    tree::JS.SyntaxNode   # this code from the file's one parse, kept so no check reads the file again
 end
 
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
@@ -38,10 +39,9 @@ is_wrapper(file::FileNode) = file.iswrapper
 struct IndexBuild
     repo::String                                              # root every path below is relative to
     src_root::String                                          # absolute src/ being indexed
-    root::Union{Symbol,Nothing}                               # package name; nothing when the caller omits it
-    ranks::Dict{Symbol,Vector{Int}}                           # module -> spine position, then wrapper positions
+    root::Symbol                                              # package name, the root module's key
+    ranks::Dict{Symbol,Vector{Int}}                           # module -> spine position, then enclosing positions
     dir2mod::Dict{String,Symbol}                              # src subdir -> module, nested by dotted key
-    modules::ModuleNames                                      # project modules a path may resolve to
     franks::Dict{Symbol,Dict{String,Int}}                     # module -> file path in the module -> include position
     wrappers::Dict{Symbol,String}                             # module -> its entry file
     moddirs::Dict{Symbol,String}                              # module -> directory its file ranks are keyed against
@@ -86,17 +86,30 @@ function nested_dirs(build::IndexBuild, mod, moddir)
     inner
 end
 
-# File ranks and entry files for every directory the layout maps.
+function rank_module!(build::IndexBuild, mod, moddir, entry)
+    build.moddirs[mod] = moddir
+    if isnothing(entry)
+        build.franks[mod] = Dict{String,Int}()
+        return
+    end
+    inner = nested_dirs(build, mod, moddir)
+    build.franks[mod] = file_rank(entry, moddir; nested = inner)
+    build.wrappers[mod] = entry
+end
+
+# File ranks and entry files for every module. The root's directory is src/ and its entry the spine, so it owns
+# each file the spine includes outside a module directory.
 function rank_modules!(build::IndexBuild)
     for (dir, mod) in build.dir2mod
+        mod === build.root && continue
         moddir = joinpath(build.src_root, dir)
-        build.moddirs[mod] = moddir
-        inner = nested_dirs(build, mod, moddir)
-        build.franks[mod] = file_rank(moddir; nested = inner)
         entry = wrapper_of(moddir)
-        isnothing(entry) && continue
-        build.wrappers[mod] = entry
+        rank_module!(build, mod, moddir, entry)
     end
+    spine_name = string(build.root) * ".jl"
+    spine = joinpath(build.src_root, spine_name)
+    entry = isfile(spine) ? spine : nothing
+    rank_module!(build, build.root, build.src_root, entry)
     build
 end
 
@@ -104,15 +117,12 @@ function start_index(src_root::AbstractString, rank, dir2mod, root)
     rooted = abspath(src_root)
     repo = dirname(rooted)
     ranks, dirs = nest_modules(rooted, rank, dir2mod)
-    known = Set(keys(ranks))
-    modules = ModuleNames(known, root)
     build = IndexBuild(
         repo,
         rooted,
         root,
         ranks,
         dirs,
-        modules,
         Dict{Symbol,Dict{String,Int}}(),
         Dict{Symbol,String}(),
         Dict{Symbol,String}(),
@@ -144,6 +154,37 @@ function note_includes!(build::IndexBuild, owner::Symbol, path, rel, tree)
     end
 end
 
+function file_node(owner, rel, modrank, filerank, iswrapper, code)
+    name = basename(rel)
+    scan = scan_tree(code)
+    FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code)
+end
+
+# An inline module is keyed by its dotted path below the package, as a directory module is.
+function inline_key(build::IndexBuild, owner::Symbol, name::Symbol)
+    owner === build.root && return name
+    Symbol(owner, ".", name)
+end
+
+# A node joins the index with the module blocks its code holds. Only loaded code holds them: a module's entry or a
+# file its module includes. A block ranks inside its module at its file's include position.
+function add_node!(build::IndexBuild, node::FileNode, full)
+    push!(build.nodes, node)
+    note_includes!(build, node.mod, full, node.path, node.tree)
+    is_loaded = node.iswrapper || node.filerank > 0
+    is_loaded || return
+    for block in module_blocks(node.tree)
+        name = module_name(block)
+        isnothing(name) && continue
+        key = inline_key(build, node.mod, name)
+        rank = [node.modrank; node.filerank]
+        build.ranks[key] = rank
+        body = module_body(block)
+        inline = file_node(key, node.path, rank, 0, true, body)
+        add_node!(build, inline, full)
+    end
+end
+
 function index_file!(build::IndexBuild, owner::Symbol, path::AbstractString)
     full = normpath(path)
     key = (owner, full)
@@ -157,20 +198,26 @@ function index_file!(build::IndexBuild, owner::Symbol, path::AbstractString)
         push!(build.unparsed, (owner, rel))
         return
     end
-    note_includes!(build, owner, full, rel, tree)
-    scope = key_segments(owner)
-    walk_modrefs!(build.refs, owner, scope, rel, build.modules, tree)
     entry = get(build.wrappers, owner, nothing)
     iswrapper = !isnothing(entry) && normpath(entry) == full
+    code = iswrapper ? entry_code(tree) : tree
     moddir = build.moddirs[owner]
     inmod = relpath(full, moddir)
     order = build.franks[owner]
     filerank = get(order, inmod, 0)
     modrank = module_rank_of(owner, build.ranks, build.root)
-    name = basename(full)
-    scan = scan_tree(tree)
-    node = FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, tree)
-    push!(build.nodes, node)
+    node = file_node(owner, rel, modrank, filerank, iswrapper, code)
+    add_node!(build, node, full)
+end
+
+# Module references resolve once every module is known, the inline ones included.
+function add_refs!(build::IndexBuild)
+    known = Set(keys(build.ranks))
+    modules = ModuleNames(known, build.root)
+    for node in build.nodes
+        scope = key_segments(node.mod)
+        walk_modrefs!(build.refs, node.mod, scope, node.path, modules, node.tree)
+    end
 end
 
 # Ranked includes are module-owned even when they sit outside the mapped directory or git tree.
@@ -190,20 +237,15 @@ function add_ranked_files!(build::IndexBuild)
     end
 end
 
-# The spine sits above every module directory, so the directory walk has no owner for it.
-function add_spine_file!(build::IndexBuild)
-    isnothing(build.root) && return
-    root = build.root::Symbol
-    spine_name = string(root) * ".jl"
-    joined = joinpath(build.src_root, spine_name)
-    spine_path = normpath(joined)
-    key = (root, spine_path)
-    isfile(spine_path) || return
-    key in build.indexed && return
-    get!(build.moddirs, root, build.src_root)
-    get!(build.franks, root, Dict{String,Int}())
-    get!(build.wrappers, root, spine_path)
-    index_file!(build, root, spine_path)
+# A file's top level and the body of every module block it holds, at any depth.
+function code_roots(tree)
+    roots = JS.SyntaxNode[tree]
+    for block in module_blocks(tree)
+        body = module_body(block)
+        inner = code_roots(body)
+        append!(roots, inner)
+    end
+    roots
 end
 
 function note_unowned_includes!(build::IndexBuild, path, name)
@@ -213,7 +255,9 @@ function note_unowned_includes!(build::IndexBuild, path, name)
     isnothing(tree) && return
     stem = first(splitext(name))
     owner = Symbol(stem)
-    note_includes!(build, owner, path, rel, tree)
+    for root in code_roots(tree)
+        note_includes!(build, owner, path, rel, root)
+    end
 end
 
 function add_loose_files!(build::IndexBuild)
@@ -246,8 +290,10 @@ function read_entry_dir!(build::IndexBuild, dir)
         tree = parse_file(source, rel)
         if isnothing(tree)
             push!(build.unparsed, (:Entry, rel))
-        else
-            all_symbols!(build.external, tree)
+            continue
+        end
+        for root in code_roots(tree)
+            all_symbols!(build.external, root)
         end
     end
 end
@@ -275,11 +321,11 @@ function source_index(build::IndexBuild)
     )
 end
 
-function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs = String[], root = nothing)
+function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs = String[], root::Symbol)
     build = start_index(src_root, rank, dir2mod, root)
     add_ranked_files!(build)
-    add_spine_file!(build)
     add_loose_files!(build)
+    add_refs!(build)
     read_entry_dirs!(build, entry_dirs)
     source_index(build)
 end
@@ -309,12 +355,28 @@ end
 
 files_of(index::SourceIndex, mod::Symbol) = [file for file in index.files if file.mod === mod]
 
-# The indexed file at a repo-relative path; nothing for a path the index does not hold.
-function indexed_file(index::SourceIndex, path::AbstractString)
+function line_span(node)
+    first_line = source_line(node)
+    source = JS.sourcefile(node)
+    end_byte = JS.last_byte(node)
+    location = JS.source_location(source, end_byte)
+    first_line:Int(location[1])
+end
+
+# The indexed node holding a line of a repo-relative path: the innermost module block around it, else the file.
+# Nothing for a line the index does not hold.
+function indexed_file(index::SourceIndex, path::AbstractString, line::Integer)
+    found = nothing
+    narrowest = typemax(Int)
     for file in index.files
-        file.path == path && return file
+        file.path == path || continue
+        span = line_span(file.tree)
+        line in span || continue
+        length(span) < narrowest || continue
+        found = file
+        narrowest = length(span)
     end
-    nothing
+    found
 end
 
 # Where each def lives. One owner of a finding's location, so every check reports the same form.

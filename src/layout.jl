@@ -46,21 +46,28 @@ function static_string(node)
     join(parts)
 end
 
-# An entry file's include order. The package spine ranks modules; a wrapper ranks its files.
-function include_stmts(entry_path::AbstractString)
-    stmts = Tuple{String,Int}[]
-    source = read(entry_path, String)
-    tree = parse_file(source, entry_path)
-    isnothing(tree) && return stmts
-    for (arg, line) in include_calls(tree)
-        spec = static_string(arg)
-        isnothing(spec) && continue
-        push!(stmts, (spec, line))
-    end
-    stmts
+# A wrapper holds its module as the one module block at its top level; its code is that block's body.
+function entry_code(tree)
+    blocks = module_blocks(tree)
+    length(blocks) == 1 || return tree
+    block = only(blocks)
+    module_body(block)
 end
 
-include_paths(entry_path::AbstractString) = [spec for (spec, _) in include_stmts(entry_path)]
+# The literal include specs a file's code runs, in source order. `code` picks that code out of the file's parse:
+# `entry_code` for a wrapper, `identity` for a file another includes.
+function include_paths(path::AbstractString, code)
+    specs = String[]
+    source = read(path, String)
+    tree = parse_file(source, path)
+    isnothing(tree) && return specs
+    root = code(tree)
+    for (arg, _) in include_calls(root)
+        spec = static_string(arg)
+        isnothing(spec) || push!(specs, spec)
+    end
+    specs
+end
 
 # The package spine's include order is the declared module DAG; it gives both rank and dir->module.
 # The module name comes from the paired `using .Name`. The filename may differ from it.
@@ -154,7 +161,7 @@ function wrapper_of(module_dir::AbstractString)
     length(candidates) == 1 && return only(candidates)
     included = Set{String}()
     for candidate in candidates
-        for path in include_paths(candidate)
+        for path in include_paths(candidate, entry_code)
             target = joinpath(module_dir, path)
             push!(included, normpath(target))
         end
@@ -176,9 +183,9 @@ function skips_nested(target, nested)
 end
 
 # Depth-first. `position` is how many files are already ranked; the return is the count after `file`.
-function rank_includes!(order, module_dir, nested, file, position)
+function rank_includes!(order, module_dir, nested, file, code, position)
     includer_dir = dirname(file)   # an include resolves against its includer, apart from the module root
-    for included in include_paths(file)
+    for included in include_paths(file, code)
         joined = joinpath(includer_dir, included)
         target = normpath(joined)
         if skips_nested(target, nested)   # a nested module ranks its own files
@@ -189,7 +196,7 @@ function rank_includes!(order, module_dir, nested, file, position)
         position += 1
         order[rel] = position
         if isfile(target)
-            position = rank_includes!(order, module_dir, nested, target, position)
+            position = rank_includes!(order, module_dir, nested, target, identity, position)
         end
     end
     position
@@ -197,11 +204,9 @@ end
 
 # A module wrapper's include order is the declared file DAG within that module: path in module -> position.
 # Depth-first, so a nested include takes its position from where its includer reaches it: the load order.
-function file_rank(module_dir::AbstractString; nested = String[])
-    entry = wrapper_of(module_dir)
-    isnothing(entry) && return Dict{String,Int}()
+function file_rank(entry::AbstractString, module_dir::AbstractString; nested = String[])
     order = Dict{String,Int}()
-    rank_includes!(order, module_dir, nested, entry, 0)
+    rank_includes!(order, module_dir, nested, entry, entry_code, 0)
     order
 end
 
@@ -218,8 +223,8 @@ function module_of(path, src_root, dir2mod)
     get(dir2mod, SINGLE_MODULE_DIR, nothing)
 end
 
-# A directory module keeps the rank stored for it. The package spine is the root's file and has no
-# directory of its own; its rank is earlier than every module rank, which starts at 1.
+# A module keeps the rank stored for it. The root of a package with directory modules has none stored; its
+# rank is earlier than every module rank, which starts at 1.
 function module_rank_of(owner, ranks, root)
     haskey(ranks, owner) && return ranks[owner]
     owner === root && return Int[0]

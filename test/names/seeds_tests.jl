@@ -43,6 +43,10 @@ const GRID_SEED_OTHER = """
 const OWN_COUNT = 20
 separate() = [k / OWN_COUNT for k in 0:OWN_COUNT]
 unknown() = [k / GRID_COUNT for k in 0:GRID_COUNT]
+module Inner
+const INNER_COUNT = 5
+inner_grid() = [k / INNER_COUNT for k in 0:INNER_COUNT]
+end
 """
 
 const GRID_SEEDS = load_package("GridSeeds", """
@@ -77,6 +81,8 @@ using .Other
     both_check = ScanSeeds((geometry, other))
     together = ArchCheck.run(both_check, geo_ctx)
     together_symbols = Set(finding.symbol for finding in together)
-    with_separate = union(expected, Set(["separate"]))
-    @test together_symbols == with_separate
+    with_other = union(expected, Set(["separate", "inner_grid"]))
+    @test together_symbols == with_other
+    inner = only(finding for finding in together if finding.symbol == "inner_grid")
+    @test inner.mod === Symbol("Other.Inner")
 end

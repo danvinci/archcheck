@@ -72,12 +72,12 @@ const RECURSIVE_CALL = load_package("RecursiveCall", """
     even(x::Int) = odd(x - 1)
     """)
 
-# The spine ranks no inline module, so the inline module's methods sit outside the modules the graph expands.
+# No file places a module evaluated from an expression, so its methods sit outside the modules the graph expands.
 const OUTSIDE_CALL = load_package("OutsideCall", """
-    module LeafMod
+    Core.eval(@__MODULE__, :(module LeafMod
     hidden(x::Int) = x
     leaf(x::Int) = hidden(x)
-    end
+    end))
     using .LeafMod: leaf
     go(x::Int) = leaf(x)
     """)

@@ -33,8 +33,7 @@ function pull_shape()
     brick
 end
 
-# unranked_module: a submodule the wrapper does not declare with include and using
-module Hidden
-end
+# unranked_module: a submodule evaluated from an expression, which no file places
+Core.eval(@__MODULE__, :(module Hidden end))
 
 end

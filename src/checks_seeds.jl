@@ -194,11 +194,12 @@ function collect_file_seeds!(groups, constants, file)
     walk_with_enclosing(file.tree) do node, owner
         record_seed_node!(owners, module_constants, node, owner)
     end
-    groups[file.path] = owners
+    groups[(file.mod, file.path)] = owners
 end
 
+# Keyed by module and path: a module block shares its file's path.
 function seed_tables(files)
-    groups = Dict{String,Dict{Symbol,Vector{JS.SyntaxNode}}}()
+    groups = Dict{Tuple{Symbol,String},Dict{Symbol,Vector{JS.SyntaxNode}}}()
     constants = Dict{Symbol,Dict{Symbol,Int}}()
     for file in files
         collect_file_seeds!(groups, constants, file)
@@ -265,8 +266,9 @@ end
 
 function seed_findings(file, groups, constants)
     findings = Finding[]
-    haskey(groups, file.path) || return findings
-    owners = groups[file.path]
+    key = (file.mod, file.path)
+    haskey(groups, key) || return findings
+    owners = groups[key]
     module_constants = constants[file.mod]
     for (owner, nodes) in owners
         finding = grid_finding(file, owner, nodes, module_constants)
