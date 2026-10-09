@@ -70,13 +70,14 @@ function hash_content(value, seed::UInt, memo, depth::Int)
     hash(value, seed)
 end
 
+# The elements a container holds; an unassigned array slot holds none.
+held_items(value::AbstractArray) = (value[index] for index in eachindex(value) if isassigned(value, index))
+held_items(value::Tuple) = value
+
 function hash_items(value::AbstractArray, seed::UInt, memo, depth::Int)
     acc = hash(typeof(value), seed)
     deeper = depth + 1
-    for index in eachindex(value)
-        assigned = isassigned(value, index)
-        assigned || continue
-        item = value[index]
+    for item in held_items(value)
         acc = hash_value(item, acc, memo, deeper)
     end
     acc
@@ -129,7 +130,7 @@ function collect_reads!(found, value, depth::Int)
     depth >= READ_DEPTH_MAX && return found
     is_read_container(value) || return found
     length(value) > READ_WIDTH_MAX && return found
-    for item in value
+    for item in held_items(value)
         collect_reads!(found, item, depth + 1)
     end
     found
