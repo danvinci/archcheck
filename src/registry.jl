@@ -157,15 +157,11 @@ function visit_type_branch!(findings, discarded, file, node, owner, params)
     kids = child_nodes(node)
     kids === nothing && return
     k = JS.kind(node)
-    is_statement = node in discarded
-    if k == K"block"
-        union!(discarded, is_statement ? kids : kids[1:end-1])
-    elseif k == K"for" || k == K"while"
-        push!(discarded, last(kids))
-    elseif is_statement && k in (K"if", K"elseif", K"let", K"&&", K"||")
-        union!(discarded, kids[2:end])
-    elseif is_statement && k in (K"try", K"catch", K"finally")
-        union!(discarded, kids)
+    parent_discarded = node in discarded
+    for index in eachindex(kids)
+        if child_discarded(node, index, parent_discarded)
+            push!(discarded, kids[index])
+        end
     end
     is_method = is_method_form(node)
     call = is_method ? signature_call(kids[1]) : nothing
@@ -214,7 +210,7 @@ function visit_type_branch!(findings, discarded, file, node, owner, params)
         return
     end
     is_logical = k == K"&&" || k == K"||"
-    if k == K"if" || k == K"elseif" || k == K"?" || (is_logical && is_statement)
+    if k == K"if" || k == K"elseif" || k == K"?" || (is_logical && parent_discarded)
         test = kids[1]
         branch = kids[2]
         statements = JS.kind(branch) == K"block" ? child_nodes(branch) : [branch]
