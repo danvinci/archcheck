@@ -76,7 +76,7 @@ function is_sentinel_literal(node, sentinels)
     end
     JS.kind(node) == K"call" || return false
     children = child_nodes(node)
-    children === nothing && return false
+    isnothing(children) && return false
     length(children) == 2 || return false
     op = children[1]
     op.val === :- || return false
@@ -95,13 +95,13 @@ function returned_sentinel(node, sentinels)
     kind == K"quote" && return nothing
     if kind == K"return"
         children = child_nodes(node)
-        one_value = children !== nothing && length(children) == 1
+        one_value = !isnothing(children) && length(children) == 1
         if one_value && is_sentinel_literal(children[1], sentinels)
             return sentinel_text(children[1])
         end
     end
     children = child_nodes(node)
-    children === nothing && return nothing
+    isnothing(children) && return nothing
     for child in children
         found = returned_sentinel(child, sentinels)
         isnothing(found) || return found
@@ -112,7 +112,7 @@ end
 function last_body_expr(node)
     JS.kind(node) == K"block" || return node
     children = child_nodes(node)
-    children === nothing && return nothing
+    isnothing(children) && return nothing
     isempty(children) && return nothing
     tail = last(children)
     last_body_expr(tail)
@@ -131,7 +131,7 @@ function method_at_top(node)
     kind = JS.kind(node)
     if kind == K"doc" || kind == K"macrocall"
         children = child_nodes(node)
-        children === nothing && return nothing
+        isnothing(children) && return nothing
         return method_at_top(last(children))
     end
     is_method_form(node) || return nothing
@@ -140,7 +140,7 @@ end
 
 function defined_name(node)
     children = child_nodes(node)
-    children === nothing && return nothing
+    isnothing(children) && return nothing
     isempty(children) && return nothing
     named = sig_name(children[1])
     isnothing(named) || return named
@@ -149,7 +149,7 @@ end
 
 function method_body(node)
     children = child_nodes(node)
-    children === nothing && return nothing
+    isnothing(children) && return nothing
     length(children) < 2 && return nothing
     children[2]
 end
@@ -158,7 +158,7 @@ function is_dict_head(node)
     node.val === :Dict && return true
     JS.kind(node) == K"." || return false
     children = child_nodes(node)
-    children === nothing && return false
+    isnothing(children) && return false
     length(children) == 2 || return false
     children[2].val === :Dict
 end
@@ -166,7 +166,7 @@ end
 function is_string_payload(node)
     JS.kind(node) == K"curly" || return false
     children = child_nodes(node)
-    children === nothing && return false
+    isnothing(children) && return false
     length(children) == 3 || return false
     is_dict_head(children[1]) || return false
     children[2].val === :String || return false
@@ -213,7 +213,7 @@ function run(check::SentinelReturns, ctx)
         for file in ctx.index.files
             is_under(file.path, directory) || continue
             children = child_nodes(file.tree)
-            children === nothing && continue
+            isnothing(children) && continue
             for child in children
                 def = method_at_top(child)
                 isnothing(def) && continue
@@ -245,7 +245,7 @@ function collect_payloads!(found, node)
         push!(found, node)
     end
     children = child_nodes(node)
-    children === nothing && return
+    isnothing(children) && return
     for child in children
         collect_payloads!(found, child)
     end

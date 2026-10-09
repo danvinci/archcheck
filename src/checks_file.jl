@@ -6,7 +6,7 @@ function file_adjacency(cg::CallGraph)
     for ((name, from), callees) in cg.site_refs, g in callees
         g == name && continue
         to = get(cg.files, g, nothing)
-        (to === nothing || to == from) && continue
+        (isnothing(to) || to == from) && continue
         push!(get!(adj, from, Set{String}()), to)
     end
     adj

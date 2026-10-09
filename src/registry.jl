@@ -158,7 +158,7 @@ kinds(::ForeignFields) = (:foreign_field => :advisory,)
 # A throw-only branch validates input; lambda parameters, loop targets and destructured names are not the method's.
 function visit_type_branch!(findings, discarded, file, node, owner, params)
     kids = child_nodes(node)
-    kids === nothing && return
+    isnothing(kids) && return
     k = JS.kind(node)
     parent_discarded = node in discarded
     for index in eachindex(kids)

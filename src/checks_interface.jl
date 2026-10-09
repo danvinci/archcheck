@@ -9,16 +9,16 @@ end
 function is_blanket_names_call(n)
     JS.kind(n) == K"call" || return false
     kids = child_nodes(n)
-    (kids === nothing || isempty(kids)) && return false
+    (isnothing(kids) || isempty(kids)) && return false
     kids[1].val === :names || return false
     for c in kids
         JS.kind(c) == K"parameters" || continue
         params = child_nodes(c)
-        params === nothing && continue
+        isnothing(params) && continue
         for p in params
             JS.kind(p) == K"=" || continue
             pk = child_nodes(p)
-            (pk === nothing || length(pk) < 2) && continue
+            (isnothing(pk) || length(pk) < 2) && continue
             pk[1].val === :all && pk[2].val === true && return true
         end
     end
@@ -28,10 +28,10 @@ end
 function find_blanket_names(n)
     is_blanket_names_call(n) && return n
     kids = child_nodes(n)
-    kids === nothing && return nothing
+    isnothing(kids) && return nothing
     for c in kids
         found = find_blanket_names(c)
-        found === nothing || return found
+        isnothing(found) || return found
     end
     nothing
 end
@@ -90,7 +90,7 @@ function resolve_loaded_module(n, known, aliases, bound)
     end
     JS.kind(n) == K"." || return nothing
     kids = child_nodes(n)
-    (kids === nothing || length(kids) != 2) && return nothing
+    (isnothing(kids) || length(kids) != 2) && return nothing
     parent_mod = resolve_loaded_module(kids[1], known, aliases, bound)
     isnothing(parent_mod) && return nothing
     member = kids[2].val
@@ -103,7 +103,7 @@ end
 function collect_const_alias!(aliases, n, known)
     JS.kind(n) == K"=" || return
     kids = child_nodes(n)
-    (kids === nothing || length(kids) < 2) && return
+    (isnothing(kids) || length(kids) < 2) && return
     lhs = kids[1]
     lhs.val isa Symbol || return
     M = resolve_loaded_module(kids[2], known, aliases, Set{Symbol}())
@@ -116,13 +116,13 @@ function collect_const_aliases!(aliases, n, known)
     k == K"quote" && return
     is_nested_scope(n) && return
     kids = child_nodes(n)
-    if k == K"const" && kids !== nothing
+    if k == K"const" && !isnothing(kids)
         for c in kids
             collect_const_alias!(aliases, c, known)
         end
         return
     end
-    kids === nothing && return
+    isnothing(kids) && return
     for c in kids
         collect_const_aliases!(aliases, c, known)
     end

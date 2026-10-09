@@ -224,10 +224,10 @@ end
         @test length(hits) == case.count
         case.count == 1 || continue
         hit = only(hits)
-        if case.storage !== nothing
+        if !isnothing(case.storage)
             @test ev(hit, :storage) == case.storage
         end
-        if case.methods !== nothing
+        if !isnothing(case.methods)
             @test ev(hit, :methods) == case.methods
         end
     end

@@ -1169,7 +1169,7 @@ end
     severity = default_severity()
     mktempdir() do dir
         path = joinpath(dir, "architecture.jsonl")
-        @test previous_fingerprints(path) === nothing        # no previous run -> nothing is new
+        @test isnothing(previous_fingerprints(path))        # no previous run -> nothing is new
 
         open(io -> emit_jsonl(io, old, severity), path, "w")
         prev = previous_fingerprints(path)

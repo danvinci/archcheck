@@ -3,7 +3,7 @@
 # Names an `export` or `public` statement lists. Those lines are declarations, so the def walk skips them.
 function collect_published!(names, node)
     kids = child_nodes(node)
-    kids === nothing && return
+    isnothing(kids) && return
     k = JS.kind(node)
     k == K"quote" && return
     if k == K"export" || k == K"public"
@@ -194,7 +194,7 @@ end
 # or taking no argument, computes something and belongs in a domain module.
 is_type_interface(n, argtypes, ctypes) =
     n in ctypes ||
-    (haskey(argtypes, n) && !isempty(argtypes[n]) && all(t -> t !== nothing && t in ctypes, argtypes[n]))
+    (haskey(argtypes, n) && !isempty(argtypes[n]) && all(t -> !isnothing(t) && t in ctypes, argtypes[n]))
 
 # The package's contracts module: seam types and their intrinsic interface, read field by field across modules.
 const CONTRACTS_MODULE = :Contracts

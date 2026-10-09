@@ -153,7 +153,7 @@ end
 # method names, `local` and `catch` variables. Keyword labels count too, which only makes the set larger.
 function bound_names!(names, node)
     kids = child_nodes(node)
-    kids === nothing && return
+    isnothing(kids) && return
     k = JS.kind(node)
     if is_method_form(node)
         local_name = sig_name(kids[1])
@@ -221,7 +221,7 @@ function receiver_type(state, scope, node)
     k == K"ref" && return inferred_result(state, scope, Base.getindex, child_nodes(node))
     k == K"." || return nothing
     kids = child_nodes(node)
-    (kids === nothing || length(kids) != 2) && return nothing
+    (isnothing(kids) || length(kids) != 2) && return nothing
     base = receiver_type(state, scope, kids[1])
     field = kids[2].val
     (isnothing(base) || !(field isa Symbol)) && return nothing
@@ -436,7 +436,7 @@ end
 
 function walk_field_reads!(state, scope, node)
     kids = child_nodes(node)
-    kids === nothing && return
+    isnothing(kids) && return
     k = JS.kind(node)
     if k == K"quote"
         return

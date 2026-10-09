@@ -53,7 +53,7 @@ include_paths(entry_path::AbstractString) = [spec for (spec, _) in include_stmts
 function static_string(n)
     JS.kind(n) == K"string" || return nothing
     kids = child_nodes(n)
-    kids === nothing && return nothing
+    isnothing(kids) && return nothing
     parts = String[]
     for c in kids
         JS.kind(c) == K"String" || return nothing
@@ -64,13 +64,13 @@ end
 
 function walk_include_calls!(visit, n)
     kids = child_nodes(n)
-    if JS.kind(n) == K"call" && kids !== nothing && !isempty(kids) && kids[1].val === :include
+    if JS.kind(n) == K"call" && !isnothing(kids) && !isempty(kids) && kids[1].val === :include
         args = call_args(n)
         if !isempty(args)
             visit(args[1], Int(JS.source_location(n)[1]))
         end
     end
-    kids === nothing && return
+    isnothing(kids) && return
     for c in kids
         walk_include_calls!(visit, c)
     end
@@ -260,7 +260,7 @@ function importpath_parts(path)
     dots = 0
     names = Symbol[]
     kids = child_nodes(path)
-    kids === nothing && return dots, names
+    isnothing(kids) && return dots, names
     for c in kids
         c.val isa Symbol || continue
         if c.val === :. && isempty(names)
@@ -277,7 +277,7 @@ function dotted_names(n)
     n.val isa Symbol && return [n.val]
     JS.kind(n) == K"." || return nothing
     kids = child_nodes(n)
-    (kids === nothing || length(kids) != 2) && return nothing
+    (isnothing(kids) || length(kids) != 2) && return nothing
     head = dotted_names(kids[1])
     member = kids[2].val
     (isnothing(head) || !(member isa Symbol)) && return nothing
@@ -332,7 +332,7 @@ end
 # A signature's parts other than the method name: arguments, `where` bounds, return type.
 function walk_signature_rest!(refs, from, scope, file, modules, sig)
     kids = child_nodes(sig)
-    kids === nothing && return
+    isnothing(kids) && return
     JS.kind(sig) == K"call" || walk_signature_rest!(refs, from, scope, file, modules, kids[1])
     for c in kids[2:end]
         walk_modrefs!(refs, from, scope, file, modules, c)
@@ -351,7 +351,7 @@ end
 # `scope` is `from` split into its dotted segments, the frame every name in the file resolves in.
 function walk_modrefs!(refs, from, scope, file, modules, n)
     kids = child_nodes(n)
-    kids === nothing && return
+    isnothing(kids) && return
     k = JS.kind(n)
     line = JS.source_location(n)[1]
     if k == K"using" || k == K"import"
@@ -386,7 +386,7 @@ end
 function scan_modrefs(src::AbstractString, from, file, known; root = nothing)
     refs = ModRef[]
     tree = parse_file(src, file)
-    tree === nothing && return refs
+    isnothing(tree) && return refs
     modules = ModuleNames(Set{Symbol}(known), root)
     walk_modrefs!(refs, from, key_segments(from), file, modules, tree)
     refs
@@ -560,7 +560,7 @@ function build_source_index(src_root::AbstractString, rank, dir2mod; entry_dirs 
             path = joinpath(root, fn)
             rel = relpath(path, repo)
             tree = parse_file(read(path, String), rel)
-            if tree === nothing
+            if isnothing(tree)
                 push!(unparsed, (:Entry, rel))
             else
                 all_symbols!(external, tree)

@@ -68,7 +68,7 @@ end
 # Findings the previous run did not have. A kind absent from that run is a check that did not exist yet,
 # so its findings enter as standing rather than as a wall of new ones.
 function new_findings(findings, previous)
-    previous === nothing && return Finding[]
+    isnothing(previous) && return Finding[]
     known = Set(k.kind for k in previous)
     [f for f in findings if string(f.kind) in known && !(fingerprint(f) in previous)]
 end

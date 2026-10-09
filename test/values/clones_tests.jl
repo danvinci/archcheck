@@ -8,7 +8,7 @@ const CLONE_JS = ArchCheck.JS
 
 function count_syntax(node)
     kids = CLONE_JS.children(node)
-    kids === nothing && return 1
+    isnothing(kids) && return 1
     total = 1
     for child in kids
         total += count_syntax(child)
