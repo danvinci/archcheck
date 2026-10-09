@@ -89,24 +89,7 @@ function print_table(io, rows)
         ]
         push!(lines, cells)
     end
-    column_count = length(headers)
-    widths = Int[]
-    for index in 1:column_count
-        longest = 0
-        for line in lines
-            longest = max(longest, length(line[index]))
-        end
-        push!(widths, longest)
-    end
-    for line in lines
-        padded = String[]
-        for index in 1:column_count
-            cell = rpad(line[index], widths[index])
-            push!(padded, cell)
-        end
-        text = join(padded, "  ")
-        println(io, text)
-    end
+    print_cells(io, lines)
 end
 
 function is_failure(row)
