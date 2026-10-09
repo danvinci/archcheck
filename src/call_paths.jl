@@ -13,6 +13,7 @@ struct WalkedCall
     inside::Vector{Tuple{Int,Int}}    # (split, arm) pairs of the arms that hold the call
     exits::Vector{Tuple{Int,Int}}     # (split, arm) pairs of returning arms behind the call
     is_dead::Bool                     # a return on every path stands before the call
+    bindings::Vector{Int}             # per name the call passes, in source order: the id of its last binding
 end
 
 struct PlacedCall
@@ -20,6 +21,7 @@ struct PlacedCall
     inside::Vector{Tuple{Int,Int}}    # (split, arm) pairs of the arms that hold the call
     exits::Vector{Tuple{Int,Int}}     # (split, arm) pairs of returning arms behind the call
     is_dead::Bool                     # a return on every path stands before the call
+    bindings::Vector{Int}             # per name the call passes, in source order: the id of its last binding
 end
 
 struct WalkFollow
@@ -30,6 +32,9 @@ end
 struct CallWalk
     found::Vector{WalkedCall}          # calls in the order the scanner records them
     splits::Base.RefValue{Int}         # next id for an exclusive split
+    marks::Base.RefValue{Int}          # next id for a binding
+    bindings::Dict{Symbol,Int}         # name -> id of the loop or assignment that last bound it; 0 for none
+    loops::Dict{Tuple{String,Vector{Int}},Int}   # a loop clause's text and its collection's binding ids -> its id
 end
 
 # `K` names the walk for one node kind.
@@ -41,14 +46,21 @@ struct IterationStep end
 function CallWalk()
     found = WalkedCall[]
     splits = Ref(1)
-    CallWalk(found, splits)
+    marks = Ref(1)
+    bindings = Dict{Symbol,Int}()
+    loops = Dict{Tuple{String,Vector{Int}},Int}()
+    CallWalk(found, splits, marks, bindings, loops)
 end
 
-function fresh_split(walk)
-    id = walk.splits[]
-    walk.splits[] = id + 1
+function next_id!(counter::Base.RefValue{Int})
+    id = counter[]
+    counter[] = id + 1
     id
 end
+
+fresh_split(walk) = next_id!(walk.splits)
+
+fresh_mark(walk) = next_id!(walk.marks)
 
 function with_arm(tags, split, arm)
     extended = copy(tags)
@@ -65,42 +77,52 @@ function merge_exits(left, right)
     found
 end
 
-function remember_call!(walk, callee, qualifier, arguments, keywords, line, inside, exits, is_dead)
-    stored_inside = copy(inside)
-    stored_exits = copy(exits)
-    walked = WalkedCall(callee, qualifier, arguments, keywords, line, stored_inside, stored_exits, is_dead)
-    push!(walk.found, walked)
+function record_binding!(walk, target, mark)
+    names = Symbol[]
+    _argname!(names, target)
+    for name in names
+        walk.bindings[name] = mark
+    end
     nothing
 end
 
-function remember_written!(walk, callee, qualifier, node, inside, exits, is_dead)
-    arguments = arguments_text(node)
-    keywords = keywords_text(node)
-    line = source_line(node)
-    remember_call!(walk, callee, qualifier, arguments, keywords, line, inside, exits, is_dead)
+function marks_of(walk, nodes)
+    names = Symbol[]
+    for node in nodes
+        all_symbols!(names, node)
+    end
+    marks = Int[]
+    for name in names
+        mark = get(walk.bindings, name, 0)
+        push!(marks, mark)
+    end
+    marks
 end
 
-function note_operator!(walk, node, inside, exits, is_dead)
-    callee = operator_callee(node)
-    isnothing(callee) && return
-    remember_written!(walk, callee, "", node, inside, exits, is_dead)
-end
-
-function note_named!(walk, node, inside, exits, is_dead)
-    children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
-    naming = name_of_head(children[1])
-    isnothing(naming) && return
-    remember_written!(walk, naming.callee, naming.qualifier, node, inside, exits, is_dead)
+# Two loops bind the same values when their clauses read alike and the collection's names are bound alike.
+function loop_mark(walk, clause, collection)
+    raw = JS.sourcetext(clause)
+    text = collapse_source(raw)
+    marks = marks_of(walk, collection)
+    key = (text, marks)
+    get!(() -> fresh_mark(walk), walk.loops, key)
 end
 
 function note_call!(walk, node, inside, exits, is_dead)
-    if is_operator_call(node)
-        note_operator!(walk, node, inside, exits, is_dead)
-        return
-    end
-    note_named!(walk, node, inside, exits, is_dead)
+    naming = called_name(node)
+    isnothing(naming) && return
+    callee = naming.callee
+    qualifier = naming.qualifier
+    arguments = arguments_text(node)
+    keywords = keywords_text(node)
+    line = source_line(node)
+    stored_inside = copy(inside)
+    stored_exits = copy(exits)
+    passed = passed_values(node)
+    bindings = marks_of(walk, passed)
+    walked = WalkedCall(callee, qualifier, arguments, keywords, line, stored_inside, stored_exits, is_dead, bindings)
+    push!(walk.found, walked)
+    nothing
 end
 
 # A return already on this path ends the nodes that follow. Otherwise the follow stays open.
@@ -276,7 +298,10 @@ function visit_iteration!(walk, node, inside, exits, is_dead)
     if is_bound_clause(node)
         length(children) < 2 && return WalkFollow(false, exits)
         rest = children[2:end]
-        return visit_sequence!(walk, rest, NodeStep(), inside, exits, is_dead)
+        followed = visit_sequence!(walk, rest, NodeStep(), inside, exits, is_dead)
+        mark = loop_mark(walk, node, rest)
+        record_binding!(walk, children[1], mark)
+        return followed
     end
     visit_sequence!(walk, children, IterationStep(), inside, exits, is_dead)
 end
@@ -414,7 +439,10 @@ function visit_kind!(walk, node, ::WalkOf{:assign}, inside, exits, is_dead)
     missing = isnothing(children) || length(children) < 2
     missing && return WalkFollow(false, exits)
     visit_lhs!(walk, children[1], inside, exits, is_dead)
-    visit_node!(walk, children[2], inside, exits, is_dead)
+    followed = visit_node!(walk, children[2], inside, exits, is_dead)
+    mark = fresh_mark(walk)
+    record_binding!(walk, children[1], mark)
+    followed
 end
 
 function visit_values!(walk, node, inside, exits, is_dead)
@@ -513,8 +541,9 @@ function fallback_places(calls)
     placed = PlacedCall[]
     inside = Vector{Tuple{Int,Int}}()
     exits = Vector{Tuple{Int,Int}}()
+    bindings = Int[]
     for call in calls
-        push!(placed, PlacedCall(call, inside, exits, false))
+        push!(placed, PlacedCall(call, inside, exits, false, bindings))
     end
     placed
 end
@@ -525,7 +554,7 @@ function place_calls(form, calls)
     placed = PlacedCall[]
     for index in eachindex(calls)
         item = walked[index]
-        push!(placed, PlacedCall(calls[index], item.inside, item.exits, item.is_dead))
+        push!(placed, PlacedCall(calls[index], item.inside, item.exits, item.is_dead, item.bindings))
     end
     placed
 end

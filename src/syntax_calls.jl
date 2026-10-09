@@ -179,26 +179,22 @@ function record_written!(scan, callee::Symbol, qualifier::String, node, scope)
     push_call!(scan.callsites, scope.site, call)
 end
 
-function record_operator!(scan, node, scope)
-    callee = operator_callee(node)
-    isnothing(callee) && return
-    record_written!(scan, callee, "", node, scope)
-end
-
-function record_named!(scan, node, scope)
-    children = child_nodes(node)
+# The name a call calls: its operator, or the callee its head writes.
+function called_name(call)
+    if is_operator_call(call)
+        callee = operator_callee(call)
+        isnothing(callee) && return nothing
+        return WrittenCallee(callee, "")
+    end
+    children = child_nodes(call)
     missing = isnothing(children) || isempty(children)
-    missing && return
-    naming = name_of_head(children[1])
-    isnothing(naming) && return
-    record_written!(scan, naming.callee, naming.qualifier, node, scope)
+    missing && return nothing
+    name_of_head(children[1])
 end
 
 function record_call!(scan, node, scope)
     isnothing(scope.site) && return
-    if is_operator_call(node)
-        record_operator!(scan, node, scope)
-        return
-    end
-    record_named!(scan, node, scope)
+    naming = called_name(node)
+    isnothing(naming) && return
+    record_written!(scan, naming.callee, naming.qualifier, node, scope)
 end
