@@ -183,8 +183,16 @@ function check_reaches_internal(index::SourceIndex, mods, root::Symbol; entry_di
     for (path, tree) in scripts
         imported_internals!(findings, path, tree, modules, by_key)
     end
-    sources = Pair{String,JS.SyntaxNode}[f.path => f.tree for f in index.files]
-    for (path, tree) in [sources; scripts]
+    # A source file may name its own module's internals; an entry script has no module of its own.
+    units = Tuple{String,JS.SyntaxNode,Union{Nothing,Module}}[]
+    for f in index.files
+        home = get(by_key, f.mod, nothing)
+        push!(units, (f.path, f.tree, home))
+    end
+    for (path, tree) in scripts
+        push!(units, (path, tree, nothing))
+    end
+    for (path, tree, home) in units
         aliases = Dict{Symbol,Module}()
         collect_const_aliases!(aliases, tree, known)
         fs = empty_scan()
@@ -194,6 +202,7 @@ function check_reaches_internal(index::SourceIndex, mods, root::Symbol; entry_di
             M = resolve_loaded_module(qualifier, known, aliases, bound)
             isnothing(M) && return
             M in tracked || return
+            M === home && return
             isdefined(M, member) || return
             Base.ispublic(M, member) && return
             mod_name = module_key(M)

@@ -12,8 +12,9 @@ end
 # duplicate_owner: the same exported name, a different function in the middle module
 twin_name() = 1
 
+# A module naming its own internal stays quiet
 function helper()
-    1
+    Low._secret()
 end
 
 # private_import: a leading underscore marks the name its owner keeps internal
