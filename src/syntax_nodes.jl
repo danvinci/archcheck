@@ -4,6 +4,13 @@ using Base.JuliaSyntax: @K_str
 
 child_nodes(node) = JS.children(node)
 
+# An identifier node's value. Anything else names no symbol.
+function node_symbol(node)::Union{Nothing,Symbol}
+    value = node.val
+    value isa Symbol || return nothing
+    value
+end
+
 # A node whose children are values: a call's arguments, a parameter list, a tuple's members.
 function holds_values(kind)
     kind == K"call" || kind == K"parameters" || kind == K"tuple"
@@ -182,7 +189,6 @@ end
 
 walk_nodes(root) = NodeWalk(root)
 
-Base.eltype(::Type{NodeWalk}) = JS.SyntaxNode
 Base.IteratorSize(::Type{NodeWalk}) = Base.SizeUnknown()
 
 Base.iterate(walk::NodeWalk) = iterate(walk, JS.SyntaxNode[walk.root])

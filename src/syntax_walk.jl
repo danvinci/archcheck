@@ -69,7 +69,7 @@ function read_scope(scope, bound)
     ScanScope(scope.target, bound, scope.depth, scope.loop_depth, scope.site, false)
 end
 
-function walk_iteration!(scan, node, scope, on_qualified = nothing)
+function walk_iteration!(scan, node, scope, on_qualified)
     children = child_nodes(node)
     isnothing(children) && return
     kind = JS.kind(node)
@@ -106,7 +106,7 @@ function collect_lhs!(found, node)
     found
 end
 
-function walk_assign_lhs!(scan, node, scope, on_qualified = nothing)
+function walk_assign_lhs!(scan, node, scope, on_qualified)
     targets = collect_lhs!(JS.SyntaxNode[], node)
     for target in targets
         walk_scoped!(scan, target, scope, on_qualified)
@@ -114,7 +114,7 @@ function walk_assign_lhs!(scan, node, scope, on_qualified = nothing)
 end
 
 # A filter's iterator stays at `scope`'s loop depth. Its predicate is inside the loop.
-function walk_gen_spec!(scan, node, scope, interior_depth, on_qualified = nothing)
+function walk_gen_spec!(scan, node, scope, interior_depth, on_qualified)
     if JS.kind(node) != K"filter"
         walk_iteration!(scan, node, scope, on_qualified)
         return
@@ -304,7 +304,7 @@ function scope_call!(scan, node, scope, on_qualified)
     walk_value_children!(child -> walk_scoped!(scan, child, arguments, on_qualified), node)
 end
 
-function walk_scoped!(scan, node, scope, on_qualified = nothing)
+function walk_scoped!(scan, node, scope, on_qualified)
     kind = JS.kind(node)
     if kind == K"quote"
         scope_quote!(scan, node, scope, on_qualified)
@@ -376,7 +376,7 @@ end
 
 # Default right-hand sides in signature order: positionals, then the keyword block.
 # Each value is filtered by where-typevars plus the names of arguments to its left.
-function absorb_defaults!(scan, signature, scope, on_qualified = nothing)
+function absorb_defaults!(scan, signature, scope, on_qualified)
     prefix = copy(scope.bound)
     where_vars!(prefix, signature)
     annotation_bound = copy(prefix)
