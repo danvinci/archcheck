@@ -47,6 +47,25 @@ args = [["GEOM_EPS", "RESOLUTION_M", "LOFT_GEO_M"]]
 
 [checks.Waits]
 
+[checks.OneProducer]
+
+# The reflected knot vector declared as a type with one producer; the split mutant writes a second formula for it.
+[mutants.knots_split]
+base = "builders"
+source = "builders"
+script = "mutants/knot_split.jl"
+
+[[mutants.knots_split.derived]]
+producer = "reflect_knots"
+
+[mutants.knots_routed]
+base = "builders"
+source = "builders"
+script = "mutants/knot_routed.jl"
+
+[[mutants.knots_routed.derived]]
+producer = "reflect_knots"
+
 [probes]
 functions = ["offset", "duct_flow_section", "Shape", "_filled", "emit_artifacts", "write_renders", "_emit_component"]
 ambient = ["_session"]
@@ -280,3 +299,21 @@ expect = "fire"
 kind = "two_names"
 file = "lofts/brep.jl"
 symbol = "_filled"
+
+[[expectations]]
+case = "knots"
+check = "OneProducer"
+state = "knots_split"
+expect = "fire"
+kind = "second_producer"
+file = "geometry/lofts/fit.jl"
+symbol = "ReflectedKnots"
+
+[[expectations]]
+case = "knots"
+check = "OneProducer"
+state = "knots_routed"
+expect = "quiet"
+kind = "second_producer"
+file = "geometry/lofts/fit.jl"
+symbol = "ReflectedKnots"

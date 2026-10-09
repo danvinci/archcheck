@@ -141,11 +141,53 @@ function needs_workload(instances)
     false
 end
 
-function run_gate(pkg, instances, report, log, workload, probes, entries)
+function resolve_one(modules, label)
+    matches = functions_named(modules, label)
+    count = length(matches)
+    count == 1 || throw(ArgumentError("$label matched $count functions"))
+    only(matches)
+end
+
+function named_functions(modules, entry, key)
+    labels = get(entry, key, String[])
+    found = Any[]
+    for label in labels
+        push!(found, resolve_one(modules, label))
+    end
+    Tuple(found)
+end
+
+# A config table names functions by their bare names in the package; `cache` names a field.
+function build_one_derived(modules, entry)
+    producer = resolve_one(modules, entry["producer"])
+    key = nothing
+    if haskey(entry, "key")
+        key = resolve_one(modules, entry["key"])
+    end
+    cache = nothing
+    if haskey(entry, "cache")
+        cache = Symbol(entry["cache"])
+    end
+    readers = named_functions(modules, entry, "readers")
+    converters = named_functions(modules, entry, "converters")
+    ArchCheck.Derived(producer; key, cache, readers, converters)
+end
+
+function build_derived(pkg, listed)
+    isempty(listed) && return ()
+    modules = collect_modules!(Module[], pkg)
+    built = Any[]
+    for entry in listed
+        push!(built, build_one_derived(modules, entry))
+    end
+    Tuple(built)
+end
+
+function run_gate(pkg, instances, report, log, workload, probes, entries, derived)
     checks = (instances...,)
     open(log, "w") do io
         ArchCheck.gate(pkg; checks = checks, report_path = report, io = io, workload = workload,
-                       probes = probes, entries = entries)
+                       probes = probes, entries = entries, derived = derived)
     end
 end
 
@@ -193,7 +235,8 @@ function drive_loaded(spec, pkg)
                 probes = build_probes(pkg, spec["probes"])
             end
             entries = method_entries(pkg, spec["entries"])
-            run_gate(pkg, instances, spec["report"], spec["log"], workload, probes, entries)
+            derived = build_derived(pkg, spec["derived"])
+            run_gate(pkg, instances, spec["report"], spec["log"], workload, probes, entries, derived)
         end
     catch err
         message = sprint(showerror, err)

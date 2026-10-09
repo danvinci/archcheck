@@ -39,6 +39,7 @@ struct StateSpec
     commit::String                     # revision to export
     workload_file::String              # absolute path; empty when this state declares none
     workload_call::String              # zero-argument function that file defines
+    derived::Vector{Dict{String,Any}}  # derived-value tables this state declares
 end
 
 struct MutantSpec
@@ -48,6 +49,7 @@ struct MutantSpec
     script::String                     # absolute path of the editor
     workload_file::String              # absolute path; empty when this mutant declares none
     workload_call::String              # zero-argument function that file defines
+    derived::Vector{Dict{String,Any}}  # derived-value tables this mutant declares
 end
 
 struct Expectation
@@ -69,7 +71,6 @@ struct Host
     expectations::Vector{Expectation}  # rows to score
     probes::ProbeSpec                  # probe names for a workload run
     entries::Vector{EntrySpec}         # method-graph entries the gate expands
-    derived::Vector{Dict{String,Any}}  # derived-value tables, passed to the driver as written
 end
 
 struct Found
@@ -101,6 +102,11 @@ function string_list(value)
         push!(names, string(item))
     end
     names
+end
+
+function derived_rows(table)
+    rows = get(table, "derived", Any[])
+    Vector{Dict{String,Any}}(rows)
 end
 
 function workload_of(table, base)
@@ -153,7 +159,8 @@ function parse_states(table, base)
         body = table[name]
         commit = string(body["commit"])
         workload = workload_of(body, base)
-        spec = StateSpec(name, commit, workload.file, workload.call)
+        derived = derived_rows(body)
+        spec = StateSpec(name, commit, workload.file, workload.call, derived)
         push!(states, spec)
     end
     states
@@ -169,7 +176,8 @@ function parse_mutants(table, base)
         base_name = string(body["base"])
         source_name = string(body["source"])
         workload = workload_of(body, base)
-        spec = MutantSpec(name, base_name, source_name, script, workload.file, workload.call)
+        derived = derived_rows(body)
+        spec = MutantSpec(name, base_name, source_name, script, workload.file, workload.call, derived)
         push!(mutants, spec)
     end
     mutants
@@ -229,11 +237,9 @@ function parse_host(path)
     probes = parse_probes(parsed)
     entry_rows = get(parsed, "entries", Any[])
     entries = parse_entries(entry_rows)
-    derived_rows = get(parsed, "derived", Any[])
-    derived = Vector{Dict{String,Any}}(derived_rows)
     module_name = string(parsed["module"])
     repo = string(parsed["repo"])
-    host = Host(module_name, repo, states, mutants, checks, expectations, probes, entries, derived)
+    host = Host(module_name, repo, states, mutants, checks, expectations, probes, entries)
     validate_host(host)
 end
 
@@ -406,15 +412,15 @@ function entry_payloads(entries)
     payloads
 end
 
-function write_spec(path, host, report, log, status, checks, workload_file, workload_call)
+function write_spec(path, host, place, report, log, status, checks)
     probes = host.probes
     probe_payload = Dict("functions" => probes.functions, "ambient" => probes.ambient,
                          "slow_s" => probes.slow_s)
     entries = entry_payloads(host.entries)
     payload = Dict("module" => host.module_name, "report" => report, "log" => log, "status" => status,
-                   "checks" => checks, "workload_file" => workload_file,
-                   "workload_call" => workload_call, "probes" => probe_payload, "entries" => entries,
-                   "derived" => host.derived)
+                   "checks" => checks, "workload_file" => place.workload_file,
+                   "workload_call" => place.workload_call, "probes" => probe_payload, "entries" => entries,
+                   "derived" => place.derived)
     open(path, "w") do io
         TOML.print(io, payload)
     end
@@ -474,18 +480,15 @@ function load_findings(path)
     records
 end
 
-function workload_pair(host, name)
+# The state or mutant a name declares; both carry the workload and the derived values.
+function place_spec(host, name)
     for state in host.states
-        if state.name == name
-            return (file = state.workload_file, call = state.workload_call)
-        end
+        state.name == name && return state
     end
     for mutant in host.mutants
-        if mutant.name == name
-            return (file = mutant.workload_file, call = mutant.workload_call)
-        end
+        mutant.name == name && return mutant
     end
-    (file = "", call = "")
+    throw(ArgumentError("$name is not a declared state"))
 end
 
 function score_state(host, name, directory)
@@ -506,8 +509,8 @@ function score_state(host, name, directory)
     for check_name in parts.built
         push!(payloads, check_payload(host.checks[check_name]))
     end
-    workload = workload_pair(host, name)
-    write_spec(spec_path, host, report, log, status_path, payloads, workload.file, workload.call)
+    place = place_spec(host, name)
+    write_spec(spec_path, host, place, report, log, status_path, payloads)
     rm(status_path; force = true)
     outcome = run_process(env, spec_path)
     status = empty_status("drive wrote no status")
