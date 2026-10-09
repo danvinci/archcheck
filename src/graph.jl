@@ -286,12 +286,6 @@ end
 
 build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, index.refs)
 
-function build_module_graph(src_root::AbstractString, spine_path::AbstractString)
-    rank, dir2mod = parse_spine_order(spine_path)
-    index = build_source_index(src_root, rank, dir2mod)
-    build_module_graph(index)
-end
-
 files_of(index::SourceIndex, mod::Symbol) = [file for file in index.files if file.mod === mod]
 
 # The indexed file at a repo-relative path; nothing for a path the index does not hold.
