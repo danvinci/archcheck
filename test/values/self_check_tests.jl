@@ -55,21 +55,6 @@ end
     @test missing == String[]
 end
 
-const PUBLIC_ENTRY = load_package("PublicEntry", """
-    export shipped
-    public visible
-    shipped() = 1
-    visible() = 2
-    hidden() = 3
-    """)
-
-@testset "an exported or public name is an entry, so dead code leaves it" begin
-    ctx = case_context(PUBLIC_ENTRY)
-    check = DeadCode(public_is_entry = true)
-    dead = ArchCheck.run(check, ctx)
-    @test evidence_rows(dead) == [(:dead_code, "hidden")]
-end
-
 const SHARED_HUB = load_package("SharedHub", """
     include("hub.jl")
     include("c.jl")

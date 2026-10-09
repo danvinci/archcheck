@@ -70,22 +70,8 @@ function exhibit_derived()
     (declared, plain)
 end
 
-# The default catalog, with a library's public names counted as entry points.
-function library_defaults()
-    active = Check[]
-    for check in ArchCheck.CHECKS
-        if check isa DeadCode
-            configured = DeadCode(public_is_entry = true)
-            push!(active, configured)
-        else
-            push!(active, check)
-        end
-    end
-    active
-end
-
 function exhibit_checks()
-    active = library_defaults()
+    active = collect(Check, ArchCheck.CHECKS)
     allowed = (("src/shape/plants.jl", :allowed_call),)
     whitelist = CallerWhitelist((:guarded,), allowed)
     push!(active, whitelist)
@@ -158,7 +144,7 @@ function self_opt()
 end
 
 function static_checks()
-    active = library_defaults()
+    active = collect(Check, ArchCheck.CHECKS)
     waits = UnreadWaits(allowed = (:probe_wait, :wait_synced))
     push!(active, waits)
     push!(active, OverlappingCalls())

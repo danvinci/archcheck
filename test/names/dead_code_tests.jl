@@ -1,7 +1,7 @@
 # An uncalled definition is dead. A script entry keeps a name alive. A test entry does not.
 
-function dead_symbols(case; entry_dirs = String[], public_is_entry = false)
-    check = DeadCode(; public_is_entry)
+function dead_symbols(case; entry_dirs = String[], options...)
+    check = DeadCode(; options...)
     ctx = case_context(case; entry_dirs)
     found = ArchCheck.run(check, ctx)
     Set(finding.symbol for finding in found)
@@ -33,8 +33,9 @@ write(joinpath(TEST_DIRECTORY_DIR, "runtests.jl"), "tested()\n")
 
 const EXPORTED_NAME = load_package("ExportedName", """
 export uncalled
+public visible
 include("impl.jl")
-""", ["impl.jl" => "uncalled() = 1\n"])
+""", ["impl.jl" => "uncalled() = 1\nvisible() = 2\nhidden() = 3\n"])
 
 const QUALIFIED_CALL = load_package("QualifiedCall", """
 include("aa/Aa.jl")
@@ -222,11 +223,11 @@ end
     @test "tested" in tested
 end
 
-@testset "an export keeps a definition only when public names count as entries" begin
-    dead = dead_symbols(EXPORTED_NAME)
-    @test "uncalled" in dead
-    published = dead_symbols(EXPORTED_NAME; public_is_entry = true)
-    @test !("uncalled" in published)
+@testset "an exported or public name is an entry unless the package turns that off" begin
+    library = dead_symbols(EXPORTED_NAME)
+    @test library == Set(["hidden"])
+    application = dead_symbols(EXPORTED_NAME; public_is_entry = false)
+    @test application == Set(["uncalled", "visible", "hidden"])
 end
 
 @testset "a qualified call from another module keeps the definition" begin

@@ -89,11 +89,11 @@ struct FileSinkable <: Check end
 struct Sinkable <: Check end
 """Runs in `CHECKS`. A function body ends in a bare tuple of three or more slots."""
 struct TupleReturns <: Check end
-"""Runs in `CHECKS`. A top-level definition has no reference in the source or the entry directories. `public_is_entry` counts an exported or public name as a reference."""
+"""Runs in `CHECKS`. A top-level definition has no reference in the source or the entry directories. `public_is_entry`, on by default, counts an exported or public name as a reference; an application turns it off."""
 struct DeadCode <: Check
     public_is_entry::Bool   # an exported or public name counts as an entry point
 end
-DeadCode(; public_is_entry::Bool = false) = DeadCode(public_is_entry)
+DeadCode(; public_is_entry::Bool = true) = DeadCode(public_is_entry)
 """Runs in `CHECKS`. A module wrapper exports its whole namespace with `names` and `all` set."""
 struct BlanketExports <: Check end
 """Runs in `CHECKS`. An exported name is undefined."""
