@@ -1,0 +1,43 @@
+# The package workload: it runs the probed calls and the declared value's uncached caller.
+
+# duplicate_owner: the same exported name, a different function in the early module
+twin_name() = 2
+
+function exercise()
+    note_missing(false)
+    note_dynamic(false)
+    early_call(1)
+    sink_home(1)
+    Low.pull_shape()
+    Low.twin_name()
+    twin_name()
+    Low.extend_me(Tag(1))
+    _secret()
+    read_brick(Low.Brick(1))
+    store_copy([1, 2])
+    store_copy(view([1, 2, 3], 1:2))
+    boxed_total(3)
+    runtime_plant(identity, 1)
+    pick_type(1)
+    triple(1)
+    allowed_call(1)
+    stray_call(1)
+    build_shape(Dict{Int,Int}(), 1)
+    build_shape(1.0)
+    sample_grid()
+    gap_value()
+    string_rows()
+    clone_left(1, 2, 3, 4)
+    clone_right(1, 2, 3, 4)
+    ask_twice([1, 2, 3])
+    skip_store(1)
+    left_name(1)
+    left_name(1)
+    right_name(1)
+    drops()
+    PlainItem(1)
+    Loose(1.0)
+    Base.identity("a", 1)
+    near_gap([0.0, 1.0])
+    0
+end
