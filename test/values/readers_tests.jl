@@ -130,7 +130,7 @@ function wrap_entries()
     )
 end
 
-function reader_findings(case; entries = (), derived = ())
+function unlisted_findings(case; entries = (), derived = ())
     ctx = case_context(case; entries, derived)
     check = DerivedReaders()
     ArchCheck.run(check, ctx)
@@ -139,7 +139,7 @@ end
 @testset "a wrapper passed to a reader or a converter stays quiet" begin
     declared = (wrap_declared(),)
     entries = wrap_entries()
-    found = reader_findings(WRAPPED_BOUND; entries, derived = declared)
+    found = unlisted_findings(WRAPPED_BOUND; entries, derived = declared)
     rows = evidence_rows(found, :callee, :via, :derived)
     @test rows == [
         (:unlisted_reader, "pass_homonym", "consume", "code_typed", "distance"),
@@ -154,7 +154,7 @@ end
 @testset "a wrapper with no method graph names the missing entries" begin
     declared = (wrap_declared(),)
     caught = try
-        reader_findings(WRAPPED_BOUND; derived = declared)
+        unlisted_findings(WRAPPED_BOUND; derived = declared)
         nothing
     catch err
         err
@@ -168,7 +168,7 @@ end
     readers = (pkg.consume,)
     converters = (pkg.bridge,)
     declared = (Derived(pkg.lower_bound; readers, converters),)
-    found = reader_findings(BARE_BOUND; derived = declared)
+    found = unlisted_findings(BARE_BOUND; derived = declared)
     rows = evidence_rows(found, :callee, :via, :derived)
     @test rows == [
         (:unlisted_reader, "broadcasted", "broadcast", "parse", "lower_bound"),
@@ -185,7 +185,7 @@ end
     declared = (Derived(pkg.distance),)
     entry = (pkg.distance, Tuple{Float64,Float64})
     entries = (entry,)
-    found = reader_findings(FIELD_OUTSIDE; entries, derived = declared)
+    found = unlisted_findings(FIELD_OUTSIDE; entries, derived = declared)
     rows = evidence_rows(found, :callee, :via, :derived)
     @test rows == [
         (:unlisted_reader, "build", "Bound", "field", "distance"),
