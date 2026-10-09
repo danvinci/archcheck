@@ -182,15 +182,18 @@ function self_checks()
     (static..., workload...)
 end
 
+# The tests are an entry dir, so they too may reach only exported and public names.
 function self_gate(; report_path, io)
     checks = self_checks()
     entries = self_entries()
+    tests = joinpath(pkgdir(ArchCheck), "test")
     ArchCheck.gate(ArchCheck;
         report_path = report_path,
         io = io,
         checks = checks,
         entries = entries,
         workload = exhibit_gate_quiet,
+        entry_dirs = [tests],
     )
 end
 
