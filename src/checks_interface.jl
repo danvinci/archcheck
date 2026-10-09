@@ -128,7 +128,8 @@ function collect_const_aliases!(aliases, n, known)
     end
 end
 
-# Each entry-dir script's path and parse. The index reads these only for names, so they are parsed here.
+# Each entry-dir script's path and code: its top level and each module block's body, since a walk stops at a block.
+# The index reads these only for names, so they are parsed here.
 function entry_trees(index::SourceIndex, entry_dirs)
     trees = Pair{String,JS.SyntaxNode}[]
     seen = Set(resolve_scan_path(index, f.path) for f in index.files)
@@ -143,7 +144,9 @@ function entry_trees(index::SourceIndex, entry_dirs)
             source = read(absolute, String)
             tree = parse_file(source, path)
             isnothing(tree) && continue
-            push!(trees, path => tree)
+            for code in code_roots(tree)
+                push!(trees, path => code)
+            end
         end
     end
     trees
