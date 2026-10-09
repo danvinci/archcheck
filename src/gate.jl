@@ -19,7 +19,7 @@ function checks_in(checks, wanted::Symbol)
 end
 
 # One parse of `pkg`'s src/, the static checks, then `workload()` under `probes` and the checks that read it; one
-# JSONL report, and an error on any error finding. `entries` seed the method graph; `error_kinds` promote kinds.
+# JSONL report, and an error on any error finding. `entries` seed the method graph; `derived` declares values.
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
@@ -29,7 +29,8 @@ function gate(pkg::Module;
               error_kinds = (),
               workload = nothing,
               probes::Union{Nothing,Probes} = nothing,
-              entries = ())
+              entries = (),
+              derived::Tuple{Vararg{Derived}} = ())
     severity = severities(checks; error_kinds)   # before the parse, so a bad error_kinds fails fast
     static = checks_in(checks, :static)
     observing = checks_in(checks, :workload)
@@ -47,7 +48,7 @@ function gate(pkg::Module;
     mods = [loaded_module(pkg, m) for m in ordered]
 
     methods = isempty(entries) ? nothing : method_graph(entries, package_modules(pkg, mods))
-    ctx = Context(index, pkg, mods; entry_dirs, methods)
+    ctx = Context(index, pkg, mods; entry_dirs, methods, derived)
     findings = run_checks(ctx, static)
     if !isnothing(workload)
         observed = observe(workload, probes, ctx)
