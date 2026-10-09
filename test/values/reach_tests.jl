@@ -42,6 +42,17 @@ const DYNAMIC_PLACE = load_package("DynamicPlace", """
     ready() = 0
     """)
 
+# The handler table hides which function runs, so the call is left to runtime dispatch with an Int. The untyped relay
+# it reaches calls `kind`, whose String method no call holding an Int lands on.
+const DYNAMIC_RELAY = load_package("DynamicRelay", """
+    kind(x::Int) = x
+    kind(x::String) = x
+    relay(x) = kind(x)
+    const HANDLERS = Function[relay]
+    route(n::Int) = HANDLERS[1](n)
+    ready() = 0
+    """)
+
 const EXPORTED_SPARE = load_package("ExportedSpare", """
     export spare
     called(x::Int) = x + 1
@@ -77,6 +88,17 @@ end
     unmatched = which(pkg.place, Tuple{String,String})
     rows = evidence_rows(found, :signature)
     @test rows == [(:unreached_method, "place", string(unmatched.sig))]
+end
+
+@testset "a method a dynamic call reaches calls on with the types that call holds" begin
+    pkg = DYNAMIC_RELAY.pkg
+    entry = (pkg.route, Tuple{Int})
+    entries = (entry,)
+    workload = () -> pkg.ready()
+    found = gate_findings(pkg; checks = (UnreachedMethods(),), workload, entries)
+    unmatched = which(pkg.kind, Tuple{String})
+    rows = evidence_rows(found, :signature)
+    @test rows == [(:unreached_method, "kind", string(unmatched.sig))]
 end
 
 @testset "a compiler Any constructor beside a typed one stays quiet" begin
