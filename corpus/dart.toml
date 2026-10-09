@@ -68,6 +68,20 @@ script = "mutants/knot_routed.jl"
 [[mutants.knots_routed.derived]]
 producer = "reflect_knots"
 
+# The swept-solid builder records a key over its geometry numbers.
+[mutants.keyed]
+base = "builders"
+source = "builders"
+script = "mutants/keyed_shape.jl"
+
+[mutants.keyed.workload]
+file = "workloads/dart_build.jl"
+call = "corpus_build"
+
+[[mutants.keyed.derived]]
+producer = "Shape"
+key = "swept_solid_key"
+
 [probes]
 functions = ["offset", "duct_flow_section", "Shape", "_filled", "emit_artifacts", "write_renders", "_emit_component"]
 ambient = ["_session"]
@@ -347,3 +361,12 @@ expect = "quiet"
 kind = "second_producer"
 file = "geometry/lofts/fit.jl"
 symbol = "ReflectedKnots"
+
+[[expectations]]
+case = "keyed"
+check = "Rebuilds"
+state = "keyed"
+expect = "fire"
+kind = "rebuild"
+file = "lofts/brep.jl"
+symbol = "Shape"
