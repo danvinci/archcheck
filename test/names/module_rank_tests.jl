@@ -84,6 +84,18 @@ grow() = 1
     "tokens.jl" => "module Tokens\nclimb() = InlineRoot.grow()\nend\n",
 ])
 
+# Module blocks in source order: one in the spine's own code reaching one an included file defines later, and that
+# later block including its own file.
+const INLINE_ORDER = load_package("InlineOrder", """
+module Early
+reach() = Late.value()
+end
+include("late.jl")
+""", [
+    "late.jl" => "module Late\ninclude(\"late_body.jl\")\nend\n",
+    "late_body.jl" => "value() = 1\n",
+])
+
 # A spine with one directory module and plain files at two include depths, one holding a module block, and a
 # module file behind a version check that fails, as an extension's fallback include is on current Julia.
 const SPINE_FILES = load_package("SpineFiles", """
@@ -240,8 +252,17 @@ end
         climb = only(found)
         @test climb.mod === inline
         @test climb.symbol == parent
-        @test ev(climb, :include_order) == "1.1->1"
+        @test ev(climb, :include_order) == "1.2->1"
     end
+end
+
+@testset "every module block takes its load position, and a file it includes is its own" begin
+    ctx = case_context(INLINE_ORDER)
+    @test isempty(ArchCheck.run(Corpus(), ctx))
+    rows = module_edge_rows(INLINE_ORDER)
+    @test rows == [(:back_edge, "Late", "1.1->1.3", "qualified")]
+    body = only(file for file in ctx.index.files if file.path == joinpath("src", "late_body.jl"))
+    @test body.mod === :Late
 end
 
 @testset "the root owns every file its spine includes outside a module directory, loaded or not" begin
