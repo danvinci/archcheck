@@ -125,11 +125,9 @@ function inferred_code(instance::Core.MethodInstance, interp)
     nothing
 end
 
-function called_instance(@nospecialize(target))
-    target isa Core.CodeInstance && return target.def
-    target isa Core.MethodInstance && return target
-    nothing
-end
+called_instance(target::Core.CodeInstance) = target.def
+called_instance(target::Core.MethodInstance) = target
+called_instance(@nospecialize(::Any)) = nothing
 
 function add_edge!(edges, caller, callee)
     callees = get!(edges, caller, Set{Method}())
@@ -151,26 +149,40 @@ function record_passed!(edges, pending, caller, target, module_set)
     end
 end
 
-function connect_function_type!(edges, pending, caller, @nospecialize(argument), module_set)
-    argument isa DataType || return
-    isconcretetype(argument) || return
-    argument <: Function || return
-    parentmodule(argument) in module_set || return
-    owned = passed_methods(argument, module_set)
-    has_compiled = false
+function is_owned_function_type(@nospecialize(argument), module_set)
+    argument isa DataType || return false
+    isconcretetype(argument) || return false
+    argument <: Function || return false
+    parentmodule(argument) in module_set
+end
+
+function connect_compiled!(edges, pending, caller, owned, module_set)
+    connected = false
     for method in owned
-        specs = method_specializations(method)
+        compiled = Base.specializations(method)
+        specs = collect(Core.MethodInstance, compiled)
         isempty(specs) && continue
-        has_compiled = true
+        connected = true
         connect_method!(edges, pending, caller, method, specs, module_set)
     end
-    has_compiled && return
+    connected
+end
+
+function connect_declared!(edges, pending, caller, owned, module_set)
     for method in owned
         instance = declared_instance(method)
         isnothing(instance) && continue
         instances = Core.MethodInstance[instance]
         connect_method!(edges, pending, caller, method, instances, module_set)
     end
+end
+
+function connect_function_type!(edges, pending, caller, @nospecialize(argument), module_set)
+    is_owned_function_type(argument, module_set) || return
+    owned = passed_methods(argument, module_set)
+    connected = connect_compiled!(edges, pending, caller, owned, module_set)
+    connected && return
+    connect_declared!(edges, pending, caller, owned, module_set)
 end
 
 function passed_methods(@nospecialize(argument), module_set)
@@ -192,11 +204,6 @@ function connect_method!(edges, pending, caller, method, instances, module_set)
     for instance in instances
         enqueue_target!(pending, instance, module_set)
     end
-end
-
-function method_specializations(method::Method)
-    compiled = Base.specializations(method)
-    collect(Core.MethodInstance, compiled)
 end
 
 function declared_instance(method::Method)
@@ -225,28 +232,28 @@ function record_call!(unresolved, stmt, caller, module_set, slot_names)
     owned = is_owned_callee(callee, module_set)
     dynamic = is_dynamic_callee(callee)
     owned || dynamic || return
-    add_unresolved!(unresolved, caller, name)
-end
-
-function add_unresolved!(unresolved, caller, name)
     names = get!(unresolved, caller, Set{Symbol}())
     push!(names, name)
 end
 
-function constant_function(@nospecialize(callee))
-    if callee isa GlobalRef
-        isdefined(callee.mod, callee.name) || return nothing
-        value = getfield(callee.mod, callee.name)
-        return value isa Function ? value : nothing
-    end
-    callee isa Function && return callee
-    nothing
+function constant_function(callee::GlobalRef)
+    isdefined(callee.mod, callee.name) || return nothing
+    value = getfield(callee.mod, callee.name)
+    value isa Function || return nothing
+    value
 end
+
+constant_function(callee::Function) = callee
+constant_function(@nospecialize(::Any)) = nothing
+
+is_builtin_value(::Core.Builtin) = true
+is_builtin_value(::Core.IntrinsicFunction) = true
+is_builtin_value(@nospecialize(::Any)) = false
 
 function is_builtin_callee(@nospecialize(callee))
     value = constant_function(callee)
     isnothing(value) && return false
-    value isa Core.Builtin || value isa Core.IntrinsicFunction
+    is_builtin_value(value)
 end
 
 function is_owned_callee(@nospecialize(callee), module_set)
@@ -256,38 +263,28 @@ function is_owned_callee(@nospecialize(callee), module_set)
     parentmodule(value) in module_set
 end
 
-function is_dynamic_callee(@nospecialize(callee))
-    callee isa Core.Argument && return true
-    callee isa Core.SlotNumber && return true
-    callee isa Core.SSAValue && return true
-    callee isa Expr && return true
-    false
-end
+is_dynamic_callee(::Core.Argument) = true
+is_dynamic_callee(::Core.SlotNumber) = true
+is_dynamic_callee(::Core.SSAValue) = true
+is_dynamic_callee(::Expr) = true
+is_dynamic_callee(@nospecialize(::Any)) = false
 
-function callee_name(@nospecialize(callee), slot_names)
-    callee isa GlobalRef && return callee.name
-    callee isa Function && return nameof(callee)
-    if callee isa Core.Argument
-        return slot_symbol(slot_names, callee.n)
-    end
-    if callee isa Core.SlotNumber
-        return slot_symbol(slot_names, callee.id)
-    end
-    nothing
-end
+callee_name(callee::GlobalRef, slot_names) = callee.name
+callee_name(callee::Function, slot_names) = nameof(callee)
+callee_name(callee::Core.Argument, slot_names) = slot_symbol(slot_names, callee.n)
+callee_name(callee::Core.SlotNumber, slot_names) = slot_symbol(slot_names, callee.id)
+callee_name(@nospecialize(::Any), slot_names) = nothing
 
 function slot_symbol(slot_names, index)
     index in eachindex(slot_names) || return nothing
     slot_names[index]
 end
 
-function is_kwcall_method(method::Method)
-    method.sig <: Tuple{typeof(Core.kwcall),Any,Any,Vararg}
-end
+is_kwcall_method(method::Method) = is_kwcall_signature(method.sig)
 
 function is_keyword_body(method::Method)
     text = string(method.name)
-    !isnothing(match(KEYWORD_BODY, text))
+    occursin(KEYWORD_BODY, text)
 end
 
 function written_method(method::Method)
@@ -305,21 +302,23 @@ function written_from_kwcall(method::Method)
     found
 end
 
-function written_from_body(method::Method)
-    wanted = Symbol(written_name(method.name))
-    params = Base.unwrap_unionall(method.sig).parameters
-    func = nothing
-    func_index = 0
+function named_function_param(params, wanted)
     for index in eachindex(params)
         value = function_instance(params[index])
         isnothing(value) && continue
         nameof(value) === wanted || continue
-        func = value
-        func_index = index
-        break
+        return (value, index)
     end
-    isnothing(func) && return method
-    positional = params[func_index+1:end]
+    nothing
+end
+
+function written_from_body(method::Method)
+    wanted = Symbol(written_name(method.name))
+    params = Base.unwrap_unionall(method.sig).parameters
+    located = named_function_param(params, wanted)
+    isnothing(located) && return method
+    func, func_index = located
+    positional = params[func_index + 1:end]
     found = method_for(func, positional, method)
     isnothing(found) && return method
     found
