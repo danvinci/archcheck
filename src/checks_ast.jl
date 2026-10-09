@@ -51,13 +51,16 @@ function dead_code_findings(index, entries)
     findings
 end
 
+# Julia calls a module's `__init__` when it loads, so its definition needs no source reference.
+const RUNTIME_ENTRIES = (:__init__,)
+
 # A top-level def with no call site in src and absent from scripts/.
 # The parse records calls inside closures, so a deck-wrapped function still counts as referenced.
-function check_dead_code_static(index; public_is_entry::Bool = false)
-    entries = index.external
+function check_dead_code_static(index; public_is_entry::Bool)
+    entries = union(index.external, RUNTIME_ENTRIES)
     if public_is_entry
         published = published_names(index)
-        entries = union(index.external, published)
+        union!(entries, published)
     end
     dead_code_findings(index, entries)
 end
