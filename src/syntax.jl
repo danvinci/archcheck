@@ -11,7 +11,7 @@ function is_sig(n)
     k == K"call" && return true
     (k == K"where" || k == K"::") || return false
     kids = child_nodes(n)
-    (kids === nothing || isempty(kids)) && return false
+    (isnothing(kids) || isempty(kids)) && return false
     is_sig(kids[1])
 end
 
@@ -22,15 +22,16 @@ function is_inner_constructor(n)
     k == K"function" && return true
     k == K"=" || return false
     kids = child_nodes(n)
-    (kids === nothing || isempty(kids) || !is_sig(kids[1])) && return false
-    sig_name(kids[1]) !== nothing
+    (isnothing(kids) || isempty(kids) || !is_sig(kids[1])) && return false
+    named = sig_name(kids[1])
+    !isnothing(named)
 end
 
 # The name a signature defines. A dotted head (`Base.getindex`) is a method on a foreign module's generic:
 # the dispatch that reaches it is that module's, so it is not a name this module owns.
 function sig_name(sig)
     kids = child_nodes(sig)
-    kids === nothing && return nothing
+    isnothing(kids) && return nothing
     kd = JS.kind(sig)
     (kd == K"where" || kd == K"::") && return sig_name(kids[1])
     kd == K"call" || return nothing
@@ -57,11 +58,11 @@ function callable_receiver(sig)
     (kd == K"where" || kd == K"::") && return callable_receiver(child_nodes(sig)[1])
     kd == K"call" || return nothing
     kids = child_nodes(sig)
-    (kids === nothing || isempty(kids)) && return nothing
+    (isnothing(kids) || isempty(kids)) && return nothing
     head = kids[1]
     JS.kind(head) == K"::" || return nothing
     hk = child_nodes(head)
-    (hk === nothing || isempty(hk)) && return nothing
+    (isnothing(hk) || isempty(hk)) && return nothing
     type_name(last(hk))
 end
 
@@ -100,7 +101,7 @@ end
 # a type name, unwrapping `<:` (supertype) and `{}` (parameters) to the bare Identifier.
 function type_name(sig)
     sig.val isa Symbol && return sig.val
-    k = child_nodes(sig); (k === nothing || isempty(k)) && return nothing
+    k = child_nodes(sig); (isnothing(k) || isempty(k)) && return nothing
     JS.kind(sig) in (K"<:", K"curly") ? type_name(k[1]) : nothing
 end
 
@@ -126,19 +127,19 @@ function _argname!(names, a)
     k = JS.kind(a)
     if k == K"parameters" || k == K"tuple" || k == K"braces"
         kids = child_nodes(a)
-        kids === nothing && return
+        isnothing(kids) && return
         for c in kids; _argname!(names, c); end
     elseif k == K"::"
         kk = child_nodes(a)
-        (kk === nothing || length(kk) < 2) && return   # `::T` binds nothing; `x::T` names x
+        (isnothing(kk) || length(kk) < 2) && return   # `::T` binds nothing; `x::T` names x
         _argname!(names, kk[1])
     elseif k == K"<:" || k == K">:"
         kk = child_nodes(a)
-        (kk === nothing || isempty(kk)) && return
+        (isnothing(kk) || isempty(kk)) && return
         _argname!(names, kk[1])
     elseif k == K"=" || k == K"..."
         kk = child_nodes(a)
-        (kk === nothing || isempty(kk)) || _argname!(names, kk[1])
+        (isnothing(kk) || isempty(kk)) || _argname!(names, kk[1])
     elseif a.val isa Symbol
         push!(names, a.val)
     end
@@ -150,7 +151,7 @@ function where_vars!(names, sig)
     kd == K"::" && return where_vars!(names, child_nodes(sig)[1])
     kd == K"where" || return
     kids = child_nodes(sig)
-    kids === nothing && return
+    isnothing(kids) && return
     where_vars!(names, kids[1])
     for v in kids[2:end]; _argname!(names, v); end
 end
@@ -171,7 +172,7 @@ function sig_argnames(sig)
     end
     kd == K"call" || return names
     kids = child_nodes(sig)
-    kids === nothing && return names
+    isnothing(kids) && return names
     bind_receiver!(names, kids[1])
     for a in kids[2:end]; _argname!(names, a); end
     names
@@ -182,7 +183,7 @@ function is_method_form(n)
     k == K"function" && return true
     k == K"=" || return false
     kids = child_nodes(n)
-    kids !== nothing && !isempty(kids) && is_sig(kids[1])
+    !isnothing(kids) && !isempty(kids) && is_sig(kids[1])
 end
 
 # A node whose children are values: a call's arguments, a parameter list's defaults, a tuple's members.
@@ -200,26 +201,26 @@ end
 function collect_scope_assigns!(bound, n)
     if is_method_form(n)
         nm = sig_name(child_nodes(n)[1])
-        nm !== nothing && push!(bound, nm)
+        !isnothing(nm) && push!(bound, nm)
         return
     end
     is_nested_scope(n) && return
     k = JS.kind(n)
     kids = child_nodes(n)
     if k == K"="
-        (kids === nothing || isempty(kids)) && return
+        (isnothing(kids) || isempty(kids)) && return
         _argname!(bound, kids[1])
         length(kids) >= 2 && collect_scope_assigns!(bound, kids[2])
         return
     elseif k == K"local"
-        kids === nothing && return
+        isnothing(kids) && return
         for c in kids; _argname!(bound, c); end
         return
     elseif holds_values(k)
         walk_value_children!(c -> collect_scope_assigns!(bound, c), n)
         return
     end
-    kids === nothing && return
+    isnothing(kids) && return
     for c in kids
         collect_scope_assigns!(bound, c)
     end
@@ -230,11 +231,11 @@ function collect_scope_globals!(names, n)
     k = JS.kind(n)
     kids = child_nodes(n)
     if k == K"global"
-        kids === nothing && return
+        isnothing(kids) && return
         for c in kids; _argname!(names, c); end
         return
     end
-    kids === nothing && return
+    isnothing(kids) && return
     for c in kids
         collect_scope_globals!(names, c)
     end
@@ -527,7 +528,7 @@ end
 
 function walk_iteration!(fs, node, scope, on_qualified = nothing)
     kids = child_nodes(node)
-    kids === nothing && return
+    isnothing(kids) && return
     kind = JS.kind(node)
     if kind == K"in" || kind == K"="
         for index in 2:lastindex(kids)
@@ -544,17 +545,17 @@ end
 
 function walk_dot_base!(walk, n)
     kids = child_nodes(n)
-    (kids === nothing || length(kids) != 2) && return false
+    (isnothing(kids) || length(kids) != 2) && return false
     walk(kids[1])
     true
 end
 
 function walk_value_children!(walk, n)
     kids = child_nodes(n)
-    kids === nothing && return
+    isnothing(kids) && return
     for c in kids
         ck = child_nodes(c)
-        if JS.kind(c) == K"=" && ck !== nothing && length(ck) == 2
+        if JS.kind(c) == K"=" && !isnothing(ck) && length(ck) == 2
             walk(ck[2])
         else
             walk(c)
@@ -566,7 +567,7 @@ end
 function walk_assign_lhs!(fs, n, scope, on_qualified = nothing)
     k = JS.kind(n)
     kids = child_nodes(n)
-    kids === nothing && return
+    isnothing(kids) && return
     if k == K"::"
         if length(kids) >= 2
             walk_scoped!(fs, last(kids), scope, on_qualified)
@@ -690,7 +691,7 @@ function is_operator_call(node)
     JS.is_prefix_op_call(node) && return true
     JS.is_prefix_call(node) && return false
     kids = child_nodes(node)
-    (kids === nothing || isempty(kids)) && return false
+    (isnothing(kids) || isempty(kids)) && return false
     operator_token(last(kids))
 end
 
@@ -712,7 +713,7 @@ function name_of_head(head)
     end
     kind == K"." || return nothing
     kids = child_nodes(head)
-    kids === nothing && return nothing
+    isnothing(kids) && return nothing
     if length(kids) == 1
         member = kids[1]
         member.val isa Symbol || return nothing
@@ -733,7 +734,7 @@ function keyword_name(node)
     names_a_child = kind == K"=" || kind == K"..." || kind == K"::" || kind == K"<:" || kind == K">:"
     names_a_child || return nothing
     kids = child_nodes(node)
-    (kids === nothing || isempty(kids)) && return nothing
+    (isnothing(kids) || isempty(kids)) && return nothing
     keyword_name(kids[1])
 end
 
@@ -778,7 +779,7 @@ function keywords_text(call)
     isnothing(index) && return ""
     params = kids[index]
     pkids = child_nodes(params)
-    pkids === nothing && return ""
+    isnothing(pkids) && return ""
     named = Pair{Symbol,String}[]
     for param in pkids
         name = keyword_name(param)
@@ -797,7 +798,7 @@ end
 
 function operator_callee(node)
     kids = child_nodes(node)
-    kids === nothing && return nothing
+    isnothing(kids) && return nothing
     if JS.is_prefix_op_call(node)
         head = first(kids)
         head.val isa Symbol || return nothing
@@ -855,7 +856,7 @@ function walk_gen_spec!(fs, node, scope, interior_depth, on_qualified = nothing)
         return
     end
     kids = child_nodes(node)
-    kids === nothing && return
+    isnothing(kids) && return
     for index in eachindex(kids)
         child = kids[index]
         clause = is_iteration_clause(child)
@@ -888,9 +889,9 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         end
         return
     elseif is_method_form(n)
-        (kids === nothing || isempty(kids)) && return
+        (isnothing(kids) || isempty(kids)) && return
         receiver = callable_receiver(kids[1])
-        if receiver !== nothing && length(kids) >= 2
+        if !isnothing(receiver) && length(kids) >= 2
             inner = retarget(scope, receiver, Set{Symbol}())
             absorb_method!(fs, kids[1], kids[2], inner, on_qualified)
             return
@@ -901,7 +902,7 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         end
         return
     elseif k == K"->" || k == K"do"
-        (kids === nothing || length(kids) < 2) && return
+        (isnothing(kids) || length(kids) < 2) && return
         if !isnothing(on_qualified)
             walk_assign_lhs!(fs, kids[1], scope, on_qualified)
         end
@@ -910,7 +911,7 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         walk_scoped!(fs, kids[2], closed, on_qualified)
         return
     elseif k == K"let" || k == K"try"
-        kids === nothing && return
+        isnothing(kids) && return
         for index in eachindex(kids)
             child_scope = entered_scope(scope, n, index)
             walk_scoped!(fs, kids[index], child_scope, on_qualified)
@@ -918,7 +919,7 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         return
     elseif k == K"for" || k == K"while"
         # The header runs at this depth. The body is one loop further in.
-        (kids === nothing || isempty(kids)) && return
+        (isnothing(kids) || isempty(kids)) && return
         last_index = length(kids)
         for index in eachindex(kids)
             depth = scope.loop_depth
@@ -935,12 +936,12 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         end
         return
     elseif k == K"comprehension"
-        (kids === nothing || isempty(kids)) && return
+        (isnothing(kids) || isempty(kids)) && return
         walk_scoped!(fs, kids[1], scope, on_qualified)
         return
     elseif k == K"generator"
         # One scope. The wrapper around a generator adds none, and the first iterator stays outside.
-        (kids === nothing || isempty(kids)) && return
+        (isnothing(kids) || isempty(kids)) && return
         interior = scope.loop_depth + 1
         for index in 2:length(kids)
             depth = scope.loop_depth
@@ -954,7 +955,7 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         walk_scoped!(fs, kids[1], element_scope, on_qualified)
         return
     elseif k == K"global" || k == K"local"
-        kids === nothing && return
+        isnothing(kids) && return
         for declaration in kids
             if JS.kind(declaration) == K"="
                 walk_scoped!(fs, declaration, scope, on_qualified)
@@ -963,7 +964,7 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
             end
         end
         return
-    elseif k == K"=" && kids !== nothing && length(kids) >= 2 && !is_sig(kids[1])
+    elseif k == K"=" && !isnothing(kids) && length(kids) >= 2 && !is_sig(kids[1])
         read = read_scope(scope, scope.bound)
         walk_assign_lhs!(fs, kids[1], read, on_qualified)
         rhs_bound = child_locals(n, 2, scope.bound)
@@ -980,7 +981,7 @@ function walk_scoped!(fs, n, scope, on_qualified = nothing)
         return
     end
     n.val isa Symbol && !(n.val in scope.bound) && push!(fs.refs[scope.target], n.val)
-    kids === nothing && return
+    isnothing(kids) && return
     for index in eachindex(kids)
         child_scope = entered_scope(scope, n, index)
         walk_scoped!(fs, kids[index], child_scope, on_qualified)
@@ -990,7 +991,7 @@ end
 # the type names in each `x::T` field decl (const-wrapped included). Inner-constructor bodies are not
 # fields: the struct walk attaches them to this type's refs, same owner as the field types.
 function field_types!(r, block)
-    kb = child_nodes(block); kb === nothing && return
+    kb = child_nodes(block); isnothing(kb) && return
     for stmt in kb
         if JS.kind(stmt) == K"::"
             kk = child_nodes(stmt); length(kk) >= 2 && all_symbols!(r, kk[2])
@@ -1007,17 +1008,17 @@ function tuple_tail_slots(body)
     tail = body
     if JS.kind(tail) == K"block"
         kb = child_nodes(tail)
-        (kb === nothing || isempty(kb)) && return 0
+        (isnothing(kb) || isempty(kb)) && return 0
         tail = last(kb)
     end
     if JS.kind(tail) == K"return"
         kr = child_nodes(tail)
-        (kr === nothing || isempty(kr)) && return 0
+        (isnothing(kr) || isempty(kr)) && return 0
         tail = first(kr)
     end
     JS.kind(tail) == K"tuple" || return 0
     slots = child_nodes(tail)
-    slots === nothing && return 0
+    isnothing(slots) && return 0
     any(s -> JS.kind(s) in (K"=", K"parameters"), slots) && return 0
     length(slots)
 end
@@ -1042,21 +1043,21 @@ function absorb_defaults!(fs, sig, scope, on_qualified = nothing)
     end
     kd == K"call" || return
     kids = child_nodes(sig)
-    kids === nothing && return
+    isnothing(kids) && return
     if !isnothing(on_qualified)
         walk_scoped!(fs, kids[1], noted, on_qualified)
     end
     bind_receiver!(prefix, kids[1])
     for a in kids[2:end]
         args = JS.kind(a) == K"parameters" ? child_nodes(a) : (a,)
-        args === nothing && continue
+        isnothing(args) && continue
         for arg in args
             if !isnothing(on_qualified)
                 walk_assign_lhs!(fs, arg, noted, on_qualified)
             end
             if JS.kind(arg) == K"="
                 rhs = child_nodes(arg)
-                if rhs !== nothing && length(rhs) >= 2
+                if !isnothing(rhs) && length(rhs) >= 2
                     walk_scoped!(fs, rhs[2], valued, on_qualified)
                 end
             end
@@ -1077,12 +1078,12 @@ end
 
 # depth counts function-def nesting; only defs at depth 0 are top-level (a local closure's def is not).
 function walk_defs!(fs, n, depth, current)
-    n.val isa Symbol && push!(current === nothing ? fs.modrefs : fs.refs[current], n.val)
-    kids = child_nodes(n); kids === nothing && return
+    n.val isa Symbol && push!(isnothing(current) ? fs.modrefs : fs.refs[current], n.val)
+    kids = child_nodes(n); isnothing(kids) && return
     k = JS.kind(n)
     if k == K"." && walk_dot_base!(c -> walk_defs!(fs, c, depth, current), n)
         member = kids[2].val
-        member isa Symbol && push!(current === nothing ? fs.modrefs : fs.refs[current], member)
+        member isa Symbol && push!(isnothing(current) ? fs.modrefs : fs.refs[current], member)
         return
     elseif k == K"export" || k == K"public"
         return   # a listed name, not a call, a value read, or a qualified access
@@ -1100,16 +1101,16 @@ function walk_defs!(fs, n, depth, current)
         for c in kids; walk_defs!(fs, c, depth, current); end
     elseif k == K"struct" || k == K"abstract"
         nm = type_name(first(kids))
-        if depth == 0 && nm !== nothing
+        if depth == 0 && !isnothing(nm)
             push!(fs.types, nm); fs.line[nm] = JS.source_location(n)[1]
             r = get!(fs.refs, nm, Set{Symbol}())                                       # a type's refs = the types it couples to
             JS.kind(first(kids)) == K"<:" && all_symbols!(r, child_nodes(first(kids))[2])    # supertype
             k == K"struct" && field_types!(r, last(kids))                              # field types
         end
         for c in kids
-            if JS.kind(c) == K"block" && depth == 0 && nm !== nothing
+            if JS.kind(c) == K"block" && depth == 0 && !isnothing(nm)
                 stmts = child_nodes(c)
-                stmts === nothing && continue
+                isnothing(stmts) && continue
                 for stmt in stmts
                     owner = is_inner_constructor(stmt) ? nm : current
                     walk_defs!(fs, stmt, depth + 1, owner)
@@ -1120,7 +1121,7 @@ function walk_defs!(fs, n, depth, current)
         end
     elseif k == K"function" || (k == K"=" && !isempty(kids) && is_sig(kids[1]))
         nm = sig_name(kids[1])
-        top = depth == 0 && nm !== nothing
+        top = depth == 0 && !isnothing(nm)
         def_line = source_line(n)
         if top
             push!(fs.funcs, nm)
@@ -1191,14 +1192,14 @@ end
 
 function scan_defs(src::AbstractString, filename = "none")
     tree = parse_file(src, filename)
-    tree === nothing && return empty_scan()
+    isnothing(tree) && return empty_scan()
     scan_tree(tree)
 end
 
 # every Symbol anywhere under a node, collected into `out`.
 function all_symbols!(out, n)
     n.val isa Symbol && push!(out, n.val)
-    kids = child_nodes(n); kids === nothing && return
+    kids = child_nodes(n); isnothing(kids) && return
     for c in kids; all_symbols!(out, c); end
 end
 
@@ -1209,14 +1210,14 @@ const INFIX_OPS = Set((:(<), :(>), :(<=), :(>=), :(==), :(!=), :+, :-, :*, :/))
 function infix_op(n)
     JS.kind(n) == K"call" || return nothing
     kids = child_nodes(n)
-    (kids === nothing || length(kids) != 3) && return nothing
+    (isnothing(kids) || length(kids) != 3) && return nothing
     kids[2].val in INFIX_OPS ? kids[2].val : nothing
 end
 
 # a prefix call's own arguments, kwargs block excluded: `min(a, b)`, `clamp(x, lo, hi)`.
 function call_args(n)
     kids = child_nodes(n)
-    kids === nothing && return Any[]
+    isnothing(kids) && return Any[]
     [c for c in kids[2:end] if JS.kind(c) != K"parameters"]
 end
 
@@ -1225,17 +1226,17 @@ end
 function walk_with_enclosing(visit, n, current = Symbol(""))
     kids = child_nodes(n)
     k = JS.kind(n)
-    if k == K"function" || (k == K"=" && kids !== nothing && !isempty(kids) && is_sig(kids[1]))
+    if k == K"function" || (k == K"=" && !isnothing(kids) && !isempty(kids) && is_sig(kids[1]))
         nm = sig_name(kids[1])
-        body = nm === nothing ? current : nm
-        kids === nothing && return
+        body = isnothing(nm) ? current : nm
+        isnothing(kids) && return
         for c in kids
             walk_with_enclosing(visit, c, body)
         end
         return
     end
     visit(n, current)
-    kids === nothing && return
+    isnothing(kids) && return
     for c in kids
         walk_with_enclosing(visit, c, current)
     end

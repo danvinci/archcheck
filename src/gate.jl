@@ -53,7 +53,7 @@ function gate(pkg::Module;
     previous = previous_fingerprints(report_path)
     current = Set(fingerprint(f) for f in findings)
     new = new_findings(findings, previous)
-    fixed = previous === nothing ? 0 : length(setdiff(previous, current))
+    fixed = isnothing(previous) ? 0 : length(setdiff(previous, current))
     print_architecture(io, findings, new, fixed, index.rank, severity)
     open(handle -> emit_jsonl(handle, findings, severity), report_path, "w")
 
