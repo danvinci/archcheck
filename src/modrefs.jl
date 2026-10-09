@@ -139,15 +139,6 @@ function qualified_ref(from, scope, file, line, modules, path, via)
     ModRef(from, to, file, line, via, reached)
 end
 
-# The call inside a signature, past `where` clauses and a return type.
-function signature_call(sig)
-    while JS.kind(sig) == K"where" || JS.kind(sig) == K"::"
-        sig = first(child_nodes(sig))
-    end
-    JS.kind(sig) == K"call" || return nothing
-    sig
-end
-
 # A signature's parts other than the method name: arguments, `where` bounds, return type.
 function walk_signature_rest!(refs, from, scope, file, modules, sig)
     kids = child_nodes(sig)

@@ -4,7 +4,13 @@ module ArchCheck
 using JSON
 
 include("finding.jl")
+include("syntax_nodes.jl")
+include("syntax_sig.jl")
 include("syntax.jl")
+include("syntax_scope.jl")
+include("syntax_calls.jl")
+include("syntax_walk.jl")
+include("syntax_defs.jl")
 include("layout.jl")
 include("modrefs.jl")
 include("graph.jl")
