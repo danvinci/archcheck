@@ -26,6 +26,7 @@ include("checks_opt.jl")
 include("checks_trace.jl")
 include("checks_derived.jl")
 include("checks_waits.jl")
+include("checks_readers.jl")
 include("catalog.jl")
 include("gate.jl")
 
@@ -43,7 +44,7 @@ export StorageOverloads, ExpressionClones, ToleranceSearch
 export OverlappingCalls, KeptBuilders
 export UnreachedMethods
 export Rebuilds, TwoNames, Waits, UnreadWaits
-export OneProducer, CacheKeys, CachedCalls
+export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export Independent
 export check_corpus, check_backedges, is_backedge, is_downrank, find_cycles, check_cycles
 export check_contracts_logic

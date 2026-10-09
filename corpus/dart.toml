@@ -370,3 +370,43 @@ expect = "fire"
 kind = "rebuild"
 file = "lofts/brep.jl"
 symbol = "Shape"
+
+[checks.DerivedReaders]
+
+[mutants.readers_leak]
+base = "builders"
+source = "builders"
+script = "mutants/readers_leak.jl"
+
+[[mutants.readers_leak.derived]]
+producer = "distance"
+readers = []
+converters = ["as_margin"]
+
+[mutants.readers_bridge]
+base = "builders"
+source = "builders"
+script = "mutants/readers_bridge.jl"
+
+[[mutants.readers_bridge.derived]]
+producer = "distance"
+readers = []
+converters = ["as_margin"]
+
+[[expectations]]
+case = "readers"
+check = "DerivedReaders"
+state = "readers_leak"
+expect = "fire"
+kind = "unlisted_reader"
+file = "lofts/containment.jl"
+symbol = "_chunk_worst"
+
+[[expectations]]
+case = "readers"
+check = "DerivedReaders"
+state = "readers_bridge"
+expect = "quiet"
+kind = "unlisted_reader"
+file = "lofts/containment.jl"
+symbol = "_chunk_worst"

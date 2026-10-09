@@ -461,6 +461,24 @@ function child_locals(node, index, outer)
     copy(outer)
 end
 
+# The lambda arguments and loop variables this child binds itself, including a name the outer scope already
+# holds, which a merged scope set would show as unchanged.
+function child_bindings(node, index)
+    names = Set{Symbol}()
+    kids = child_nodes(node)
+    isnothing(kids) && return names
+    kind = JS.kind(node)
+    if (kind == K"->" || kind == K"do") && index > 1 && !isempty(kids)
+        _argname!(names, kids[1])
+    elseif kind == K"for" && index == length(kids)
+        last_spec = index - 1
+        for spec_index in 1:last_spec
+            iteration_names!(names, kids[spec_index])
+        end
+    end
+    names
+end
+
 function is_sync_macro(node::JS.SyntaxNode)
     JS.kind(node) == K"macrocall" || return false
     kids = child_nodes(node)
