@@ -66,7 +66,8 @@ function exhibit_derived()
         cache = :held,
         readers = (Exhibits.Shape.read_span,),
     )
-    (declared,)
+    plain = ArchCheck.Derived(Exhibits.Shape.plain_label)
+    (declared, plain)
 end
 
 function exhibit_checks()
@@ -150,7 +151,6 @@ function self_entries()
 end
 
 function self_opt()
-    ArchCheck.OptAnalysis()
     index_types = Tuple{String, Dict{Symbol,Vector{Int}}, Dict{String,Symbol}}
     index_entry = ArchCheck.OptEntry(ArchCheck.build_source_index, index_types)
     scan_types = Tuple{Base.JuliaSyntax.SyntaxNode}
@@ -206,74 +206,9 @@ function self_gate(; report_path, io)
     )
 end
 
-ignore_owner(_) = false
-
-function vararg_parameter()
-    signature = Tuple{Vararg{Int}}
-    unwrapped = Base.unwrap_unionall(signature)
-    unwrapped.parameters[1]
-end
-
-function exercise_types()
-    ArchCheck.is_foreign(1, ignore_owner)
-    ArchCheck.is_foreign(:name, ignore_owner)
-    parameter = vararg_parameter()
-    ArchCheck.is_foreign(parameter, ignore_owner)
-    members = (Int, String)
-    ArchCheck.any_member_foreign(members, ignore_owner)
-    ArchCheck.is_foreign(Union{Int,String}, ignore_owner)
-    vars = TypeVar[]
-    ArchCheck.is_open_position(Union{Int,String}, vars)
-    opened = Vector{T} where T
-    ArchCheck.is_open_position(opened, vars)
-    problems = Set{String}()
-    omitted = Symbol[]
-    ArchCheck.extend_key!(problems, omitted, nothing, nothing, nothing, nothing)
-    found = ArchCheck.Finding[]
-    ArchCheck.append_uncached!(found, nothing, nothing, nothing)
-    var = TypeVar(:T)
-    bound = TypeVar[]
-    free = TypeVar[]
-    ArchCheck.contains_typevar(free, var)
-    ArchCheck.collect_free_typevars!(free, bound, var)
-    mixed = Union{Int,var}
-    ArchCheck.collect_free_typevars!(free, bound, mixed)
-    wrapped = UnionAll(var, Vector{var})
-    ArchCheck.collect_free_typevars!(free, bound, wrapped)
-    ArchCheck.collect_free_typevars!(free, bound, parameter)
-    held = Vector{var}
-    ArchCheck.collect_free_typevars!(free, bound, held)
-    ArchCheck.collect_free_typevars!(free, bound, 1)
-    type_error = TypeError(:typeassert, "", Int, "x")
-    ArchCheck.type_application_failed(type_error)
-    method_error = MethodError(sin, (1,))
-    ArchCheck.type_application_failed(method_error)
-    argument_error = ArgumentError("bad")
-    ArchCheck.type_application_failed(argument_error)
-    ArchCheck.type_application_failed(1)
-    ArchCheck.skipped_callee(1)
-    ArchCheck.skipped_callee(Core.tuple)
-    ArchCheck.skipped_callee(Core.Intrinsics.add_int)
-    ArchCheck.skipped_callee(sin)
-    ArchCheck.skipped_callee(NamedTuple)
-    code = (slottypes = Any[Int],)
-    argument = Core.Argument(1)
-    ArchCheck.value_type_of(code, argument)
-    constant = Core.Const(1)
-    ArchCheck.value_type_of(code, constant)
-    resolved = Core.Const(sin)
-    ArchCheck.resolve_callee(code, resolved)
-    quoted = QuoteNode(:name)
-    ArchCheck.resolve_callee(code, quoted)
-    ArchCheck.resolve_callee(code, sin)
-    ArchCheck.resolve_callee(code, Int)
-    nothing
-end
-
 function exhibit_gate_quiet()
     report = joinpath(mktempdir(), "exhibits.jsonl")
     probes = exhibit_probes()
     run_exhibit_gate(report, devnull, probes)
-    exercise_types()
     nothing
 end

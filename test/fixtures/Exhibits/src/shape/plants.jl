@@ -21,6 +21,11 @@ function Base.identity(text::String, count::Int)
     count
 end
 
+# A value parameter, a Union, a Vararg and a Symbol, on a foreign function.
+function Base.identity(cells::Vector{Int}, choice::Union{Int,String}, tail::Tuple{Vararg{Int}}, marker::Val{:arm})
+    length(cells)
+end
+
 # storage_overload: one element type, two array storages
 function store_copy(values::Vector{Int})
     length(values)
@@ -48,6 +53,29 @@ end
 # abstract_field: the field type leaves dispatch open
 struct Loose
     value::Real   # magnitude stored without a concrete type
+end
+
+# A wrapper whose parameter keeps a free type variable for a later field read.
+struct Hold{P}
+    value::Int   # payload the read names
+end
+
+# abstract_field: a Union parameter, and a union-all over a free length
+struct OpenBox{T}
+    cells::Vector{T}              # element type is this struct's parameter
+    slot::Ref{Union{T,Int}}       # Union parameter of a datatype
+    rows::(Array{T,N} where N)    # union-all over a free length
+    fixed::Tuple{Vararg{T,3}}     # vararg of fixed length
+    held::Hold{Union{Tuple{Vararg{T,3}}, Array{T,N} where N}}  # free union, vararg and union-all
+end
+
+function read_open(box::OpenBox)
+    box.cells
+    box.slot
+    box.rows
+    box.fixed
+    box.held.value
+    0
 end
 
 # type_branch: a runtime type test on the method's own parameter

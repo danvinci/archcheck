@@ -38,6 +38,21 @@ function exercise()
     PlainItem(1)
     Loose(1.0)
     Base.identity("a", 1)
+    cells = Int[1]
+    marker = Val(:arm)
+    tail = (1,)
+    Base.identity(cells, 1, tail, marker)
+    empty_cells = Int[]
+    held_ref = Ref(1)
+    packed = (1, 1, 1)
+    parameter = Union{Tuple{Vararg{Int,3}}, Array{Int,N} where N}
+    held = Hold{parameter}(1)
+    opened = OpenBox(empty_cells, held_ref, empty_cells, packed, held)
+    read_open(opened)
+    plain_label(1)
+    piece = Piece(1, 1)
+    span = again_span(piece)
+    pass_span(span)
     near_gap([0.0, 1.0])
     numbers = [1, 2, 3]
     held = Set([1])
