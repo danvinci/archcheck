@@ -226,39 +226,94 @@ function scan_integer(node, bindings)
     operation === :+ ? left + right : left - right
 end
 
-function scan_grids(nodes, bindings)
-    stops = Dict{Int,Int}()
-    divisors = Set{Int}()
-    lengths = Dict{Int,Int}()
-    for node in nodes
-        JS.kind(node) in (K"call", K"dotcall") || continue
-        children = child_nodes(node)
-        line = Int(JS.source_location(node)[1])
-        if length(children) == 3 && children[2].val === :(:)
-            children[1].val in (0, 1) || continue
-            count = scan_integer(children[3], bindings)
-            isnothing(count) && continue
-            stops[count] = get(stops, count, line)
-        elseif length(children) == 3 && children[2].val === :/
-            count = scan_integer(children[3], bindings)
-            isnothing(count) || push!(divisors, count)
-        elseif children[1].val in (:range, :LinRange)
-            arguments = call_args(node)
-            positional = filter(arg -> JS.kind(arg) != K"=", arguments)
-            length(positional) >= 2 || continue
-            count = length(positional) == 3 ? scan_integer(positional[3], bindings) : nothing
-            for child in children
-                options = JS.kind(child) == K"parameters" ? child_nodes(child) : (child,)
-                for option in options
-                    JS.kind(option) == K"=" || continue
-                    pair = child_nodes(option)
-                    pair[1].val === :length || continue
-                    count = scan_integer(pair[2], bindings)
-                end
-            end
-            isnothing(count) || (lengths[count] = line)
-        end
+function is_index_colon(children)
+    length(children) == 3 || return false
+    children[2].val === :(:) || return false
+    children[1].val in (0, 1)
+end
+
+function is_division(children)
+    length(children) == 3 || return false
+    children[2].val === :/
+end
+
+function record_stop!(stops, children, bindings, line)
+    count = scan_integer(children[3], bindings)
+    isnothing(count) && return
+    known = get(stops, count, line)
+    stops[count] = known
+end
+
+function record_divisor!(divisors, children, bindings)
+    count = scan_integer(children[3], bindings)
+    isnothing(count) && return
+    push!(divisors, count)
+end
+
+# Arguments after the callee, keywords written as `name = value` left out.
+function counted_arguments(node)
+    arguments = call_args(node)
+    counted = JS.SyntaxNode[]
+    for argument in arguments
+        JS.kind(argument) == K"=" && continue
+        push!(counted, argument)
     end
+    counted
+end
+
+function option_nodes(child)
+    JS.kind(child) == K"parameters" || return (child,)
+    child_nodes(child)
+end
+
+function keyword_length(count, child, bindings)
+    for option in option_nodes(child)
+        JS.kind(option) == K"=" || continue
+        pair = child_nodes(option)
+        pair[1].val === :length || continue
+        count = scan_integer(pair[2], bindings)
+    end
+    count
+end
+
+function range_length(node, children, bindings)
+    positional = counted_arguments(node)
+    length(positional) >= 2 || return nothing
+    count = nothing
+    if length(positional) == 3
+        count = scan_integer(positional[3], bindings)
+    end
+    for child in children
+        count = keyword_length(count, child, bindings)
+    end
+    count
+end
+
+function record_range!(lengths, node, children, bindings, line)
+    children[1].val in (:range, :LinRange) || return
+    count = range_length(node, children, bindings)
+    isnothing(count) && return
+    lengths[count] = line
+end
+
+function record_grid!(stops, divisors, lengths, node, bindings)
+    kind = JS.kind(node)
+    kind == K"call" || kind == K"dotcall" || return
+    children = child_nodes(node)
+    location = JS.source_location(node)
+    line = Int(location[1])
+    if is_index_colon(children)
+        record_stop!(stops, children, bindings, line)
+        return
+    end
+    if is_division(children)
+        record_divisor!(divisors, children, bindings)
+        return
+    end
+    record_range!(lengths, node, children, bindings, line)
+end
+
+function fold_divisors!(lengths, stops, divisors)
     for count in divisors
         if haskey(stops, count)
             lengths[count] = stops[count]
@@ -266,72 +321,154 @@ function scan_grids(nodes, bindings)
             lengths[count] = stops[count - 1]
         end
     end
+end
+
+function scan_grids(nodes, bindings)
+    stops = Dict{Int,Int}()
+    divisors = Set{Int}()
+    lengths = Dict{Int,Int}()
+    for node in nodes
+        record_grid!(stops, divisors, lengths, node, bindings)
+    end
+    fold_divisors!(lengths, stops, divisors)
     lengths
 end
 
-function check_scan_seeds(index::SourceIndex; directories)
-    files = filter(index.files) do file
-        any(directories) do directory
-            path = joinpath(index.repo, file.path)
-            root = joinpath(index.repo, directory)
-            is_within(path, root)
-        end
+function is_seed_file(index, file, directories)
+    path = joinpath(index.repo, file.path)
+    for directory in directories
+        root = joinpath(index.repo, directory)
+        is_within(path, root) && return true
     end
+    false
+end
+
+function seed_files(index, directories)
+    files = FileNode[]
+    for file in index.files
+        is_seed_file(index, file, directories) && push!(files, file)
+    end
+    files
+end
+
+function record_module_constant!(constants, node, owner)
+    owner_name = string(owner)
+    isempty(owner_name) || return
+    JS.kind(node) == K"const" || return
+    for assignment in child_nodes(node)
+        JS.kind(assignment) == K"=" || continue
+        pair = child_nodes(assignment)
+        name = pair[1].val
+        value = pair[2].val
+        name isa Symbol || continue
+        value isa Int || continue
+        constants[name] = value
+    end
+end
+
+function record_seed_node!(owners, constants, node, owner)
+    nodes = get!(Vector{JS.SyntaxNode}, owners, owner)
+    push!(nodes, node)
+    record_module_constant!(constants, node, owner)
+end
+
+function collect_file_seeds!(groups, constants, file)
+    owners = Dict{Symbol,Vector{JS.SyntaxNode}}()
+    module_constants = get!(Dict{Symbol,Int}, constants, file.mod)
+    walk_with_enclosing(file.tree) do node, owner
+        record_seed_node!(owners, module_constants, node, owner)
+    end
+    groups[file.path] = owners
+end
+
+function seed_tables(files)
     groups = Dict{String,Dict{Symbol,Vector{JS.SyntaxNode}}}()
     constants = Dict{Symbol,Dict{Symbol,Int}}()
     for file in files
-        owners = Dict{Symbol,Vector{JS.SyntaxNode}}()
-        module_constants = get!(Dict{Symbol,Int}, constants, file.mod)
-        walk_with_enclosing(file.tree) do node, owner
-            owner_nodes = get!(Vector{JS.SyntaxNode}, owners, owner)
-            push!(owner_nodes, node)
-            isempty(string(owner)) && JS.kind(node) == K"const" || return
-            for assignment in child_nodes(node)
-                JS.kind(assignment) == K"=" || continue
-                pair = child_nodes(assignment)
-                name = pair[1].val
-                value = pair[2].val
-                name isa Symbol && value isa Int || continue
-                module_constants[name] = value
-            end
-        end
-        groups[file.path] = owners
+        collect_file_seeds!(groups, constants, file)
     end
+    groups, constants
+end
+
+function record_assignment!(bindings, assigned, blocked, node)
+    pair = child_nodes(node)
+    name = pair[1].val
+    name isa Symbol || return
+    value = pair[2].val
+    if name in assigned || !(value isa Int)
+        push!(blocked, name)
+    else
+        bindings[name] = value
+    end
+    push!(assigned, name)
+end
+
+function record_binding!(bindings, assigned, blocked, node, owner)
+    if JS.kind(node) == K"call" && sig_name(node) === owner
+        names = sig_argnames(node)
+        union!(blocked, names)
+        return
+    end
+    JS.kind(node) == K"=" || return
+    record_assignment!(bindings, assigned, blocked, node)
+end
+
+function method_bindings(nodes, owner, module_constants)
+    bindings = copy(module_constants)
+    assigned = Set{Symbol}()
+    blocked = Set{Symbol}()
+    for node in nodes
+        record_binding!(bindings, assigned, blocked, node, owner)
+    end
+    for name in blocked
+        delete!(bindings, name)
+    end
+    bindings
+end
+
+function grid_finding(file, owner, nodes, module_constants)
+    owner_name = string(owner)
+    isempty(owner_name) && return nothing
+    bindings = method_bindings(nodes, owner, module_constants)
+    grids = scan_grids(nodes, bindings)
+    isempty(grids) && return nothing
+    counts = collect(keys(grids))
+    sort!(counts)
+    samples = join(counts, ", ")
+    evidence = [:samples => samples]
+    detail = "fixed integer counts form a uniform parameter grid"
+    line = minimum(values(grids))
+    Finding(file.mod, :scan_seed, file.path, owner_name, line, detail, evidence)
+end
+
+function seed_findings(file, groups, constants)
+    findings = Finding[]
+    haskey(groups, file.path) || return findings
+    owners = groups[file.path]
+    module_constants = constants[file.mod]
+    for (owner, nodes) in owners
+        finding = grid_finding(file, owner, nodes, module_constants)
+        isnothing(finding) || push!(findings, finding)
+    end
+    findings
+end
+
+function finding_before(left, right)
+    if left.file != right.file
+        return left.file < right.file
+    end
+    if left.line != right.line
+        return left.line < right.line
+    end
+    left.symbol < right.symbol
+end
+
+function check_scan_seeds(index::SourceIndex; directories)
+    files = seed_files(index, directories)
+    groups, constants = seed_tables(files)
     findings = Finding[]
     for file in files
-        haskey(groups, file.path) || continue
-        for (owner, nodes) in groups[file.path]
-            isempty(string(owner)) && continue
-            bindings = copy(constants[file.mod])
-            assigned = Set{Symbol}()
-            blocked = Set{Symbol}()
-            for node in nodes
-                if JS.kind(node) == K"call" && sig_name(node) === owner
-                    union!(blocked, sig_argnames(node))
-                elseif JS.kind(node) == K"="
-                    pair = child_nodes(node)
-                    name = pair[1].val
-                    name isa Symbol || continue
-                    value = pair[2].val
-                    if name in assigned || !(value isa Int)
-                        push!(blocked, name)
-                    else
-                        bindings[name] = value
-                    end
-                    push!(assigned, name)
-                end
-            end
-            foreach(name -> delete!(bindings, name), blocked)
-            grids = scan_grids(nodes, bindings)
-            isempty(grids) && continue
-            counts = sort!(collect(keys(grids)))
-            evidence = [:samples => join(counts, ", ")]
-            detail = "fixed integer counts form a uniform parameter grid"
-            line = minimum(values(grids))
-            symbol = string(owner)
-            finding = Finding(file.mod, :scan_seed, file.path, symbol, line, detail, evidence)
-            push!(findings, finding)
-        end
+        append!(findings, seed_findings(file, groups, constants))
     end
-    sort!(findings, by = finding -> (finding.file, finding.line, finding.symbol))
+    sort!(findings, lt = finding_before)
 end
