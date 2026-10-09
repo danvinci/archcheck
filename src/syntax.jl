@@ -226,6 +226,26 @@ function collect_scope_assigns!(bound, n)
     end
 end
 
+# Every name a binding under node introduces: assignment and loop targets, closure and method parameters, local
+# method names, `local` and `catch` variables. Keyword labels count too, which only makes the set larger.
+function bound_names!(names, node)
+    kids = child_nodes(node)
+    isnothing(kids) && return
+    k = JS.kind(node)
+    if is_method_form(node)
+        local_name = sig_name(kids[1])
+        isnothing(local_name) || push!(names, local_name)
+        union!(names, sig_argnames(kids[1]))
+    elseif k == K"=" || k == K"in" || k == K"->" || k == K"do" || k == K"catch"
+        _argname!(names, kids[1])
+    elseif k == K"local"
+        foreach(declared -> _argname!(names, declared), kids)
+    end
+    for c in kids
+        bound_names!(names, c)
+    end
+end
+
 function collect_scope_globals!(names, n)
     is_nested_scope(n) && return
     k = JS.kind(n)

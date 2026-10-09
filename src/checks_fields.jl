@@ -1,493 +1,248 @@
 # foreign-field: a field read on another module's struct, unless it is a contract type or a public type documenting
 # the field. Receivers are typed by annotations, aliases, field chains, and inference when it gives one concrete type.
 
-# Whether `vars` holds this type variable by identity.
-function contains_typevar(vars, var)
-    for seen in vars
-        seen === var && return true
-    end
-    false
+# Locals are those `child_locals` records for this child. The type dict stays shared, so a binding made
+# earlier in the walk remains visible.
+function child_scope(scope, node, index)
+    locals = child_locals(node, index, scope.locals)
+    Scope(scope.types, locals)
 end
 
-# Free type variables of a receiver type, skipping any an enclosing union-all binds.
-function collect_free_typevars!(found, bound, @nospecialize(receiver_type))
-    if receiver_type isa TypeVar
-        contains_typevar(bound, receiver_type) && return
-        contains_typevar(found, receiver_type) && return
-        push!(found, receiver_type)
-        return
-    end
-    if receiver_type isa Union
-        collect_free_typevars!(found, bound, receiver_type.a)
-        collect_free_typevars!(found, bound, receiver_type.b)
-        return
-    end
-    if receiver_type isa UnionAll
-        push!(bound, receiver_type.var)
-        collect_free_typevars!(found, bound, receiver_type.body)
-        pop!(bound)
-        return
-    end
-    if receiver_type isa Core.TypeofVararg
-        collect_free_typevars!(found, bound, receiver_type.T)
-        isdefined(receiver_type, :N) || return
-        collect_free_typevars!(found, bound, receiver_type.N)
-        return
-    end
-    receiver_type isa DataType || return
-    for parameter in receiver_type.parameters
-        collect_free_typevars!(found, bound, parameter)
-    end
-end
-
-# A datatype whose parameters are still free is a union-all body. Binding those parameters yields the
-# union-all whose unwrap is this same datatype.
-function bind_free_parameters(@nospecialize(receiver_type))
-    receiver_type isa TypeVar && return receiver_type
-    Base.has_free_typevars(receiver_type) || return receiver_type
-    found = TypeVar[]
-    bound = TypeVar[]
-    collect_free_typevars!(found, bound, receiver_type)
-    wrapped = receiver_type
-    for parameter in reverse(found)
-        wrapped = UnionAll(parameter, wrapped)
-    end
-    wrapped
-end
-
-# One field read on a typed receiver.
-struct FieldRead{T}
-    type::Type{T}               # the receiver's declared type, or the concrete type inferred for it
-    field::Symbol               # the name read
-    line::Int                   # source line
-    receiver::String            # the receiver expression as written
-    function FieldRead(receiver_type::Type, field::Symbol, line::Int, receiver::AbstractString)
-        text = String(receiver)
-        parameter = bind_free_parameters(receiver_type)
-        new{parameter}(parameter, field, line, text)
-    end
-end
-
-# A bound value's type, computed on the first read that needs it, so inference runs only for values read through.
-mutable struct Deferred{F<:Function, A<:Tuple}
-    const compute::F            # computes the type, or nothing, from `arguments`
-    const arguments::A          # what compute reads, captured when the binding is walked
-    type::Union{Type,Nothing}   # the result, once computed
-    is_computed::Bool           # whether compute has run
-end
-function Deferred(compute::F, arguments::A) where {F<:Function, A<:Tuple}
-    Deferred{F,A}(compute, arguments, nothing, false)
-end
-
-# A binding's type: a declared type as it is, a deferred one computed on first use.
-resolved(::Nothing) = nothing
-resolved(T::Type) = T
-function resolved(deferred::Deferred)
-    if !deferred.is_computed
-        deferred.type = deferred.compute(deferred.arguments...)
-        deferred.is_computed = true
-    end
-    deferred.type
-end
-
-# Names typed within one scope.
-struct Scope
-    types::Dict{Symbol,Union{Type,Deferred}}   # name -> declared type, or its value's type deferred to a read
-    locals::Set{Symbol}                        # names a local binding may hold; a call through one reaches no global
-end
-function Base.copy(scope::Scope)
-    types = copy(scope.types)
-    locals = copy(scope.locals)
-    Scope(types, locals)
-end
-
-# One file's reads, walked in the namespace of the module that owns the file.
-struct ReadState{E}
-    mod::Module                      # the file's module, where annotations and callees resolve
-    reads::Vector{E}                 # reads on typed receivers
-end
-
-# The value a dotted path binds in M when every binding along it is constant; nothing otherwise.
-function constant_value(M::Module, path)
-    value = M
-    for name in path
-        value isa Module && isdefined(value, name) && isconst(value, name) || return nothing
-        value = getfield(value, name)
-    end
-    value
-end
-
-# The type an annotation names in M: a name or a dotted path, parameters dropped, or the Union of the types its
-# members name. A `where` variable names none, and so does a Union with a member that names none.
-function annotation_type(M::Module, node, typevars)
-    if JS.kind(node) == K"curly"
-        head, parameters... = child_nodes(node)
-        named = annotation_type(M, head, typevars)
-        named === Union || return named
-        members = [annotation_type(M, parameter, typevars) for parameter in parameters]
-        any(isnothing, members) && return nothing
-        return Union{members...}
-    end
-    path = dotted_names(node)
-    isnothing(path) && return nothing
-    first(path) in typevars && return nothing
-    value = constant_value(M, path)
-    value isa Type ? value : nothing
-end
-
-function bind_annotated!(types, M, arg, typevars)
-    k = JS.kind(arg)
-    k == K"=" && return bind_annotated!(types, M, first(child_nodes(arg)), typevars)
-    k == K"::" || return
-    kids = child_nodes(arg)
-    length(kids) == 2 || return
-    name = kids[1].val
-    name isa Symbol || return
-    declared = annotation_type(M, kids[2], typevars)
-    if !isnothing(declared)
-        types[name] = declared
-    end
-end
-
-# Every name a binding under node introduces: assignment and loop targets, closure and method parameters, local
-# method names, `local` and `catch` variables. Keyword labels count too, which only makes the set larger.
-function bound_names!(names, node)
+# Annotations from the signature, on a fresh type dict. The signature's default values stay unread.
+function method_types(mod, node, outer::Scope)
+    types = copy(outer.types)
     kids = child_nodes(node)
-    isnothing(kids) && return
-    k = JS.kind(node)
-    if is_method_form(node)
-        local_name = sig_name(kids[1])
-        isnothing(local_name) || push!(names, local_name)
-        union!(names, sig_argnames(kids[1]))
-    elseif k == K"=" || k == K"in" || k == K"->" || k == K"do" || k == K"catch"
-        _argname!(names, kids[1])
-    elseif k == K"local"
-        foreach(declared -> _argname!(names, declared), kids)
+    (isnothing(kids) || isempty(kids)) && return types
+    sig = first(kids)
+    argument_names = sig_argnames(sig)
+    for name in argument_names
+        delete!(types, name)
     end
-    for c in kids
-        bound_names!(names, c)
-    end
-end
-
-# The scope inside a method: the outer one less every name the signature binds, plus its annotated arguments.
-# Every name the method binds is local there.
-function method_scope(M, node, outer::Scope)
-    scope = copy(outer)
-    sig, body... = child_nodes(node)
-    for name in sig_argnames(sig)
-        delete!(scope.types, name)
-        push!(scope.locals, name)
-    end
-    foreach(part -> bound_names!(scope.locals, part), body)
     typevars = Symbol[]
     where_vars!(typevars, sig)
     call = signature_call(sig)
-    isnothing(call) && return scope
-    kids = child_nodes(call)
-    head = first(kids)
-    JS.kind(head) == K"::" && bind_annotated!(scope.types, M, head, typevars)
-    for arg in kids[2:end]
-        items = JS.kind(arg) == K"parameters" ? child_nodes(arg) : (arg,)
-        for item in items
-            bind_annotated!(scope.types, M, item, typevars)
-        end
+    isnothing(call) && return types
+    parts = child_nodes(call)
+    (isnothing(parts) || isempty(parts)) && return types
+    head = first(parts)
+    if JS.kind(head) == K"::"
+        bind_annotated!(types, mod, head, typevars)
     end
-    scope
-end
-
-# The type a field read on T yields: the field's declared type, or for a Union the Union of each member's. A member
-# that declares no such field, or declares it through a type variable, leaves the read untyped.
-function declared_field_type(T, field)
-    declared = Type[]
-    for member in Base.uniontypes(T)
-        S = Base.unwrap_unionall(member)
-        S isa DataType && isstructtype(S) && hasfield(S, field) || return nothing
-        member_declared = fieldtype(S, field)
-        member_declared isa Type || return nothing
-        push!(declared, member_declared)
-    end
-    Union{declared...}
-end
-
-# The type a receiver has: a typed name, a field chain through declared field types (through each member of a
-# Union), or a call or an index whose inferred result is one concrete type.
-function receiver_type(state, scope, node)
-    if node.val isa Symbol
-        bound = get(scope.types, node.val, nothing)
-        return resolved(bound)
-    end
-    k = JS.kind(node)
-    k == K"call" && return call_type(state, scope, node)
-    k == K"ref" && return inferred_result(state, scope, Base.getindex, child_nodes(node))
-    k == K"." || return nothing
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) != 2) && return nothing
-    base = receiver_type(state, scope, kids[1])
-    field = kids[2].val
-    (isnothing(base) || !(field isa Symbol)) && return nothing
-    declared_field_type(base, field)
-end
-
-# The type of a literal, or of the constant a global name binds; nothing for anything else.
-function value_type(state, scope, node)
-    JS.kind(node) == K"string" && return String
-    value = node.val
-    isnothing(value) && return nothing
-    value isa Symbol || return typeof(value)
-    value in scope.locals && return nothing
-    bound = constant_value(state.mod, (value,))
-    isnothing(bound) ? nothing : Core.Typeof(bound)
-end
-
-# What the scan knows of an argument's type, Any when nothing. A type with free type variables names no values.
-function argument_type(state, scope, node)
-    known = receiver_type(state, scope, node)
-    if isnothing(known)
-        known = value_type(state, scope, node)
-    end
-    isnothing(known) && return Any
-    Base.has_free_typevars(known) ? Any : known
-end
-
-# T when it is one concrete type; nothing for a Union, an abstract type or Any.
-concrete_type(T) = T isa DataType && isconcretetype(T) ? T : nothing
-
-# Inference gives Any for a call more methods than this match, so the scan skips such a call.
-const INFERENCE_METHODS_MAX = Core.Compiler.InferenceParams().max_methods
-
-# The one concrete type Julia infers for calling f with arguments of these types; nothing for any other result.
-function inferred_type(f, signature)
-    matches = methods(f, signature)
-    (isempty(matches) || length(matches) > INFERENCE_METHODS_MAX) && return nothing
-    result = Base.infer_return_type(f, signature)
-    concrete_type(result)
-end
-
-# The NamedTuple type a call's keyword arguments form; nothing when one is splatted or not named plainly.
-function keywords_type(state, scope, keywords)
-    names = Symbol[]
-    types = Any[]
-    for keyword in keywords
-        key = keyword
-        value = keyword
-        if JS.kind(keyword) == K"="
-            key, value = child_nodes(keyword)
-        end
-        key.val isa Symbol || return nothing
-        push!(names, key.val)
-        push!(types, argument_type(state, scope, value))
-    end
-    NamedTuple{Tuple(names), Tuple{types...}}
-end
-
-# The concrete type Julia infers for applying f to these operands, each typed as far as the scan knows it.
-# A splat or a do-block leaves the call's arguments unknown, so it types nothing.
-function inferred_result(state, scope, f, operands)
-    positional = Any[]
-    keywords = JS.SyntaxNode[]
-    for operand in operands
-        k = JS.kind(operand)
-        if k == K"parameters"
-            append!(keywords, child_nodes(operand))
-        elseif k == K"="
-            push!(keywords, operand)
-        elseif k == K"..." || k == K"do"
-            return nothing
+    for arg in parts[2:end]
+        if JS.kind(arg) == K"parameters"
+            parameters = child_nodes(arg)
+            isnothing(parameters) && continue
+            for item in parameters
+                bind_annotated!(types, mod, item, typevars)
+            end
         else
-            push!(positional, argument_type(state, scope, operand))
+            bind_annotated!(types, mod, arg, typevars)
         end
     end
-    if isempty(keywords)
-        signature = Tuple{positional...}
-        return inferred_type(f, signature)
-    end
-    named = keywords_type(state, scope, keywords)
-    isnothing(named) && return nothing
-    callee_type = Core.Typeof(f)
-    signature = Tuple{named, callee_type, positional...}
-    inferred_type(Core.kwcall, signature)
+    types
 end
 
-# A call through a global function no local binding shadows, typed by inference.
-function call_type(state, scope, node)
+# The first child is a signature or an iterator clause. Field reads start at the next child.
+function walk_tail!(state, scope, node)
     kids = child_nodes(node)
-    head = first(kids)
-    operands = kids[2:end]
-    if JS.is_infix_op_call(node)
-        head = kids[2]
-        operands = kids[3:end]
-        pushfirst!(operands, kids[1])
-    elseif JS.is_postfix_op_call(node)
-        head = last(kids)
-        operands = kids[1:end-1]
+    isnothing(kids) && return
+    for index in 2:length(kids)
+        inner = child_scope(scope, node, index)
+        walk_field_reads!(state, inner, kids[index])
     end
-    path = dotted_names(head)
-    isnothing(path) && return nothing
-    first(path) in scope.locals && return nothing
-    f = constant_value(state.mod, path)
-    isnothing(f) && return nothing
-    inferred_result(state, scope, f, operands)
 end
 
-# The element a loop over a collection binds, when every step of `iterate` yields one concrete type.
-function element_type(collection)
-    T = resolved(collection)
-    (isnothing(T) || Base.has_free_typevars(T)) && return nothing
-    first_step = iterate_step(Tuple{T})
-    isnothing(first_step) && return nothing
-    state = fieldtype(first_step, 2)
-    next_step = iterate_step(Tuple{T, state})
-    next_step == first_step || return nothing
-    element = fieldtype(first_step, 1)
-    concrete_type(element)
+function walk_method!(state, scope, node)
+    types = method_types(state.mod, node, scope)
+    typed = Scope(types, scope.locals)
+    walk_tail!(state, typed, node)
 end
 
-# The (element, state) tuple type Julia infers for an `iterate` call that does not end the loop.
-function iterate_step(signature)
-    stepped = Base.infer_return_type(iterate, signature)
-    step = typeintersect(stepped, Tuple{Any,Any})
-    step isa DataType && fieldcount(step) == 2 ? step : nothing
+function walk_closure!(state, scope, node)
+    kids = child_nodes(node)
+    types = copy(scope.types)
+    params = Symbol[]
+    _argname!(params, first(kids))
+    for name in params
+        delete!(types, name)
+    end
+    locals = child_locals(node, 2, scope.locals)
+    inner = Scope(types, locals)
+    walk_field_reads!(state, inner, kids[2])
 end
 
-# The type of the value at a position of a destructured tuple, when the tuple's type is concrete and that long.
-function tuple_element(destructured, position)
-    T = resolved(destructured)
-    T isa DataType && T <: Tuple && isconcretetype(T) || return nothing
-    position <= fieldcount(T) ? fieldtype(T, position) : nothing
+# Iterator specs bind before the body. A target's type is dropped once the body has been walked.
+function walk_iterated!(state, scope, node, spec_range, body_index)
+    kids = child_nodes(node)
+    targets = Symbol[]
+    for index in spec_range
+        spec_scope = child_scope(scope, node, index)
+        bind_iteration!(state, spec_scope, targets, kids[index])
+    end
+    body_scope = child_scope(scope, node, body_index)
+    walk_field_reads!(state, body_scope, kids[body_index])
+    for target in targets
+        delete!(scope.types, target)
+    end
 end
 
-# The type an assignment or a loop binds from an expression: an alias shares its name's entry; a field chain, a call
-# or an index defers its type, computed in the scope as it stands here, to the first read that needs it.
-function value_source(state, scope, node)
-    node.val isa Symbol && return get(scope.types, node.val, nothing)
-    k = JS.kind(node)
-    (k == K"call" || k == K"ref" || k == K".") || return nothing
-    frozen = copy(scope)
-    Deferred(receiver_type, (state, frozen, node))
+function walk_for!(state, scope, node)
+    kids = child_nodes(node)
+    last_index = length(kids)
+    spec_range = 1:(last_index - 1)
+    walk_iterated!(state, scope, node, spec_range, last_index)
 end
 
-# Binds what an assignment or loop target names to the parts of a value with this type source; nothing unbinds them.
+function walk_generator!(state, scope, node)
+    kids = child_nodes(node)
+    spec_range = 2:length(kids)
+    walk_iterated!(state, scope, node, spec_range, 1)
+end
+
+function walk_assignment!(state, scope, node)
+    kids = child_nodes(node)
+    rhs = child_scope(scope, node, 2)
+    walk_field_reads!(state, rhs, kids[2])
+    source = value_source(state, rhs, kids[2])
+    bind_target!(state, scope, kids[1], source)
+end
+
+# One iterator's collection is read in the names already bound. The target is typed after that read.
+function bind_iteration!(state, scope, targets, node)
+    kids = child_nodes(node)
+    isnothing(kids) && return
+    kind = JS.kind(node)
+    if (kind == K"in" || kind == K"=") && length(kids) == 2
+        collection_scope = child_scope(scope, node, 2)
+        collection = kids[2]
+        walk_field_reads!(state, collection_scope, collection)
+        source = value_source(state, collection_scope, collection)
+        element = nothing
+        if !isnothing(source)
+            element = Deferred(element_type, (source,))
+        end
+        target = kids[1]
+        bind_target!(state, scope, target, element)
+        _argname!(targets, target)
+        return
+    end
+    if kind == K"iteration"
+        for index in eachindex(kids)
+            inner = child_scope(scope, node, index)
+            bind_iteration!(state, inner, targets, kids[index])
+        end
+        return
+    end
+    if kind == K"filter"
+        inner = child_scope(scope, node, 1)
+        bind_iteration!(state, inner, targets, first(kids))
+        walk_tail!(state, scope, node)
+        return
+    end
+    walk_field_reads!(state, scope, node)
+end
+
 function bind_target!(state, scope, target, source)
     name = target.val
-    k = JS.kind(target)
+    kind = JS.kind(target)
     if name isa Symbol
         if isnothing(source)
             delete!(scope.types, name)
         else
             scope.types[name] = source
         end
-    elseif k == K"::"
+        return
+    end
+    if kind == K"::"
         bind_annotated!(scope.types, state.mod, target, Symbol[])
-    elseif k == K"tuple"
+        return
+    end
+    if kind == K"tuple"
         parts = child_nodes(target)
+        isnothing(parts) && return
         kinds = [JS.kind(part) for part in parts]
-        is_positional = !isnothing(source) && !(K"..." in kinds || K"parameters" in kinds)
-        for (position, part) in enumerate(parts)
-            element = is_positional ? Deferred(tuple_element, (source, position)) : nothing
-            bind_target!(state, scope, part, element)
+        has_spread = K"..." in kinds || K"parameters" in kinds
+        is_positional = !isnothing(source) && !has_spread
+        for index in eachindex(parts)
+            element = nothing
+            if is_positional
+                element = Deferred(tuple_element, (source, index))
+            end
+            bind_target!(state, scope, parts[index], element)
         end
-    else
-        names = Symbol[]
-        _argname!(names, target)
-        foreach(bound -> delete!(scope.types, bound), names)
-        walk_field_reads!(state, scope, target)
+        return
     end
-end
-
-# Walks each `target in collection` of a loop in order, binding the target to the collection's element type; the
-# targets it binds collect into `targets`.
-function bind_iteration!(state, scope, targets, node)
-    kids = child_nodes(node)
-    k = JS.kind(node)
-    if (k == K"in" || k == K"=") && length(kids) == 2
-        target, collection = kids
-        walk_field_reads!(state, scope, collection)
-        source = value_source(state, scope, collection)
-        element = isnothing(source) ? nothing : Deferred(element_type, (source,))
-        bind_target!(state, scope, target, element)
-        _argname!(targets, target)
-    elseif k == K"iteration"
-        foreach(spec -> bind_iteration!(state, scope, targets, spec), kids)
-    elseif k == K"filter"
-        bind_iteration!(state, scope, targets, first(kids))
-        foreach(condition -> walk_field_reads!(state, scope, condition), kids[2:end])
-    else
-        walk_field_reads!(state, scope, node)
+    names = Symbol[]
+    _argname!(names, target)
+    for bound_name in names
+        delete!(scope.types, bound_name)
     end
-end
-
-# A loop's targets are local to it: bound for its body, marked local, unbound after it.
-function walk_loop!(state, scope, specs, body)
-    targets = Symbol[]
-    foreach(spec -> bind_iteration!(state, scope, targets, spec), specs)
-    union!(scope.locals, targets)
-    walk_field_reads!(state, scope, body)
-    foreach(target -> delete!(scope.types, target), targets)
+    walk_field_reads!(state, scope, target)
 end
 
 function record_read!(state, scope, node)
-    receiver, member = child_nodes(node)
+    kids = child_nodes(node)
+    receiver = first(kids)
+    member = last(kids)
     typed = receiver_type(state, scope, receiver)
     isnothing(typed) && return
-    line = Int(JS.source_location(node)[1])
+    line = source_line(node)
     written = JS.sourcetext(receiver)
     push!(state.reads, FieldRead(typed, member.val, line, written))
+end
+
+function walk_field!(state, scope, node)
+    record_read!(state, scope, node)
+    base = child -> walk_field_reads!(state, scope, child)
+    walk_dot_base!(base, node)
+end
+
+function walk_children!(state, scope, node)
+    kids = child_nodes(node)
+    isnothing(kids) && return
+    for index in eachindex(kids)
+        inner = child_scope(scope, node, index)
+        walk_field_reads!(state, inner, kids[index])
+    end
 end
 
 function walk_field_reads!(state, scope, node)
     kids = child_nodes(node)
     isnothing(kids) && return
-    k = JS.kind(node)
-    if k == K"quote"
-        return
-    elseif is_method_form(node)
-        inner = method_scope(state.mod, node, scope)
-        for c in kids[2:end]
-            walk_field_reads!(state, inner, c)
-        end
-    elseif (k == K"->" || k == K"do") && length(kids) >= 2
-        inner = copy(scope)
-        params = Symbol[]
-        _argname!(params, kids[1])
-        for name in params
-            delete!(inner.types, name)
-        end
-        union!(inner.locals, params)
-        bound_names!(inner.locals, kids[2])
-        walk_field_reads!(state, inner, kids[2])
-    elseif k == K"for" && length(kids) >= 2
-        walk_loop!(state, scope, kids[1:end-1], last(kids))
-    elseif k == K"generator" && length(kids) >= 2
-        walk_loop!(state, scope, kids[2:end], first(kids))
-    elseif k == K"let" || k == K"try" || k == K"while"
-        bound_names!(scope.locals, node)
-        foreach(c -> walk_field_reads!(state, scope, c), kids)
-    elseif k == K"=" && length(kids) == 2 && !is_sig(kids[1])
-        walk_field_reads!(state, scope, kids[2])
-        source = value_source(state, scope, kids[2])
-        bind_target!(state, scope, kids[1], source)
-    elseif holds_values(k)
-        walk_value_children!(c -> walk_field_reads!(state, scope, c), node)
-    elseif k == K"." && length(kids) == 2 && kids[2].val isa Symbol
-        record_read!(state, scope, node)
-        walk_field_reads!(state, scope, kids[1])
-    else
-        for c in kids
-            walk_field_reads!(state, scope, c)
-        end
+    kind = JS.kind(node)
+    kind == K"quote" && return
+    is_method_form(node) && return walk_method!(state, scope, node)
+    if (kind == K"->" || kind == K"do") && length(kids) >= 2
+        return walk_closure!(state, scope, node)
     end
+    if kind == K"for" && length(kids) >= 2
+        return walk_for!(state, scope, node)
+    end
+    if kind == K"generator" && length(kids) >= 2
+        return walk_generator!(state, scope, node)
+    end
+    if kind == K"=" && length(kids) == 2 && !is_sig(kids[1])
+        return walk_assignment!(state, scope, node)
+    end
+    if holds_values(kind)
+        value = child -> walk_field_reads!(state, scope, child)
+        return walk_value_children!(value, node)
+    end
+    if kind == K"." && length(kids) == 2 && kids[2].val isa Symbol
+        return walk_field!(state, scope, node)
+    end
+    walk_children!(state, scope, node)
 end
 
-# Every field read in a parsed file on a receiver the scan types, in M's namespace.
-function field_reads(tree, M::Module)
-    state = ReadState(M, FieldRead[])
+# Every field read in a parsed file on a receiver the scan types, in the module's namespace.
+function field_reads(tree, mod::Module)
+    state = ReadState(mod, FieldRead[])
     types = Dict{Symbol,Union{Type,Deferred}}()
     locals = Set{Symbol}()
-    walk_field_reads!(state, Scope(types, locals), tree)
+    scope = Scope(types, locals)
+    walk_field_reads!(state, scope, tree)
     state
 end
-
-is_contract(owner) = is_within_module(owner, CONTRACTS_MODULE)
 
 # The docstrings `home` records for its binding `name`; nothing when it records none. The lookup leaves a module
 # with no docs uninitialised.
@@ -512,7 +267,7 @@ end
 
 # Reads a caller may make of another module's struct: contract types, and the fields a public type documents.
 function is_open_read(owner, S::DataType, field)
-    is_contract(owner) && return true
+    is_within_module(owner, CONTRACTS_MODULE) && return true
     home = parentmodule(S)
     is_public = Base.ispublic(home, nameof(S))
     is_public && is_documented_field(S, field)
