@@ -5,16 +5,6 @@ module FIface
     present() = 1
     hidden() = 2
 end
-# shown is exported, offered is public-unexported, hidden is private
-module FPub
-    export shown
-    public offered
-    shown() = 1
-    offered() = 2
-    hidden() = 3
-    value = 4
-    struct Secret end
-end
 
 @testset "interface" begin
     # blanket export: the wrapper republishes its whole namespace, so it declares no interface
@@ -45,65 +35,77 @@ end
     @test stale[1].symbol == "vanished"
     @test stale[1].kind === :stale_export
     @test isempty(ArchCheck.check_stale_exports([FDupA]))
+end
 
-    # reaches-internal: a qualified reference to a name the owner kept private
-    mktempdir() do dir
-        mkpath(joinpath(dir, "m"))
-        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")")
-        write(joinpath(dir, "m", "a.jl"), "g() = 1")
-        index = ArchCheck.build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        entry = mktempdir()
-        write(joinpath(entry, "probe.jl"), "a = FIface.hidden()\nb = FIface.present()\n")
-        found = ArchCheck.check_reaches_internal(index, [FIface]; entry_dirs = [entry])
-        @test length(found) == 1
-        @test found[1].symbol == "FIface.hidden"
-        @test found[1].kind === :reaches_internal
+# shown is exported, named is public-unexported, the rest are internal
+const REACHED = load_package("Reached", """
+    export shown
+    public named
+    shown() = 1
+    named() = 2
+    hidden() = 3
+    other() = 4
+    value = 4
+    struct Secret end
+    """)
 
-        # a missing entry dir contributes nothing, as the index treats it
-        absent = joinpath(dir, "absent")
-        found = ArchCheck.check_reaches_internal(index, [FIface]; entry_dirs = [absent, entry])
-        @test [f.symbol for f in found] == ["FIface.hidden"]
-    end
+# The internal names an entry script reaches, as (symbol, line), with the script written to its own directory.
+function reached_from(script; repeat_dir = false)
+    scripts = mktempdir()
+    write(joinpath(scripts, "use.jl"), script)
+    absent = joinpath(scripts, "absent")
+    entry_dirs = repeat_dir ? [scripts, scripts] : [absent, scripts]
+    ctx = case_context(REACHED; entry_dirs)
+    found = ArchCheck.run(ReachesInternal(), ctx)
+    sort([(f.symbol, f.line) for f in found])
+end
 
-    # comments and strings are not references
-    mktempdir() do dir
-        mkpath(joinpath(dir, "m"))
-        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")")
-        write(joinpath(dir, "m", "a.jl"), "g() = 1")
-        index = ArchCheck.build_source_index(dir, Dict(:M => 1), Dict("m" => :M))
-        entry = mktempdir()
-        write(joinpath(entry, "probe.jl"),
-              "# FIface.hidden()\ns = \"FIface.hidden()\"\nx = 1  # FIface.hidden\n")
-        @test isempty(ArchCheck.check_reaches_internal(index, [FIface]; entry_dirs = [entry]))
-    end
+@testset "an entry script's qualified reference to an internal name reaches it" begin
+    script = """
+        const G = Main.Reached
+        G.hidden()
+        G.named()
+        Reached.hidden()
+        Reached.named()
+        Reached.shown()
+        Main.Reached.hidden()
+        function wrap()
+            G = 1
+            G.hidden()
+        end
+        q = :(Reached.hidden())
+        obj = (Reached = (hidden = 1,),)
+        obj.Reached.hidden
+        # Reached.hidden()
+        s = "Reached.hidden()"
+        """
+    @test reached_from(script) == [("Reached.hidden", 2), ("Reached.hidden", 4), ("Reached.hidden", 7)]
+end
 
-    # public-unexported names are the declared interface; aliases and quotes follow the same rule
-    mktempdir() do dir
-        mkpath(joinpath(dir, "m"))
-        write(joinpath(dir, "m", "M.jl"), "include(\"a.jl\")")
-        write(joinpath(dir, "m", "a.jl"), "g() = 1")
-        rank = Dict(:M => 1)
-        dir2mod = Dict("m" => :M)
-        index = ArchCheck.build_source_index(dir, rank, dir2mod)
-        entry = mktempdir()
-        probe = joinpath(entry, "probe.jl")
-        write(probe,
-              "const G = Main.FPub\nG.hidden()\nG.offered()\nFPub.hidden()\nFPub.offered()\nFPub.shown()\nMain.FPub.hidden()\nfunction wrap()\n    G = 1\n    G.hidden()\nend\nq = :(FPub.hidden())\nobj = (FPub = (hidden = 1,),)\nobj.FPub.hidden\n")
-        found = ArchCheck.check_reaches_internal(index, [FPub]; entry_dirs = [entry])
-        @test Set(f.symbol for f in found) == Set(["FPub.hidden"])
-        @test length(found) == 3
-        write(probe, """
-            const G = Main.FPub
-            typed(x::G.Secret)::G.Secret = x
-            bounded(x::T) where {T<:G.Secret} = x
-            G.value = 4
-            G.hidden(x) = x
-            lambda = (x::G.Secret) -> x
-            """)
-        found = ArchCheck.check_reaches_internal(index, [FPub]; entry_dirs = [entry, entry])
-        @test sort([f.symbol for f in found]) ==
-              [fill("FPub.Secret", 4); "FPub.hidden"; "FPub.value"]
-    end
+@testset "a type position, an assignment, or an extension reaches an internal name once per directory" begin
+    script = """
+        const G = Main.Reached
+        typed(x::G.Secret)::G.Secret = x
+        bounded(x::T) where {T<:G.Secret} = x
+        G.value = 4
+        G.hidden(x) = x
+        lambda = (x::G.Secret) -> x
+        """
+    expected = [
+        ("Reached.Secret", 2), ("Reached.Secret", 2), ("Reached.Secret", 3), ("Reached.Secret", 6),
+        ("Reached.hidden", 5), ("Reached.value", 4),
+    ]
+    @test reached_from(script; repeat_dir = true) == expected
+end
+
+@testset "an entry script importing a name its module keeps internal reaches it" begin
+    script = """
+        using Reached: shown, hidden
+        import Reached: named, other
+        import Reached.hidden
+        using Reached
+        """
+    @test reached_from(script) == [("Reached.hidden", 1), ("Reached.hidden", 3), ("Reached.other", 2)]
 end
 
 @testset "declared names: a reference reaches only what the module it names declares" begin
