@@ -30,6 +30,7 @@ call = "corpus_build"
 [checks.OverlappingCalls]
 
 [checks.KeptBuilders]
+args = ["OpenCascade.Shape", "src/geometry/opencascade"]
 
 [checks.ExpressionClones]
 min_nodes = 20
