@@ -16,15 +16,29 @@ function bound_type(@nospecialize(slot))
     bound_type(slot.ub)
 end
 
-function is_storage_argument(@nospecialize(earlier), @nospecialize(later))
+# The element type an array slot holds, closed over its method's type variables so slots of two methods compare.
+# `eltype` reads an element with free type variables as `Any`.
+function element_type(@nospecialize(slot), @nospecialize(signature))
+    array = Base.unwrap_unionall(slot)
+    array isa DataType || return Any
+    array_name = Base.typename(AbstractArray)
+    while array.name !== array_name
+        array = supertype(array)
+    end
+    held = first(array.parameters)
+    within_slot = Base.rewrap_unionall(held, slot)
+    Base.rewrap_unionall(within_slot, signature)
+end
+
+function is_storage_argument(@nospecialize(earlier), @nospecialize(later), earlier_method::Method, later_method::Method)
     earlier isa Type || return false
     later isa Type || return false
     earlier <: AbstractArray || return false
     later <: AbstractArray || return false
     earlier <: later && return false
     later <: earlier && return false
-    earlier_element = eltype(earlier)
-    later_element = eltype(later)
+    earlier_element = element_type(earlier, earlier_method.sig)
+    later_element = element_type(later, later_method.sig)
     earlier_element == later_element || return false
     earlier <: Array || later <: Array
 end
@@ -49,7 +63,7 @@ function storage_labels(earlier::Method, later::Method, texts)
         earlier_bound = bound_type(earlier_params[index])
         later_bound = bound_type(later_params[index])
         earlier_bound == later_bound && continue
-        is_storage_argument(earlier_bound, later_bound) || return nothing
+        is_storage_argument(earlier_bound, later_bound, earlier, later) || return nothing
         earlier_text = type_text(earlier_bound, texts)
         later_text = type_text(later_bound, texts)
         push!(labels, earlier_text)
