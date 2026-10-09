@@ -1,28 +1,13 @@
 # Call zoom: methods re-evaluated from the index, records of the calls a workload actually makes.
 
-pushfirst!(LOAD_PATH, joinpath(@__DIR__, "..", "fixtures"))
-using Probed
-popfirst!(LOAD_PATH)
-
 const FLOAT_SAMPLE = 2.0
 const FLOAT_RESULT = 3.0
+const BOX_FROM_FLOAT = 2.4
+const BOX_RESTORED_FLOAT = 3.0
 
-function probed_context()
-    src = joinpath(pkgdir(Probed), "src")
-    root = nameof(Probed)
-    spine = joinpath(src, string(root) * ".jl")
-    layout = ArchCheck.package_layout(spine, root)
-    rank = layout[1]
-    dir2mod = layout[2]
-    index = ArchCheck.build_source_index(src, rank, dir2mod; root)
-    Context(index, Probed, [Probed])
-end
-
-call(f, args...; kwargs...) = Base.invokelatest(f, args...; kwargs...)
-
-function caught(f, args...)
+function caught(f, args...; options...)
     try
-        Base.invokelatest(f, args...)
+        Base.invokelatest(f, args...; options...)
         nothing
     catch err
         err
@@ -39,33 +24,6 @@ end
 function lowered_text(f, types)
     lowered = Base.invokelatest(code_lowered, f, types)
     sprint(show, only(lowered))
-end
-
-function caught_arm(functions)
-    probes = Probes(; functions, slow_s = 0.0)
-    ctx = probed_context()
-    local armed
-    try
-        armed = ArchCheck.arm!(probes, ctx)
-    catch err
-        return err
-    end
-    ArchCheck.disarm!(armed)
-    nothing
-end
-
-function probing(body, functions; ambient = (), slow_s = 0.0)
-    probes = Probes(; functions, ambient, slow_s)
-    ctx = probed_context()
-    armed = ArchCheck.arm!(probes, ctx)
-    local records
-    try
-        body(armed)
-    finally
-        traced = ArchCheck.disarm!(armed)
-        records = traced.records
-    end
-    records
 end
 
 struct Pad
@@ -96,8 +54,7 @@ function pad_with(fill_byte::UInt8)
         address = UInt(raw)
         align = UInt(8)
         remainder = address % align
-        shift = align - remainder
-        remainder == 0 && (shift = UInt(0))
+        shift = remainder == 0 ? UInt(0) : align - remainder
         start = raw + shift
         fill!(block, fill_byte)
         byte_slot = Ptr{UInt8}(start)
@@ -112,14 +69,47 @@ function pad_with(fill_byte::UInt8)
     loaded[]
 end
 
-@testset "probes: equal values share a hash and the record names the method" begin
+const PARENT_LINK = load_package("ParentLink", """
+    function parent(x)
+        task = Threads.@spawn child(x)
+        fetch(task)
+    end
+
+    function child(x)
+        x + 1
+    end
+    """)
+
+const SCALED_KEYWORD = load_package("ScaledKeyword", """
+    function scaled(xs::Vector{T}; scale::T = one(T)) where {T<:Real}
+        xs .* scale
+    end
+    """)
+
+const BOXED_VALUE = load_package("BoxedValue", """
+    struct Boxed
+        value::Int
+        Boxed(value::Int, scale::Int) = new(value * scale)
+    end
+
+    "A box from a float, rounded."
+    Boxed(value::Float64) = Boxed(round(Int, value), 1)
+
+    "Twice the boxed value."
+    twice(box::Boxed) = 2 * box.value
+    """)
+
+@testset "equal values share an argument hash and a result hash, and the record names the method" begin
     method = only(methods(Probed.same))
     site = (joinpath("src", "Probed.jl"), method.line)
-    records = probing((Probed.same,)) do armed
-        call(Probed.same, [1, 2, 3])
-        call(Probed.same, [1, 2, 3])
-        call(Probed.same, [1, 2, 4])
+    same_values = function ()
+        Probed.same([1, 2, 3])
+        Probed.same([1, 2, 3])
+        Probed.same([1, 2, 4])
     end
+    probes = Probes(; functions = (Probed.same,), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = same_values, probes)
+    records = seen.observed.records
     @test length(records) == 3
     matched = records[1]
     repeated = records[2]
@@ -133,7 +123,7 @@ end
     @test differed.arguments != matched.arguments
 end
 
-@testset "probes: an armed method keeps its result and disarm restores it" begin
+@testset "an armed method keeps its result and the restored method keeps its body" begin
     cases = (
         (; called = Probed.early, args = (-3,), kwargs = (;), expected = 0, record_name = :early),
         (; called = Probed.early, args = (4,), kwargs = (;), expected = 5, record_name = :early),
@@ -149,9 +139,10 @@ end
         (called, method_count)
     end
     before = lowered_text(Probed.early, (Int,))
-    records = probing((Probed.early, Probed.keyed, Probed.typed)) do armed
+    functions = (Probed.early, Probed.keyed, Probed.typed)
+    exercise_cases = function ()
         for case in cases
-            got = call(case.called, case.args...; case.kwargs...)
+            got = Base.invokelatest(case.called, case.args...; case.kwargs...)
             @test got == case.expected
         end
         for (called, method_count) in method_counts
@@ -159,18 +150,21 @@ end
             @test length(methods_of) == method_count
         end
     end
-    seen = [record.name for record in records]
-    @test length(seen) == length(cases)
+    probes = Probes(; functions, slow_s = 0.0)
+    seen = observed_gate(Probed; workload = exercise_cases, probes)
+    records = seen.observed.records
+    seen_names = [record.name for record in records]
+    @test length(seen_names) == length(cases)
     record_names = unique(case.record_name for case in cases)
     for record_name in record_names
         expected = count(case -> case.record_name === record_name, cases)
-        found = count(isequal(record_name), seen)
+        found = count(isequal(record_name), seen_names)
         @test found == expected
     end
     restored = lowered_text(Probed.early, (Int,))
     @test restored == before
     for case in cases
-        got = call(case.called, case.args...; case.kwargs...)
+        got = Base.invokelatest(case.called, case.args...; case.kwargs...)
         @test got == case.expected
     end
     for (called, method_count) in method_counts
@@ -179,35 +173,45 @@ end
     end
 end
 
-@testset "probes: a throw keeps the exception and the next call is a root" begin
+@testset "a throw keeps the exception and the next call is a root" begin
     unprobed = caught(Probed.blows, true)
-    records = probing((Probed.blows, Probed.alone)) do armed
+    throw_then_root = function ()
         thrown = caught(Probed.blows, true)
         @test same_exception(thrown, unprobed)
-        call(Probed.alone, 1)
+        Probed.alone(1)
     end
+    probes = Probes(; functions = (Probed.blows, Probed.alone), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = throw_then_root, probes)
+    records = seen.observed.records
     alone = [record for record in records if record.name === :alone]
     root = only(alone)
     @test root.caller === Symbol("")
 end
 
-@testset "probes: calls on spawned tasks are roots of distinct tasks" begin
-    records = probing((Probed.alone,)) do armed
+@testset "calls on spawned tasks are roots of distinct tasks" begin
+    spawned_calls = function ()
         left = Threads.@spawn Base.invokelatest(Probed.alone, 1)
         right = Threads.@spawn Base.invokelatest(Probed.alone, 2)
         fetch(left)
         fetch(right)
     end
+    probes = Probes(; functions = (Probed.alone,), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = spawned_calls, probes)
+    records = seen.observed.records
     @test length(records) == 2
     both_roots = records[1].caller === Symbol("") && records[2].caller === Symbol("")
     @test both_roots
     @test records[1].task != records[2].task
 end
 
-@testset "probes: a nested call names the method that called it" begin
-    nested = probing((Probed.outer, Probed.inner)) do armed
-        @test call(Probed.outer, 10) == 11
+@testset "a nested call names the method that called it" begin
+    nested_call = function ()
+        got = Probed.outer(10)
+        @test got == 11
     end
+    probes = Probes(; functions = (Probed.outer, Probed.inner), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = nested_call, probes)
+    nested = seen.observed.records
     inner = [record for record in nested if record.name === :inner]
     outer = [record for record in nested if record.name === :outer]
     inner_record = only(inner)
@@ -218,24 +222,31 @@ end
     @test isempty(outer_record.enclosing)
 end
 
-@testset "probes: a call inside an ambient function names that function and stays a root" begin
-    records = probing((Probed.leaf,); ambient = (Probed.around,)) do armed
-        @test call(Probed.around, 5) == 6
+@testset "a call inside an ambient function names that function and stays a root" begin
+    ambient_call = function ()
+        got = Probed.around(5)
+        @test got == 6
     end
+    probes = Probes(; functions = (Probed.leaf,), ambient = (Probed.around,), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = ambient_call, probes)
+    records = seen.observed.records
     leaves = [record for record in records if record.name === :leaf]
     leaf_record = only(leaves)
     @test :around in leaf_record.enclosing
     @test leaf_record.caller === Symbol("")
 end
 
-@testset "probes: reads walk three containers out from the arguments and stop before the fourth" begin
+@testset "reads walk three containers out from the arguments and stop before the fourth" begin
     marker = Ref(1)
     buried = Ref(2)
     three = (((marker,),),)
     four = ((((buried,),),),)
-    records = probing((Probed.look,)) do armed
-        call(Probed.look, three, four)
+    look_depths = function ()
+        Probed.look(three, four)
     end
+    probes = Probes(; functions = (Probed.look,), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = look_depths, probes)
+    records = seen.observed.records
     record = only(records)
     marker_id = objectid(marker)
     buried_id = objectid(buried)
@@ -243,12 +254,15 @@ end
     @test !(buried_id in record.reads)
 end
 
-@testset "probes: a channel argument is fed and a plain argument is not" begin
+@testset "a channel argument is fed and a plain argument is not" begin
     fed = Channel{Int}(1)
-    records = probing((Probed.echo,)) do armed
-        call(Probed.echo, fed)
-        call(Probed.echo, 1)
+    echo_channel = function ()
+        Probed.echo(fed)
+        Probed.echo(1)
     end
+    probes = Probes(; functions = (Probed.echo,), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = echo_channel, probes)
+    records = seen.observed.records
     echoes = [record for record in records if record.name === :echo]
     fed_records = [record for record in echoes if record.is_fed]
     plain_records = [record for record in echoes if !record.is_fed]
@@ -256,252 +270,111 @@ end
     @test length(plain_records) == 1
 end
 
-@testset "probes: a generated method and a method with no source are refused" begin
+@testset "a generated method and a method with no source are refused" begin
     before = lowered_text(Probed.echo, (Int,))
-    generated = caught_arm((Probed.echo, Probed.made))
+    generated_probes = Probes(; functions = (Probed.echo, Probed.made), slow_s = 0.0)
+    generated = caught(gate_findings, Probed; workload = () -> nothing, probes = generated_probes)
     @test generated isa ArgumentError
     generated_text = sprint(showerror, generated)
     @test occursin("made", generated_text)
     @test occursin("generated", generated_text)
     restored = lowered_text(Probed.echo, (Int,))
     @test restored == before
-    @test call(Probed.made, 7) == 7
+    made_result = Base.invokelatest(Probed.made, 7)
+    @test made_result == 7
     Core.eval(Probed, :(synthed(x) = x + 1))
-    unsourced = caught_arm((Probed.synthed,))
+    unsourced_probes = Probes(; functions = (Probed.synthed,), slow_s = 0.0)
+    unsourced = caught(gate_findings, Probed; workload = () -> nothing, probes = unsourced_probes)
     @test unsourced isa ArgumentError
     unsourced_text = sprint(showerror, unsourced)
     @test occursin("synthed", unsourced_text)
     @test occursin("no source site", unsourced_text)
-    @test call(Probed.synthed, 4) == 5
+    synthed_result = Base.invokelatest(Probed.synthed, 4)
+    @test synthed_result == 5
 end
 
-function indexed_module(name::Symbol, source::String)
-    directory = mktempdir()
-    src = joinpath(directory, "src")
-    mkdir(src)
-    file_name = string(name) * ".jl"
-    path = joinpath(src, file_name)
-    write(path, source)
-    mod = Module(name)
-    Base.include(mod, path)
-    layout = ArchCheck.package_layout(path, name)
-    rank = layout[1]
-    dir2mod = layout[2]
-    index = ArchCheck.build_source_index(src, rank, dir2mod; root = name)
-    ctx = Context(index, mod, Module[mod])
-    (; mod, ctx)
-end
-
-@testset "probes: a spawned task's probed call names its parent" begin
-    source = """
-    function parent(x)
-        task = Threads.@spawn child(x)
-        fetch(task)
+@testset "a spawned task's probed call names its parent" begin
+    pkg = PARENT_LINK.pkg
+    probes = Probes(; functions = (pkg.parent, pkg.child), slow_s = 0.0)
+    returned = Ref{Any}(nothing)
+    workload = function ()
+        returned[] = pkg.parent(3)
     end
-
-    function child(x)
-        x + 1
-    end
-    """
-    loaded = indexed_module(:ParentLink, source)
-    probes = Probes(functions = (loaded.mod.parent, loaded.mod.child), slow_s = 0.0)
-    armed = ArchCheck.arm!(probes, loaded.ctx)
-    local records
-    try
-        got = Base.invokelatest(loaded.mod.parent, 3)
-        @test got == 4
-    finally
-        traced = ArchCheck.disarm!(armed)
-        records = traced.records
-    end
+    seen = observed_gate(pkg; workload, probes)
+    @test returned[] == 4
+    records = seen.observed.records
     children = [record for record in records if record.name === :child]
     child_record = only(children)
     @test child_record.caller === :parent
+    restored = Base.invokelatest(pkg.parent, 3)
+    @test restored == 4
 end
 
-@testset "probes: a parametric keyword method is armed and restored" begin
-    source = """
-    function scaled(xs::Vector{T}; scale::T = one(T)) where {T<:Real}
-        xs .* scale
-    end
-    """
-    loaded = indexed_module(:ScaledKw, source)
-    probes = Probes(functions = (loaded.mod.scaled,), slow_s = 0.0)
-    armed = ArchCheck.arm!(probes, loaded.ctx)
+@testset "a parametric keyword method is armed and restored" begin
+    pkg = SCALED_KEYWORD.pkg
     sample = [1.0]
-    local traced
-    try
-        got = Base.invokelatest(loaded.mod.scaled, sample; scale = 2.0)
-        @test got == [2.0]
-    finally
-        traced = ArchCheck.disarm!(armed)
+    expected = sample .* FLOAT_SAMPLE
+    probes = Probes(; functions = (pkg.scaled,), slow_s = 0.0)
+    returned = Ref{Any}(nothing)
+    workload = function ()
+        returned[] = pkg.scaled(sample; scale = FLOAT_SAMPLE)
     end
-    names = [record.name for record in traced.records]
+    warn_path = tempname()
+    quiet_run = open(warn_path, "w") do warn_io
+        redirect_stderr(warn_io) do
+            seen = observed_gate(pkg; workload, probes)
+            methods_of = Base.invokelatest(methods, pkg.scaled)
+            method = only(methods_of)
+            body = Base.bodyfunction(method)
+            (; seen, body)
+        end
+    end
+    warn_text = read(warn_path, String)
+    warned = occursin("WARNING:", warn_text) || occursin("Warning:", warn_text)
+    @test !warned
+    @test !isnothing(quiet_run.body)
+    records = quiet_run.seen.observed.records
+    names = [record.name for record in records]
     @test names == [:scaled]
-    restored = loaded.mod.scaled(sample; scale = 2.0)
-    @test restored == [2.0]
-    method = only(methods(loaded.mod.scaled))
+    @test returned[] == expected
+    restored = Base.invokelatest(pkg.scaled, sample; scale = FLOAT_SAMPLE)
+    @test restored == expected
+    methods_of = Base.invokelatest(methods, pkg.scaled)
+    method = only(methods_of)
     source_file = String(method.file)
-    @test endswith(source_file, "ScaledKw.jl")
+    @test endswith(source_file, "ScaledKeyword.jl")
 end
 
-@testset "probes: a struct's outer constructor and a documented method are probed" begin
-    source = """
-    struct Boxed
-        value::Int
-        Boxed(value::Int, scale::Int) = new(value * scale)
+@testset "a struct's outer constructor and a documented method are probed" begin
+    pkg = BOXED_VALUE.pkg
+    probes = Probes(; functions = (pkg.Boxed, pkg.twice), slow_s = 0.0)
+    returned = Ref{Any}(nothing)
+    workload = function ()
+        box = pkg.Boxed(BOX_FROM_FLOAT)
+        returned[] = pkg.twice(box)
     end
-
-    "A box from a float, rounded."
-    Boxed(value::Float64) = Boxed(round(Int, value), 1)
-
-    "Twice the boxed value."
-    twice(box::Boxed) = 2 * box.value
-    """
-    loaded = indexed_module(:BoxedCase, source)
-    mod = loaded.mod
-    probes = Probes(functions = (mod.Boxed, mod.twice), slow_s = 0.0)
-    armed = ArchCheck.arm!(probes, loaded.ctx)
-    local traced
-    try
-        box = Base.invokelatest(mod.Boxed, 2.4)
-        doubled = Base.invokelatest(mod.twice, box)
-        @test doubled == 4
-    finally
-        traced = ArchCheck.disarm!(armed)
-    end
-    names = [record.name for record in traced.records]
+    seen = observed_gate(pkg; workload, probes)
+    @test returned[] == 4
+    records = seen.observed.records
+    names = [record.name for record in records]
     @test sort(names) == [:Boxed, :twice]
-    restored = Base.invokelatest(mod.Boxed, 3.0)
+    restored = Base.invokelatest(pkg.Boxed, BOX_RESTORED_FLOAT)
     @test restored.value == 3
 end
 
-@testset "probes: padding bytes stay out of an argument hash" begin
+@testset "padding bytes stay out of an argument hash" begin
     low = pad_with(0x00)
     high = pad_with(0xff)
     low_bytes = raw_bytes(low)
     high_bytes = raw_bytes(high)
     @test low_bytes != high_bytes
-    records = probing((Probed.echo,)) do armed
-        call(Probed.echo, low)
-        call(Probed.echo, high)
+    echo_pads = function ()
+        Probed.echo(low)
+        Probed.echo(high)
     end
+    probes = Probes(; functions = (Probed.echo,), slow_s = 0.0)
+    seen = observed_gate(Probed; workload = echo_pads, probes)
+    records = seen.observed.records
     @test length(records) == 2
     @test records[1].arguments == records[2].arguments
-end
-
-function archcheck_context(; methods = nothing)
-    src = joinpath(pkgdir(ArchCheck), "src")
-    root = nameof(ArchCheck)
-    spine = joinpath(src, string(root) * ".jl")
-    layout = ArchCheck.package_layout(spine, root)
-    rank = layout[1]
-    dir2mod = layout[2]
-    index = ArchCheck.build_source_index(src, rank, dir2mod; root)
-    ordered = sort(collect(keys(index.rank)); by = name -> index.rank[name])
-    mods = Module[]
-    for name in ordered
-        loaded = ArchCheck.loaded_module(ArchCheck, name)
-        push!(mods, loaded)
-    end
-    Context(index, ArchCheck, mods; methods)
-end
-
-function keyword_functions()
-    found = Function[]
-    for name in Base.names(ArchCheck; all = true)
-        isdefined(ArchCheck, name) || continue
-        value = getfield(ArchCheck, name)
-        value isa Function || continue
-        has_keyword = false
-        for method in methods(value)
-            method.module === ArchCheck || continue
-            isempty(Base.kwarg_decl(method)) && continue
-            has_keyword = true
-        end
-        has_keyword || continue
-        push!(found, value)
-    end
-    found
-end
-
-function binding_warning(func, ctx)
-    path = tempname()
-    open(path, "w") do warn_io
-        redirect_stderr(warn_io) do
-            probes = Probes(; functions = (func,), slow_s = 0.0)
-            workload = () -> nothing
-            ArchCheck.observe(workload, probes, ctx)
-            chosen = nothing
-            for method in methods(func)
-                method.module === ArchCheck || continue
-                isempty(Base.kwarg_decl(method)) && continue
-                chosen = method
-            end
-            Base.bodyfunction(chosen)
-        end
-    end
-    read(path, String)
-end
-
-@testset "probes: an unassigned Memory slot stays out of the content hash" begin
-    slots = Memory{Any}(undef, 2)
-    slots[2] = :kept
-    digest = ArchCheck.content_hash(slots)
-    twin = Memory{Any}(undef, 2)
-    twin[2] = :kept
-    twin_digest = ArchCheck.content_hash(twin)
-    @test digest == twin_digest
-    filled = Memory{Any}(undef, 2)
-    filled[1] = nothing
-    filled[2] = :kept
-    filled_digest = ArchCheck.content_hash(filled)
-    @test digest != filled_digest
-end
-
-@testset "probes: method_graph and observe arguments have a content hash" begin
-    entries = Any[(ArchCheck.gate, Tuple{Module})]
-    modules = (ArchCheck,)
-    graph = ArchCheck.method_graph(entries, modules)
-    graph_digest = ArchCheck.content_hash(graph)
-    @test graph_digest isa UInt
-    ctx = archcheck_context(; methods = graph)
-    probes = Probes(; functions = (ArchCheck.method_graph, ArchCheck.observe), slow_s = 0.0)
-    workload = () -> 1
-    observe_arguments = (workload, nothing, ctx)
-    observe_digest = ArchCheck.content_hash(observe_arguments)
-    @test observe_digest isa UInt
-    armed = ArchCheck.arm!(probes, ctx)
-    local traced
-    try
-        built = Base.invokelatest(ArchCheck.method_graph, entries, modules)
-        observed = Base.invokelatest(ArchCheck.observe, workload, nothing, ctx)
-        @test built isa ArchCheck.MethodGraph
-        @test observed isa ArchCheck.Observation
-    finally
-        traced = ArchCheck.disarm!(armed)
-    end
-    names = Symbol[record.name for record in traced.records]
-    @test :method_graph in names
-    @test :observe in names
-end
-
-@testset "probes: arming a keyword method leaves the body binding in this world" begin
-    ctx = archcheck_context()
-    functions = keyword_functions()
-    @test !isempty(functions)
-    for func in functions
-        text = binding_warning(func, ctx)
-        warned = occursin("WARNING:", text) || occursin("Warning:", text)
-        @test !warned
-    end
-    path = joinpath(pkgdir(ArchCheck), "src", "ArchCheck.jl")
-    before = ArchCheck.file_rank(path)
-    probes = Probes(; functions = (ArchCheck.file_rank,), slow_s = 0.0)
-    workload = () -> ArchCheck.file_rank(path)
-    observed = ArchCheck.observe(workload, probes, ctx)
-    names = Symbol[record.name for record in observed.records]
-    @test :file_rank in names
-    after = Base.invokelatest(ArchCheck.file_rank, path)
-    @test before == after
 end

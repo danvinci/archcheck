@@ -1,7 +1,5 @@
 # One kernel written twice, once per array storage. Fixed-size arrays are local types.
-
-const OVERLOADS_FILE = joinpath(pkgdir(ArchCheck), "src", "checks_overloads.jl")
-isdefined(ArchCheck, :StorageOverloads) || Base.include(ArchCheck, OVERLOADS_FILE)
+# The lattice draw decides which pairs fire. The source is that draw, written out.
 
 struct LatticeType
     form::Union{Symbol,Expr} # argument type as written in the method
@@ -10,10 +8,7 @@ end
 
 plain(form) = LatticeType(form, Symbol[])
 
-function parametric(form, vars)
-    names = collect(vars)
-    LatticeType(form, names)
-end
+parametric(form, vars) = LatticeType(form, collect(vars))
 
 const VECTOR_F64 = plain(:(Vector{Float64}))
 const MATRIX_F64 = plain(:(Matrix{Float64}))
@@ -25,25 +20,6 @@ const WIDE_F64 = plain(:(AbstractVector{Float64}))
 const FLOAT_SLOT = plain(:(Float64))
 const REAL_SLOT = plain(:(Real))
 const INT_SLOT = plain(:(Int))
-
-function define_slots(mod, name, slots)
-    arguments = Expr[]
-    wheres = Symbol[]
-    for (index, slot) in enumerate(slots)
-        parameter = Symbol("slot", index)
-        argument = Expr(:(::), parameter, slot.form)
-        push!(arguments, argument)
-        for var in slot.wheres
-            var in wheres || push!(wheres, var)
-        end
-    end
-    signature = Expr(:call, name, arguments...)
-    if !isempty(wheres)
-        signature = Expr(:where, signature, wheres...)
-    end
-    definition = Expr(:(=), signature, 0)
-    Core.eval(mod, definition)
-end
 
 function orient_pair(rng, left, right, fires)
     flip = rand(rng, Bool)
@@ -124,103 +100,127 @@ function draw_pair(rng)
     orient_pair(rng, left, right, fires)
 end
 
-function overload_index()
-    directory = mktempdir()
-    src = joinpath(directory, "src")
-    mkpath(src)
-    entry = joinpath(src, "Empty.jl")
-    write(entry, "placeholder() = 1\n")
-    rank = Dict(:Empty => 1)
-    dirs = Dict("." => :Empty)
-    ArchCheck.build_source_index(src, rank, dirs)
+function overload_where_names(slots)
+    wheres = Symbol[]
+    for slot in slots
+        for var in slot.wheres
+            var in wheres || push!(wheres, var)
+        end
+    end
+    wheres
 end
 
-function hits_named(found, name)
-    [f for f in found if f.symbol == name]
+function overload_method_text(name, slots)
+    parts = String[]
+    for (index, slot) in enumerate(slots)
+        parameter = "slot" * string(index)
+        form = string(slot.form)
+        push!(parts, parameter * "::" * form)
+    end
+    signature = string(name) * "(" * join(parts, ", ") * ")"
+    wheres = overload_where_names(slots)
+    if !isempty(wheres)
+        where_text = join(wheres, ", ")
+        signature = signature * " where {" * where_text * "}"
+    end
+    signature * " = 0"
 end
 
-module FStore
-    struct Fix{N,T} <: AbstractVector{T} end
-    const KERNEL_LINE = @__LINE__() + 1
-    kernel(xs::Vector{Float64}) = xs
-    const KERNEL_FIX_LINE = @__LINE__() + 1
-    kernel(xs::Fix{N,Float64}) where {N} = xs
-    both(xs::Vector{Float64}, ys::Vector{Int}) = xs
-    both(xs::Fix{N,Float64}, ys::Fix{M,Int}) where {N,M} = xs
-    tri(xs::Vector{Float64}) = xs
-    tri(x::Real) = x
-    tri(xs::Fix{N,Float64}) where {N} = xs
-    tail(n::Int, xs::Vector{Float64}) = xs
-    tail(n::Int, xs::Fix{N,Float64}) where {N} = xs
-    bounded(xs::T) where {T<:Vector{Float64}} = xs
-    bounded(xs::Fix{N,Float64}) where {N} = xs
-    wide_bound(xs::T) where {T<:AbstractVector{Float64}} = xs
-    wide_bound(xs::Vector{Float64}) = xs
-    kw(xs::Vector{Float64}; tol = 0) = xs
-    kw(xs::Fix{N,Float64}; tol = 0) where {N} = xs
+function overload_generated_spine()
+    lines = String[
+        "struct Fix{N,T} <: AbstractVector{T} end",
+        "struct FixB <: AbstractVector{Float64} end",
+    ]
+    expected = Set{String}()
+    for seed in 1:40
+        rng = Random.Xoshiro(seed)
+        left, right, fires = draw_pair(rng)
+        name = "gen_" * string(seed)
+        push!(lines, overload_method_text(name, left))
+        push!(lines, overload_method_text(name, right))
+        fires || continue
+        push!(expected, name)
+    end
+    spine = join(lines, "\n")
+    (; spine, expected)
 end
+
+const OVER_GENERATED = overload_generated_spine()
+const OVER_GEN = load_package("OverGen", OVER_GENERATED.spine)
+
+const STORE_SPINE = """
+struct Fix{N,T} <: AbstractVector{T} end
+kernel(xs::Vector{Float64}) = xs
+kernel(xs::Fix{N,Float64}) where {N} = xs
+both(xs::Vector{Float64}, ys::Vector{Int}) = xs
+both(xs::Fix{N,Float64}, ys::Fix{M,Int}) where {N,M} = xs
+tri(xs::Vector{Float64}) = xs
+tri(x::Real) = x
+tri(xs::Fix{N,Float64}) where {N} = xs
+tail(n::Int, xs::Vector{Float64}) = xs
+tail(n::Int, xs::Fix{N,Float64}) where {N} = xs
+bounded(xs::T) where {T<:Vector{Float64}} = xs
+bounded(xs::Fix{N,Float64}) where {N} = xs
+wide_bound(xs::T) where {T<:AbstractVector{Float64}} = xs
+wide_bound(xs::Vector{Float64}) = xs
+kw(xs::Vector{Float64}; tol = 0) = xs
+kw(xs::Fix{N,Float64}; tol = 0) where {N} = xs
+"""
+
+const STORE_HEAP = load_package("StoreHeap", STORE_SPINE)
 
 # A method added outside the package. Its module is the test's, so the pair stays the package's.
-FStore.kernel(xs::Matrix{Float64}) = xs
+StoreHeap.kernel(xs::Matrix{Float64}) = xs
 
-module FPack
+const PACK_STORE = load_package("PackStore", """
+include("a/A.jl")
+using .A
+include("b/B.jl")
+using .B
+""", [
+    "a/A.jl" => """
     module A
-        struct Fix{N,T} <: AbstractVector{T} end
-        shared(xs::Vector{Float64}) = xs
-    end
-    module B
-        import ..A
-        A.shared(xs::A.Fix{N,Float64}) where {N} = xs
-    end
-end
-
-module FGen
     struct Fix{N,T} <: AbstractVector{T} end
-    struct FixB <: AbstractVector{Float64} end
-end
-
-gen_expected = Set{String}()
-for seed in 1:40
-    rng = Random.Xoshiro(seed)
-    left, right, fires = draw_pair(rng)
-    name = Symbol("gen_", seed)
-    define_slots(FGen, name, left)
-    define_slots(FGen, name, right)
-    fires || continue
-    push!(gen_expected, string(name))
-end
+    shared(xs::Vector{Float64}) = xs
+    end
+    """,
+    "b/B.jl" => """
+    module B
+    import ..A
+    A.shared(xs::A.Fix{N,Float64}) where {N} = xs
+    end
+    """,
+])
 
 @testset "storage overloads are an error and run before the workload" begin
-    check = ArchCheck.StorageOverloads()
+    check = StorageOverloads()
     @test ArchCheck.kinds(check) == (:storage_overload => :error,)
     @test ArchCheck.phase(check) === :static
 end
 
 @testset "a heap array beside a fixed-size array of the same elements is one finding" begin
-    index = overload_index()
-    here = relpath(@__FILE__, index.repo)
-    store_ctx = Context(index, FStore, [FStore])
-    store_found = ArchCheck.run(ArchCheck.StorageOverloads(), store_ctx)
-    kernel_sites = "$(here):$(FStore.KERNEL_LINE) $(here):$(FStore.KERNEL_FIX_LINE)"
+    ctx = case_context(STORE_HEAP)
+    store_found = ArchCheck.run(StorageOverloads(), ctx)
+    kernel_sites = "src/StoreHeap.jl:3 src/StoreHeap.jl:4"
     cases = (
         (name = "kernel", count = 1,
-         storage = "Vector{Float64} Main.FStore.Fix{N, Float64}",
+         storage = "Vector{Float64} StoreHeap.Fix{N, Float64}",
          methods = kernel_sites),
         (name = "both", count = 1,
-         storage = "Vector{Float64} Main.FStore.Fix{N, Float64} Vector{Int64} Main.FStore.Fix{M, Int64}",
+         storage = "Vector{Float64} StoreHeap.Fix{N, Float64} Vector{Int64} StoreHeap.Fix{M, Int64}",
          methods = nothing),
         (name = "tail", count = 1,
-         storage = "Vector{Float64} Main.FStore.Fix{N, Float64}",
+         storage = "Vector{Float64} StoreHeap.Fix{N, Float64}",
          methods = nothing),
         (name = "bounded", count = 1,
-         storage = "Vector{Float64} Main.FStore.Fix{N, Float64}",
+         storage = "Vector{Float64} StoreHeap.Fix{N, Float64}",
          methods = nothing),
         (name = "tri", count = 1, storage = nothing, methods = nothing),
         (name = "kw", count = 1, storage = nothing, methods = nothing),
         (name = "wide_bound", count = 0, storage = nothing, methods = nothing),
     )
     for case in cases
-        hits = hits_named(store_found, case.name)
+        hits = filter(f -> f.symbol == case.name, store_found)
         @test length(hits) == case.count
         case.count == 1 || continue
         hit = only(hits)
@@ -231,23 +231,18 @@ end
             @test ev(hit, :methods) == case.methods
         end
     end
-
-    pack_mods = [FPack, FPack.A, FPack.B]
-    pack_ctx = Context(index, FPack, pack_mods)
-    pack_found = ArchCheck.run(ArchCheck.StorageOverloads(), pack_ctx)
-    shared_hits = hits_named(pack_found, "shared")
+    pack_ctx = case_context(PACK_STORE)
+    pack_found = ArchCheck.run(StorageOverloads(), pack_ctx)
+    shared_hits = filter(f -> f.symbol == "shared", pack_found)
     @test length(shared_hits) == 1
-    if length(shared_hits) == 1
-        shared_hit = only(shared_hits)
-        @test shared_hit.mod === Symbol("FPack.A")
-    end
+    shared_hit = only(shared_hits)
+    @test shared_hit.mod === :A
 end
 
 @testset "storage pairs drawn from the lattice match the verdict of the draw" begin
-    index = overload_index()
-    ctx = Context(index, FGen, [FGen])
-    found = ArchCheck.run(ArchCheck.StorageOverloads(), ctx)
+    ctx = case_context(OVER_GEN)
+    found = ArchCheck.run(StorageOverloads(), ctx)
     got = Set(f.symbol for f in found)
-    @test got == gen_expected
+    @test got == OVER_GENERATED.expected
     @test all(f -> f.kind === :storage_overload, found)
 end

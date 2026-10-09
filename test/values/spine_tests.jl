@@ -1,94 +1,47 @@
-# The package spine is the root module's file: its methods are indexed, and an outside using resolves.
+# The package spine is the root module's file: its methods are indexed, and a workload probe records them.
 
-function write_spine_package(dir; import_child::Bool)
-    src = joinpath(dir, "src")
-    child_dir = joinpath(src, "child")
-    mkpath(child_dir)
-    import_line = import_child ? "import SpinePkg.Child\n" : ""
-    spine = """
-    module SpinePkg
-    using ArchCheck
-    include("child/Child.jl")
-    using .Child
-    $(import_line)spine_only(x) = x + 1
-    end
-    """
-    write(joinpath(src, "SpinePkg.jl"), spine)
-    child = """
+const SPINE_ROOT = load_package("SpineRoot", """
+include("child/Child.jl")
+using .Child
+spine_only(x) = x + 1
+""", [
+    "child/Child.jl" => """
     module Child
     child_only(x) = x
     end
-    """
-    write(joinpath(child_dir, "Child.jl"), child)
-    src
-end
+    """,
+])
 
-function spine_index(src)
-    spine = joinpath(src, "SpinePkg.jl")
-    layout = ArchCheck.package_layout(spine, :SpinePkg)
-    rank = layout[1]
-    dir2mod = layout[2]
-    ArchCheck.build_source_index(src, rank, dir2mod; root = :SpinePkg)
-end
-
-function loaded_spine(src)
-    parent = Module(:SpinePkg)
-    # The parent's own name hides a child module of the same name, so the loaded module is what `include` returns.
-    Base.include(parent, joinpath(src, "SpinePkg.jl"))
-end
-
-function probe_loaded_spine(pkg, index)
-    child = getfield(pkg, :Child)
-    spine_only = getfield(pkg, :spine_only)
-    ctx = Context(index, pkg, [child])
-    probes = Probes(functions = (spine_only,), slow_s = 0.0)
-    armed = ArchCheck.arm!(probes, ctx)
-    local traced
-    try
-        got = Base.invokelatest(spine_only, 2)
-        @test got == 3
-    finally
-        traced = ArchCheck.disarm!(armed)
-    end
-    names = [record.name for record in traced.records]
+@testset "a method in the spine is indexed and probed" begin
+    ctx = case_context(SPINE_ROOT)
+    spine_file = only(file for file in ctx.index.files if file.name == "SpineRoot.jl")
+    @test spine_file.mod === :SpineRoot
+    dead = ArchCheck.run(DeadCode(), ctx)
+    planted = filter(f -> f.symbol == "spine_only", dead)
+    finding = only(planted)
+    @test finding.kind === :dead_code
+    @test finding.mod === :SpineRoot
+    @test endswith(finding.file, joinpath("src", "SpineRoot.jl"))
+    corpus = ArchCheck.run(Corpus(), ctx)
+    hole = any(f -> f.kind === :unranked_file && endswith(f.file, "SpineRoot.jl"), corpus)
+    @test !hole
+    uses_child = any(ref -> ref.to === :Child && ref.via === :using, ctx.index.refs)
+    @test uses_child
+    target = SPINE_ROOT.pkg.spine_only
+    probes = Probes(; functions = (target,), slow_s = 0.0)
+    workload = () -> target(2)
+    watched = observed_gate(SPINE_ROOT.pkg; workload, probes)
+    names = [record.name for record in watched.observed.records]
     @test names == [:spine_only]
 end
 
-@testset "a method in the spine is indexed and probed" begin
-    mktempdir() do dir
-        src = write_spine_package(dir; import_child = false)
-        index = spine_index(src)
-        spine_file = only(f for f in index.files if f.name == "SpinePkg.jl")
-        @test spine_file.mod === :SpinePkg
-        for module_rank in values(index.rank)
-            ordered_before = ArchCheck.completes_before(spine_file.modrank, module_rank)
-            @test ordered_before
-        end
-        dead = ArchCheck.check_dead_code_static(index)
-        planted = filter(f -> f.symbol == "spine_only", dead)
-        finding = only(planted)
-        @test finding.kind === :dead_code
-        @test finding.mod === :SpinePkg
-        @test endswith(finding.file, joinpath("src", "SpinePkg.jl"))
-        corpus = ArchCheck.check_corpus(index)
-        hole = any(f -> f.kind === :unranked_file && endswith(f.file, "SpinePkg.jl"), corpus)
-        @test !hole
-
-        pkg = loaded_spine(src)
-        # Names defined while loading are visible in the latest world.
-        Base.invokelatest(probe_loaded_spine, pkg, index)
-    end
-end
-
 @testset "a spine using an outside package and importing its child by the package name indexes" begin
-    mktempdir() do dir
-        src = write_spine_package(dir; import_child = true)
-        index = spine_index(src)
-        outside_ref = any(r -> r.to === :ArchCheck, index.refs)
-        @test !outside_ref
-        imported = filter(r -> r.via === :import && r.to === :Child, index.refs)
-        @test length(imported) == 1
-        dead = ArchCheck.check_dead_code_static(index)
-        @test any(f -> f.symbol == "spine_only" && f.mod === :SpinePkg, dead)
-    end
+    ctx = Context(SpineNamed)
+    outside = any(ref -> ref.to === :Printf, ctx.index.refs)
+    @test !outside
+    imported = count(ref -> ref.via === :import && ref.to === :Child, ctx.index.refs)
+    @test imported == 1
+    dead = ArchCheck.run(DeadCode(), ctx)
+    planted = filter(f -> f.symbol == "spine_only" && f.mod === :SpineNamed, dead)
+    @test length(planted) == 1
 end

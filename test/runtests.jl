@@ -2,11 +2,12 @@
 using Test, JSON, Random
 using ArchCheck
 
-# The fixtures load as packages, so `gate` finds their `src/` and their modules carry the dotted names their spines
-# declare: Nested is a module tree, Probed the methods the probe tests arm.
+# Fixture packages, so `gate` finds their `src/`: Nested is a module tree, Probed the methods the probe tests arm,
+# SpineNamed a spine importing its child by the package name.
 pushfirst!(LOAD_PATH, joinpath(@__DIR__, "fixtures"))
 using Nested
 using Probed
+using SpineNamed
 popfirst!(LOAD_PATH)
 
 # A synthetic tree has no parsed def index, so these tests declare its absence rather than omit it.
@@ -25,8 +26,8 @@ end
 # evidence is a fixed key/value vocabulary per kind, so tests read it by key
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
-# A package loaded into Main from a fresh `src/`: `spine` is the body of `module name`, `files` the other sources by
-# path under `src/`. A test runs a check on it with `run(check, case_context(case))`.
+# A package written to a fresh directory and imported into Main, top-level as a user's package is: `spine` is the
+# body of `module name`, starting on its second line, and `files` the other sources by path under `src/`.
 function load_package(name::AbstractString, spine::AbstractString, files = Pair{String,String}[])
     root = mktempdir()
     src = joinpath(root, "src")
@@ -37,12 +38,24 @@ function load_package(name::AbstractString, spine::AbstractString, files = Pair{
         write(path, source)
     end
     spine_path = joinpath(src, name * ".jl")
-    write(spine_path, "module $name\n$spine\nend\n")
-    pkg = Base.include(Main, spine_path)
+    write(spine_path, "module $name; __precompile__(false)\n$spine\nend\n")
+    seed = hash(name)
+    high = UInt128(seed) << 64
+    low = UInt128(hash(seed))
+    uuid = Base.UUID(high | low)
+    write(joinpath(root, "Project.toml"), "name = \"$name\"\nuuid = \"$uuid\"\n")
+    binding = Symbol(name)
+    pushfirst!(LOAD_PATH, root)
+    try
+        Core.eval(Main, :(import $binding))
+    finally
+        popfirst!(LOAD_PATH)
+    end
+    pkg = Base.invokelatest(getfield, Main, binding)
     (; pkg, root, src)
 end
 
-case_context(case; options...) = Context(case.pkg; src = case.src, options...)
+case_context(case; options...) = Context(case.pkg; options...)
 
 # `gate` with a throwaway report and no output, returning its findings.
 function gate_findings(pkg; options...)
@@ -77,15 +90,38 @@ function evidence_rows(found, keys::Symbol...)
     sort!(rows)
 end
 
+# Each indexed file's scan, by file name.
+file_scans(ctx) = Dict(file.name => file.scan for file in ctx.index.files)
+
+function syntax_nodes(node)
+    kids = Base.JuliaSyntax.children(node)
+    isnothing(kids) && return 1
+    total = 1
+    for child in kids
+        total += syntax_nodes(child)
+    end
+    total
+end
+
+# Syntax nodes in the body of the first method `source` defines, counted from the parse rather than by a check.
+function body_nodes(source)
+    tree = Base.JuliaSyntax.parseall(Base.JuliaSyntax.SyntaxNode, source)
+    top = Base.JuliaSyntax.children(tree)
+    method = top[1]
+    parts = Base.JuliaSyntax.children(method)
+    body = parts[2]
+    syntax_nodes(body)
+end
+
 # every engine check at its declared severity, with no consumer promotion
 function default_severity()
     engine = (ArchCheck.CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))
     Dict(kind => severity for check in engine for (kind, severity) in ArchCheck.kinds(check))
 end
 
-# n files, random defs, random cross-file calls, and a random include order.
-# The generator's edge set is the oracle for the back-edge and index checks.
-function random_module(rng, dir)
+# n files, random defs, random cross-file calls, and a random include order, as a package's spine and sources.
+# The generator's edge set, `truth`, is the oracle for the back-edge and index checks.
+function random_module(rng)
     nfiles = rand(rng, 2:5)
     names = ["f$i.jl" for i in 1:nfiles]
     defs = Dict(n => ["d$(i)_$(j)" for j in 1:rand(rng, 1:3)] for (i, n) in enumerate(names))
@@ -106,13 +142,10 @@ function random_module(rng, dir)
     end
 
     order = shuffle(rng, names)
-    mkpath(dir)
-    write(joinpath(dir, "M.jl"), join(["include(\"$n\")" for n in order], "\n"))
-    for n in names
-        write(joinpath(dir, n), join(bodies[n], "\n"))
-    end
+    spine = join(["include(\"$n\")" for n in order], "\n")
+    sources = [n => join(bodies[n], "\n") for n in names]
     rank = Dict(n => i for (i, n) in enumerate(order))
-    (truth = truth, rank = rank, files = names)
+    (; truth, rank, files = names, spine, sources)
 end
 
 # One file per promise: the name model's checks in names/, the value model's in values/, sharing these helpers.

@@ -1,32 +1,60 @@
-# One scope model, and whether a call's value is read.
+# A renamed local clones at the whole body, and a renamed free name does not.
+# A call's value is read when a later expression uses it.
 
-function probe_source(body)
-    "function probe()\n" * body * "\nend\n"
+function syntax_function(name, body)
+    "function " * name * "()\n" * body * "\nend"
 end
 
-function renamed_marker(source)
-    replace(source, "marker" => "other")
+function syntax_pair_file(name, body)
+    renamed_body = replace(body, "marker" => "other")
+    original = syntax_function(name, body)
+    renamed_name = name * "_renamed"
+    renamed = syntax_function(renamed_name, renamed_body)
+    original * "\n" * renamed * "\n"
 end
 
-function function_kids(source)
-    tree = ArchCheck.parse_file(source, "probe.jl")
-    func = first(ArchCheck.child_nodes(tree))
-    ArchCheck.child_nodes(func)
+function syntax_package(pkg_name, pairs)
+    files = Pair{String,String}[]
+    includes = String[]
+    for (label, body) in pairs
+        name = replace(label, " " => "_")
+        filename = name * ".jl"
+        source = syntax_pair_file(name, body)
+        push!(files, filename => source)
+        push!(includes, "include(\"$filename\")")
+    end
+    spine = join(includes, "\n")
+    load_package(pkg_name, spine, files)
 end
 
-function digest_stable(source)
-    kids = function_kids(source)
-    bound = ArchCheck.body_locals(kids[1], kids[2], Set{Symbol}())
-    original = ArchCheck.digest_of(kids[2], bound)
-    other_kids = function_kids(renamed_marker(source))
-    other_bound = ArchCheck.body_locals(other_kids[1], other_kids[2], Set{Symbol}())
-    renamed = ArchCheck.digest_of(other_kids[2], other_bound)
-    original == renamed
+function syntax_scans(case)
+    ctx = case_context(case)
+    scans = file_scans(ctx)
+    (; ctx, scans)
 end
 
-function marker_is_ref(source)
-    scan = ArchCheck.scan_defs(source)
-    :marker in scan.refs[:probe]
+function syntax_method_names(finding)
+    methods = ev(finding, :methods)
+    labels = split(methods, " ")
+    names = Set{String}()
+    for label in labels
+        pieces = split(label, ":")
+        push!(names, string(last(pieces)))
+    end
+    names
+end
+
+# The renamed pair clones exactly when no method in its file references `marker` as a free name.
+function syntax_agrees(scanned, name, body)
+    source = syntax_function(name, body)
+    nodes = body_nodes(source)
+    check = ExpressionClones(; min_nodes = nodes)
+    found = ArchCheck.run(check, scanned.ctx)
+    wanted = Set([name, name * "_renamed"])
+    cloned = any(finding -> syntax_method_names(finding) == wanted, found)
+    scan = scanned.scans[name * ".jl"]
+    referenced = any(used -> :marker in used, values(scan.refs))
+    referenced == !cloned
 end
 
 const SCOPE_BODIES = [
@@ -50,13 +78,6 @@ const SCOPE_BODIES = [
     ("nested function", "function inner(marker)\n    f(marker)\nend"),
     ("nested default", "function inner(x = marker)\n    marker = 1\n    x\nend"),
 ]
-
-@testset "locals agree: $label" for (label, body) in SCOPE_BODIES
-    source = probe_source(body)
-    stable = digest_stable(source)
-    referenced = marker_is_ref(source)
-    @test stable == !referenced
-end
 
 function scope_leaf(rng)
     choice = rand(rng, 1:2)
@@ -93,88 +114,99 @@ function generated_scope(rng)
     body
 end
 
-function marker_referenced(source)
-    scan = ArchCheck.scan_defs(source)
-    for names in values(scan.refs)
-        :marker in names && return true
-    end
-    false
-end
-
-@testset "generated scope walks agree, seed $seed" for seed in 1:12
-    rng = Xoshiro(seed)
-    body = generated_scope(rng)
-    source = probe_source(body)
-    stable = digest_stable(source)
-    referenced = marker_referenced(source)
-    @test stable == !referenced
-end
-
-function used_pairs(source)
-    scan = ArchCheck.scan_defs(source)
-    site = MethodSite(:probe, 1)
-    calls = scan.callsites[site]
-    pairs = Tuple{Symbol,Bool}[]
-    for call in calls
-        push!(pairs, (call.callee, call.is_used))
+function generated_scope_pairs()
+    pairs = Pair{String,String}[]
+    for seed in 1:12
+        rng = Xoshiro(seed)
+        body = generated_scope(rng)
+        label = "seed_" * string(seed)
+        push!(pairs, label => body)
     end
     pairs
 end
 
+const SCOPE_HANDS = syntax_package("ScopeHands", SCOPE_BODIES)
+const SCOPE_HAND_READ = syntax_scans(SCOPE_HANDS)
+const SCOPE_WALK_PAIRS = generated_scope_pairs()
+const SCOPE_WALK = syntax_package("ScopeWalk", SCOPE_WALK_PAIRS)
+const SCOPE_WALK_READ = syntax_scans(SCOPE_WALK)
+
+@testset "locals agree: $label" for (label, body) in SCOPE_BODIES
+    name = replace(label, " " => "_")
+    @test syntax_agrees(SCOPE_HAND_READ, name, body)
+end
+
+@testset "generated scope walks agree, seed $seed" for seed in 1:12
+    label = "seed_" * string(seed)
+    body = SCOPE_WALK_PAIRS[seed][2]
+    @test syntax_agrees(SCOPE_WALK_READ, label, body)
+end
+
+function syntax_used_pairs(scan, name)
+    site = only(site for site in keys(scan.callsites) if site.name === name)
+    [(call.callee, call.is_used) for call in scan.callsites[site]]
+end
+
+const USED_READ = load_package("UsedRead", """
+function statement_call()
+    g()
+    h()
+end
+function last_call()
+    h()
+end
+function assigned_call()
+    x = g()
+    x
+end
+function argument_call()
+    h(g())
+end
+function returned_call()
+    return g()
+end
+function condition_call()
+    if g()
+        h()
+    end
+    0
+end
+function sync_kept()
+    @sync begin
+        work()
+    end
+end
+function sync_body()
+    @sync begin
+        work()
+    end
+    nothing
+end
+function fetch_dropped(t)
+    fetch(t)
+    nothing
+end
+function fetch_kept(t)
+    fetch(t)
+end
+""")
+
 const USED_CASES = [
-    (
-        label = "statement call",
-        source = "function probe()\n    g()\n    h()\nend\n",
-        expected = [(:g, false), (:h, true)],
-    ),
-    (
-        label = "last expression of a function",
-        source = "function probe()\n    h()\nend\n",
-        expected = [(:h, true)],
-    ),
-    (
-        label = "assigned",
-        source = "function probe()\n    x = g()\n    x\nend\n",
-        expected = [(:g, true)],
-    ),
-    (
-        label = "argument",
-        source = "function probe()\n    h(g())\nend\n",
-        expected = [(:h, true), (:g, true)],
-    ),
-    (
-        label = "returned",
-        source = "function probe()\n    return g()\nend\n",
-        expected = [(:g, true)],
-    ),
-    (
-        label = "condition",
-        source = "function probe()\n    if g()\n        h()\n    end\n    0\nend\n",
-        expected = [(:g, true), (:h, false)],
-    ),
-    (
-        label = "sync block kept",
-        source = "function probe()\n    @sync begin\n        work()\n    end\nend\n",
-        expected = [(:work, true)],
-    ),
-    (
-        label = "sync block body",
-        source = "function probe()\n    @sync begin\n        work()\n    end\n    nothing\nend\n",
-        expected = [(:work, false)],
-    ),
-    (
-        label = "fetch discarded",
-        source = "function probe(t)\n    fetch(t)\n    nothing\nend\n",
-        expected = [(:fetch, false)],
-    ),
-    (
-        label = "fetch kept",
-        source = "function probe(t)\n    fetch(t)\nend\n",
-        expected = [(:fetch, true)],
-    ),
+    (label = "statement call", name = :statement_call, expected = [(:g, false), (:h, true)]),
+    (label = "last expression of a function", name = :last_call, expected = [(:h, true)]),
+    (label = "assigned", name = :assigned_call, expected = [(:g, true)]),
+    (label = "argument", name = :argument_call, expected = [(:h, true), (:g, true)]),
+    (label = "returned", name = :returned_call, expected = [(:g, true)]),
+    (label = "condition", name = :condition_call, expected = [(:g, true), (:h, false)]),
+    (label = "sync block kept", name = :sync_kept, expected = [(:work, true)]),
+    (label = "sync block body", name = :sync_body, expected = [(:work, false)]),
+    (label = "fetch discarded", name = :fetch_dropped, expected = [(:fetch, false)]),
+    (label = "fetch kept", name = :fetch_kept, expected = [(:fetch, true)]),
 ]
 
+const USED_SCAN = syntax_scans(USED_READ).scans["UsedRead.jl"]
+
 @testset "call value is read: $(case.label)" for case in USED_CASES
-    got = used_pairs(case.source)
+    got = syntax_used_pairs(USED_SCAN, case.name)
     @test got == case.expected
 end

@@ -1,0 +1,6 @@
+name = "SpineNamed"
+uuid = "0c889bad-10aa-4685-8334-245d947b09c0"
+version = "0.1.0"
+
+[deps]
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"

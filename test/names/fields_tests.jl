@@ -1,77 +1,60 @@
 # Field types stay closed, and a field read stays on a struct the caller's module may read.
-# abstract-field corpus: closed storage vs every open-dispatch shape the check names
-module FAbs
-    abstract type Abs end
-    struct Closed
-        xs::Vector{Float64}   # field type
-        t::Type{Float64}   # field type
-        u::Union{Float64,Nothing}   # field type
-    end
-    struct Open
-        xs::Vector   # field type
-        any::Vector{Any}   # field type
-        absv::AbstractVector   # field type
-        absf::AbstractVector{Float64}   # field type
-        d::Dict   # field type
-        da::Dict{Int,Any}   # field type
-        s::Set   # field type
-        map::Type{<:Integer}   # field type
-        r::Real   # field type
-        spec::Abs   # field type
-    end
-    struct Param{T}
-        x::T   # field type
-        ys::Vector   # field type
-        zs::Vector{T}   # field type
-        r::Real   # field type
-        ws::Vector{Pair{K,T} where K}   # names T, and each element is still a family over K
-    end
+
+const OPEN_FIELDS = load_package("OpenFields", """
+abstract type Abs end
+struct Closed
+    xs::Vector{Float64}
+    t::Type{Float64}
+    u::Union{Float64,Nothing}
+end
+struct Open
+    xs::Vector
+    any::Vector{Any}
+    absv::AbstractVector
+    absf::AbstractVector{Float64}
+    d::Dict
+    da::Dict{Int,Any}
+    s::Set
+    map::Type{<:Integer}
+    r::Real
+    spec::Abs
+end
+struct Param{T}
+    x::T
+    ys::Vector
+    zs::Vector{T}
+    r::Real
+    ws::Vector{Pair{K,T} where K}
+end
+""")
+
+const OPEN_FIELD_NAMES = Set([
+    "Open.xs", "Open.any", "Open.absv", "Open.absf", "Open.d", "Open.s", "Open.da",
+    "Open.map", "Open.r", "Open.spec", "Param.ys", "Param.r", "Param.ws",
+])
+
+@testset "a field whose stored type leaves dispatch open is a finding" begin
+    ctx = case_context(OPEN_FIELDS)
+    found = ArchCheck.run(AbstractFields(), ctx)
+    symbols = Set(finding.symbol for finding in found)
+    @test symbols == OPEN_FIELD_NAMES
+    rows = evidence_rows(found, :declared)
+    @test (:abstract_field, "Open.xs", "Vector") in rows
 end
 
-@testset "abstract-field" begin
-    found = ArchCheck.check_abstract_fields([FAbs], NO_SITES)
-    syms = Set(f.symbol for f in found)
-
-    @test "Open.xs" in syms && ev(only(f for f in found if f.symbol == "Open.xs"), :declared) == "Vector"
-    @test "Open.any" in syms
-    @test "Open.absv" in syms
-    @test "Open.absf" in syms
-    @test "Open.d" in syms && "Open.s" in syms
-    @test "Open.da" in syms
-    @test "Open.map" in syms
-    @test "Open.r" in syms && "Open.spec" in syms
-
-    @test !("Closed.xs" in syms)
-    @test !("Closed.t" in syms)          # Type{Float64} holds that one type object
-    @test !("Closed.u" in syms)          # small Union, lowering splits it
-
-    @test !("Param.x" in syms) && !("Param.zs" in syms)   # names the parameter, closes on use
-    @test "Param.ys" in syms && "Param.r" in syms         # independent of T, open on every instantiation
-    @test "Param.ws" in syms                              # names T, yet each element is a family no T fixes
-end
-
-@testset "foreign fields: a field read on another module's struct" begin
-    report = joinpath(mktempdir(), "architecture.jsonl")
-    checks = (ArchCheck.ForeignFields(),)
-    findings = ArchCheck.gate(Nested; report_path = report, io = IOBuffer(), checks)
-    reads = Set((string(f.mod), f.symbol) for f in findings)
-    # Span is public and documented: the field it documents is open, the field it leaves bare is not
-    @test !(("Hi", "Low.Span.lo") in reads)
-    @test ("Hi", "Low.Span.hi") in reads
-    # Mark is public and documents its field but not itself, so Julia records no field docstring
-    @test ("Hi", "Low.Mark.at") in reads
-    # Ring documents itself and its field, but Cuts keeps it internal
-    @test ("Hi", "Geo.Cuts.Ring.radius") in reads
-    # OpenBox is public and documents nothing
-    @test ("Geo.Cuts", "Geo.Curves.OpenBox.held") in reads
-    # Tick is Low's own, read through receivers only inference types
-    @test ("Hi", "Low.Tick.at") in reads
-    # a receiver annotated with a Union reads the field on each member, owned by that member's module
-    @test ("Hi", "Low.Notch.at") in reads
-    @test ("Hi", "Geo.Cuts.Arc.at") in reads
-    # a chain through a Union reads its next field on each member's declared field type
-    @test ("Hi", "Low.Pin.depth") in reads
-    @test ("Hi", "Geo.Cuts.Kerf.depth") in reads
-    # no other read is flagged
-    @test length(reads) == 9
+@testset "a field read on another module's struct is a finding" begin
+    ctx = Context(Nested)
+    found = ArchCheck.run(ForeignFields(), ctx)
+    reads = Set((string(finding.mod), finding.symbol) for finding in found)
+    @test reads == Set([
+        ("Hi", "Low.Span.hi"),
+        ("Hi", "Low.Mark.at"),
+        ("Hi", "Geo.Cuts.Ring.radius"),
+        ("Geo.Cuts", "Geo.Curves.OpenBox.held"),
+        ("Hi", "Low.Tick.at"),
+        ("Hi", "Low.Notch.at"),
+        ("Hi", "Geo.Cuts.Arc.at"),
+        ("Hi", "Low.Pin.depth"),
+        ("Hi", "Geo.Cuts.Kerf.depth"),
+    ])
 end

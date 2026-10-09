@@ -1,12 +1,17 @@
-# Method-grain calls: inference resolves a concrete call to one method, and a call it cannot
-# resolve stays a name. A generator records the edges it writes, so the oracle is that source.
+# Inference resolves a concrete call to one method, and a call it cannot resolve stays a name.
+# A generator records the edges it writes, so the oracle is that source.
 
-module MGConcrete
-    leaf(x::Int) = x
-    calls(x::Int) = leaf(x)
+function graph_of(case, entries)
+    ctx = case_context(case; entries)
+    ctx.methods
 end
 
-module MGWide
+const CONCRETE_CALL = load_package("ConcreteCall", """
+    leaf(x::Int) = x
+    calls(x::Int) = leaf(x)
+    """)
+
+const WIDE_DISPATCH = load_package("WideDispatch", """
     wide(x::Integer) = dest(x)
     dest(x::Int8) = x
     dest(x::Int16) = x
@@ -14,19 +19,26 @@ module MGWide
     dest(x::Int64) = x
     anycall(x) = dest(x)
     dyn(f, x::Int) = f(x)
-end
+    """)
 
-module MGKw
+const NARROW_DISPATCH = load_package("NarrowDispatch", """
+    wide(x::Integer) = dest(x)
+    dest(x::Int8) = x
+    dest(x::Int16) = x
+    dest(x::Int32) = x
+    """)
+
+const KEYWORD_CREDIT = load_package("KeywordCredit", """
     add(x::Int; y::Int) = x
     use(x::Int) = add(x; y = 2)
-end
+    """)
 
-module MGKwWhere
+const KEYWORD_WHERE = load_package("KeywordWhere", """
     scaled(xs::Vector{T}; scale::T = one(T)) where {T<:Real} = xs .* scale
     use(xs::Vector{Float64}) = scaled(xs; scale = 2.0)
-end
+    """)
 
-module MGClose
+const CLOSURE_CALL = load_package("ClosureCall", """
     leaf(x::Int) = x
     function outer(x::Int)
         inner(y::Int) = leaf(y)
@@ -35,127 +47,52 @@ module MGClose
     function anon(x::Int)
         (y -> leaf(y))(x)
     end
-end
+    """)
 
-module MGForms
+const CLOSURE_FORM = load_package("ClosureForm", """
     leaf(x::Int) = x
     function added(x::Int; y::Int = 1)
         (z -> leaf(z + y))(x)
     end
-end
+    """)
 
-module MGSplit
-    wide(x::Integer) = dest(x)
-    dest(x::Int8) = x
-    dest(x::Int16) = x
-    dest(x::Int32) = x
-end
-
-module MGDrop
+const UNUSED_RESULT = load_package("UnusedResult", """
     leaf(x::Int) = x
     function calls(x::Int)
         leaf(x)
         1
     end
-end
+    """)
 
-module MGRec
+const RECURSIVE_CALL = load_package("RecursiveCall", """
     self(x::Int) = x <= 0 ? x : self(x - 1)
     odd(x::Int) = x <= 0 ? x : even(x - 1)
     even(x::Int) = odd(x - 1)
-end
+    """)
 
-module MGOut
+# The spine ranks no inline module, so the inline module's methods sit outside the modules the graph expands.
+const OUTSIDE_CALL = load_package("OutsideCall", """
+    module LeafMod
     hidden(x::Int) = x
     leaf(x::Int) = hidden(x)
-end
-
-module MGIn
-    using ..MGOut: leaf
+    end
+    using .LeafMod: leaf
     go(x::Int) = leaf(x)
-end
+    """)
 
-module MGOver
+const OVERLOAD_PAIR = load_package("OverloadPair", """
     g(x::Int) = x
     h(x::String) = x
     f(x::Int) = g(x)
     f(x::String) = h(x)
-end
+    """)
 
-module MGPassed
+const PASSED_HELPER = load_package("PassedHelper", """
     helper(x::Int) = x
     wrap(xs::Vector{Int}) = map(x -> helper(x), xs)
     named(xs::Vector{Int}) = map(helper, xs)
     captured(xs::Vector{Int}, k::Int) = map(x -> helper(x) + k, xs)
-end
-
-@testset "method graph: a concrete call is one edge" begin
-    graph = ArchCheck.method_graph(((MGConcrete.calls, Tuple{Int}),), (MGConcrete,))
-    caller = only(methods(MGConcrete.calls))
-    callee = only(methods(MGConcrete.leaf))
-    @test graph.edges[caller] == Set([callee])
-end
-
-@testset "method graph: three matching methods are edges and four stay a name" begin
-    rows = (
-        (func = MGSplit.wide, dest = MGSplit.dest, mod = MGSplit, is_resolved = true),
-        (func = MGWide.wide, dest = MGWide.dest, mod = MGWide, is_resolved = false),
-    )
-    for row in rows
-        graph = ArchCheck.method_graph(((row.func, Tuple{Integer}),), (row.mod,))
-        caller = only(methods(row.func))
-        if row.is_resolved
-            callees = Set(methods(row.dest))
-            @test graph.edges[caller] == callees
-            @test !haskey(graph.unresolved, caller)
-        else
-            @test graph.unresolved[caller] == Set([:dest])
-            @test !haskey(graph.edges, caller)
-        end
-    end
-end
-
-@testset "method graph: an Any or dynamic call stays an unresolved name" begin
-    any_entry = (MGWide.anycall, Tuple{Any})
-    dyn_entry = (MGWide.dyn, Tuple{Any,Int})
-    graph = ArchCheck.method_graph((any_entry, dyn_entry), (MGWide,))
-    rows = (
-        (func = MGWide.anycall, name = :dest),
-        (func = MGWide.dyn, name = :f),
-    )
-    for row in rows
-        caller = only(methods(row.func))
-        @test graph.unresolved[caller] == Set([row.name])
-    end
-end
-
-@testset "method graph: a call whose result is unused stays an edge" begin
-    graph = ArchCheck.method_graph(((MGDrop.calls, Tuple{Int}),), (MGDrop,))
-    caller = only(methods(MGDrop.calls))
-    leaf = only(methods(MGDrop.leaf))
-    @test leaf in graph.edges[caller]
-end
-
-@testset "method graph: a recursive call is an edge" begin
-    self_entry = (MGRec.self, Tuple{Int})
-    odd_entry = (MGRec.odd, Tuple{Int})
-    graph = ArchCheck.method_graph((self_entry, odd_entry), (MGRec,))
-    self_method = only(methods(MGRec.self))
-    odd_method = only(methods(MGRec.odd))
-    even_method = only(methods(MGRec.even))
-    @test self_method in graph.edges[self_method]
-    @test even_method in graph.edges[odd_method]
-    @test odd_method in graph.edges[even_method]
-end
-
-@testset "method graph: a method outside the modules is an edge and is not expanded" begin
-    graph = ArchCheck.method_graph(((MGIn.go, Tuple{Int}),), (MGIn,))
-    caller = only(methods(MGIn.go))
-    leaf = only(methods(MGOut.leaf))
-    hidden = only(methods(MGOut.hidden))
-    @test leaf in graph.edges[caller]
-    @test all(callees -> !(hidden in callees), values(graph.edges))
-end
+    """)
 
 # Each method writes two to four ordinary calls, cycles included. One method stays unreached.
 # A return path keeps every call in the inference edges, including a discarded result.
@@ -198,11 +135,9 @@ function ensure_outside_call(calls, entry_indexes, outside)
     current = updated[origin]
     linked = outside[1]
     if length(current) >= 4
-        kept = current[1:end - 1]
-        updated[origin] = push!(copy(kept), linked)
-    else
-        updated[origin] = push!(copy(current), linked)
+        pop!(current)
     end
+    push!(current, linked)
     updated
 end
 
@@ -247,7 +182,7 @@ function random_targets(rng, call_count, pool)
     targets
 end
 
-function generated_method_module(rng, count)
+function generated_case(rng, count, name)
     order = randperm(rng, count)
     pool = order[1:count - 1]
     unreached = order[count]
@@ -269,24 +204,23 @@ function generated_method_module(rng, count)
     for index in 1:count
         push!(lines, method_source(index, calls[index]))
     end
-    source = "module Generated\n" * join(lines, "\n") * "\nend\n"
-    parent = Module()
-    expr = Meta.parse(source)
-    mod = Core.eval(parent, expr)
+    body = join(lines, "\n")
+    case = load_package(name, body)
+    mod = case.pkg
     methods_by_index = Dict{Int,Method}()
     for index in 1:count
-        name = Symbol("m", index)
-        func = Base.invokelatest(getfield, mod, name)
+        func_name = Symbol("m", index)
+        func = Base.invokelatest(getfield, mod, func_name)
         methods_by_index[index] = only(methods(func))
     end
     entries = Tuple[]
     for index in entry_indexes
-        name = Symbol("m", index)
-        func = Base.invokelatest(getfield, mod, name)
+        func_name = Symbol("m", index)
+        func = Base.invokelatest(getfield, mod, func_name)
         push!(entries, (func, Tuple{Int}))
     end
     expected = reachable_edges(calls, methods_by_index, entry_indexes)
-    (mod = mod, entries = entries, expected = expected)
+    (; case, entries, expected, mod)
 end
 
 function closure_in(callees, written, mod)
@@ -316,72 +250,169 @@ function reaches_method(graph, origin, goal)
     false
 end
 
-@testset "method graph: a keyword call credits the method the source wrote" begin
+@testset "a concrete call is one edge" begin
+    pkg = CONCRETE_CALL.pkg
+    entry = (pkg.calls, Tuple{Int})
+    entries = (entry,)
+    graph = graph_of(CONCRETE_CALL, entries)
+    caller = only(methods(pkg.calls))
+    callee = only(methods(pkg.leaf))
+    @test graph.edges[caller] == Set([callee])
+end
+
+@testset "three matching methods are edges and four stay a name" begin
     rows = (
-        (mod = MGKw, use = MGKw.use, written = MGKw.add, argument = Int),
-        (mod = MGKwWhere, use = MGKwWhere.use, written = MGKwWhere.scaled, argument = Vector{Float64}),
+        (case = NARROW_DISPATCH, is_resolved = true),
+        (case = WIDE_DISPATCH, is_resolved = false),
     )
     for row in rows
-        graph = ArchCheck.method_graph(((row.use, Tuple{row.argument}),), (row.mod,))
-        caller = only(methods(row.use))
+        pkg = row.case.pkg
+        entry = (pkg.wide, Tuple{Integer})
+        entries = (entry,)
+        graph = graph_of(row.case, entries)
+        caller = only(methods(pkg.wide))
+        if row.is_resolved
+            callees = Set(methods(pkg.dest))
+            @test graph.edges[caller] == callees
+            @test !haskey(graph.unresolved, caller)
+        else
+            @test graph.unresolved[caller] == Set([:dest])
+            @test !haskey(graph.edges, caller)
+        end
+    end
+end
+
+@testset "an Any or dynamic call stays an unresolved name" begin
+    pkg = WIDE_DISPATCH.pkg
+    any_entry = (pkg.anycall, Tuple{Any})
+    dyn_entry = (pkg.dyn, Tuple{Any,Int})
+    entries = (any_entry, dyn_entry)
+    graph = graph_of(WIDE_DISPATCH, entries)
+    rows = (
+        (func = pkg.anycall, name = :dest),
+        (func = pkg.dyn, name = :f),
+    )
+    for row in rows
+        caller = only(methods(row.func))
+        @test graph.unresolved[caller] == Set([row.name])
+    end
+end
+
+@testset "a call whose result is unused stays an edge" begin
+    pkg = UNUSED_RESULT.pkg
+    entry = (pkg.calls, Tuple{Int})
+    entries = (entry,)
+    graph = graph_of(UNUSED_RESULT, entries)
+    caller = only(methods(pkg.calls))
+    leaf = only(methods(pkg.leaf))
+    @test leaf in graph.edges[caller]
+end
+
+@testset "a recursive call is an edge" begin
+    pkg = RECURSIVE_CALL.pkg
+    self_entry = (pkg.self, Tuple{Int})
+    odd_entry = (pkg.odd, Tuple{Int})
+    entries = (self_entry, odd_entry)
+    graph = graph_of(RECURSIVE_CALL, entries)
+    self_method = only(methods(pkg.self))
+    odd_method = only(methods(pkg.odd))
+    even_method = only(methods(pkg.even))
+    @test self_method in graph.edges[self_method]
+    @test even_method in graph.edges[odd_method]
+    @test odd_method in graph.edges[even_method]
+end
+
+@testset "a method in a module outside the ranked modules is an edge and stays unexpanded" begin
+    pkg = OUTSIDE_CALL.pkg
+    entry = (pkg.go, Tuple{Int})
+    entries = (entry,)
+    graph = graph_of(OUTSIDE_CALL, entries)
+    caller = only(methods(pkg.go))
+    leaf = only(methods(pkg.LeafMod.leaf))
+    hidden = only(methods(pkg.LeafMod.hidden))
+    @test leaf in graph.edges[caller]
+    @test all(callees -> !(hidden in callees), values(graph.edges))
+end
+
+@testset "a keyword call credits the method the source wrote" begin
+    rows = (
+        (case = KEYWORD_CREDIT, written = KEYWORD_CREDIT.pkg.add, argument = Int),
+        (case = KEYWORD_WHERE, written = KEYWORD_WHERE.pkg.scaled, argument = Vector{Float64}),
+    )
+    for row in rows
+        pkg = row.case.pkg
+        entry = (pkg.use, Tuple{row.argument})
+        entries = (entry,)
+        graph = graph_of(row.case, entries)
+        caller = only(methods(pkg.use))
         written = only(methods(row.written))
-        owned = edges_in(graph, row.mod)
+        owned = edges_in(graph, pkg)
         @test get(owned, caller, Set{Method}()) == Set([written])
     end
 end
 
-@testset "method graph: a closure's call is an edge from that closure" begin
+@testset "a closure's call is an edge from that closure" begin
     rows = (
-        (func = MGClose.outer, mod = MGClose, leaf = MGClose.leaf),
-        (func = MGClose.anon, mod = MGClose, leaf = MGClose.leaf),
-        (func = MGForms.added, mod = MGForms, leaf = MGForms.leaf),
+        (case = CLOSURE_CALL, func = CLOSURE_CALL.pkg.outer),
+        (case = CLOSURE_CALL, func = CLOSURE_CALL.pkg.anon),
+        (case = CLOSURE_FORM, func = CLOSURE_FORM.pkg.added),
     )
     for row in rows
-        graph = ArchCheck.method_graph(((row.func, Tuple{Int}),), (row.mod,))
+        entry = (row.func, Tuple{Int})
+        entries = (entry,)
+        graph = graph_of(row.case, entries)
         written = only(methods(row.func))
-        leaf = only(methods(row.leaf))
-        closure = closure_in(graph.edges[written], written, row.mod)
-        owned = edges_in(graph, row.mod)
+        leaf = only(methods(row.case.pkg.leaf))
+        closure = closure_in(graph.edges[written], written, row.case.pkg)
+        owned = edges_in(graph, row.case.pkg)
         @test get(owned, closure, Set{Method}()) == Set([leaf])
     end
 end
 
-@testset "method graph: a generated call graph matches the edges the generator wrote" begin
+@testset "a generated call graph matches the edges the generator wrote" begin
     for seed in 1:8
         rng = Xoshiro(seed)
-        spec = generated_method_module(rng, 6)
-        graph = ArchCheck.method_graph(spec.entries, (spec.mod,))
+        name = "GeneratedCalls" * string(seed)
+        spec = generated_case(rng, 6, name)
+        graph = graph_of(spec.case, spec.entries)
         owned = edges_in(graph, spec.mod)
         @test owned == spec.expected
     end
 end
 
-@testset "method graph: a function passed to an outside call reaches the function it calls" begin
-    helper = only(methods(MGPassed.helper))
+@testset "a function passed to an outside call reaches the function it calls" begin
+    pkg = PASSED_HELPER.pkg
+    helper = only(methods(pkg.helper))
     rows = (
-        (func = MGPassed.wrap, argument = Tuple{Vector{Int}}),
-        (func = MGPassed.captured, argument = Tuple{Vector{Int},Int}),
+        (func = pkg.wrap, argument = Tuple{Vector{Int}}),
+        (func = pkg.captured, argument = Tuple{Vector{Int},Int}),
     )
     for row in rows
-        graph = ArchCheck.method_graph(((row.func, row.argument),), (MGPassed,))
+        entry = (row.func, row.argument)
+        entries = (entry,)
+        graph = graph_of(PASSED_HELPER, entries)
         caller = only(methods(row.func))
         callees = get(graph.edges, caller, Set{Method}())
-        closure = closure_in(callees, caller, MGPassed)
+        closure = closure_in(callees, caller, pkg)
         @test reaches_method(graph, closure, helper)
     end
-    named_graph = ArchCheck.method_graph(((MGPassed.named, Tuple{Vector{Int}}),), (MGPassed,))
-    named = only(methods(MGPassed.named))
+    named_entry = (pkg.named, Tuple{Vector{Int}})
+    named_entries = (named_entry,)
+    named_graph = graph_of(PASSED_HELPER, named_entries)
+    named = only(methods(pkg.named))
     @test helper in get(named_graph.edges, named, Set{Method}())
 end
 
-@testset "method graph: methods of one function stay distinct nodes" begin
-    int_entry = (MGOver.f, Tuple{Int})
-    string_entry = (MGOver.f, Tuple{String})
-    graph = ArchCheck.method_graph((int_entry, string_entry), (MGOver,))
-    int_method = only(method for method in methods(MGOver.f) if method.sig <: Tuple{Any,Int})
-    string_method = only(method for method in methods(MGOver.f) if method.sig <: Tuple{Any,String})
-    int_callee = only(methods(MGOver.g))
-    string_callee = only(methods(MGOver.h))
+@testset "methods of one function stay distinct nodes" begin
+    pkg = OVERLOAD_PAIR.pkg
+    int_entry = (pkg.f, Tuple{Int})
+    string_entry = (pkg.f, Tuple{String})
+    entries = (int_entry, string_entry)
+    graph = graph_of(OVERLOAD_PAIR, entries)
+    int_method = only(method for method in methods(pkg.f) if method.sig <: Tuple{Any,Int})
+    string_method = only(method for method in methods(pkg.f) if method.sig <: Tuple{Any,String})
+    int_callee = only(methods(pkg.g))
+    string_callee = only(methods(pkg.h))
     @test graph.edges[int_method] == Set([int_callee])
     @test graph.edges[string_method] == Set([string_callee])
 end

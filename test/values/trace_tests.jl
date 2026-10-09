@@ -1,105 +1,8 @@
 # Workload checks over a probe trace: repeated arguments, one value under two names, waits nobody reads.
 
-const SPAN_S = 10.0
-const REPEAT_START_S = 0.5
-const REPEAT_STOP_S = 2.0
-const NESTED_STOP_S = 1.0
 const WAIT_FLOOR_S = 0.05
-const WORK_HASH = UInt(7)
 
-function traced_call(; name::Symbol, arguments::UInt, result::UInt = UInt(0), result_id::UInt = UInt(0),
-        caller::Symbol = Symbol(""), enclosing = nothing, task::UInt = UInt(1), start_s::Float64 = 0.0,
-        stop_s::Float64 = 1.0, reads = nothing, is_fed::Bool = false, file::String = "src/Probed.jl", line::Int = 1)
-    names = isnothing(enclosing) ? Symbol[] : enclosing
-    reached = isnothing(reads) ? UInt[] : reads
-    site = (file, line)
-    ProbeRecord(name, site, caller, names, task, start_s, stop_s, arguments, result, result_id, reached,
-                is_fed, false)
-end
-
-# The records and the context come from one package, as they do inside `gate`.
-function with_records(records; waits = WaitRecord[], base = probed_context())
-    reached = Set{Method}()
-    observed = Observation(reached, records, waits, 1.0)
-    Context(base; observed)
-end
-
-function findings_of(check, records)
-    ctx = with_records(records)
-    ArchCheck.run(check, ctx)
-end
-
-function probe_records(body, functions; ambient = ())
-    function run(_armed)
-        body()
-    end
-    probing(run, functions; ambient, slow_s = 0.0)
-end
-
-@testset "rebuilds: the same arguments fire once and distinct arguments stay quiet" begin
-    repeated = probe_records((Probed.same,)) do
-        call(Probed.same, [1, 2, 3])
-        call(Probed.same, [1, 2, 3])
-    end
-    fired = findings_of(Rebuilds(), repeated)
-    finding = only(fired)
-    @test finding.kind === :rebuild
-    @test finding.symbol == "same"
-    @test ev(finding, :function) == "same"
-    @test ev(finding, :caller) == ""
-    @test ev(finding, :repeats) == "1"
-    seconds = ev(finding, :seconds)
-    waited = parse(Float64, seconds)
-    @test waited >= 0.0
-
-    distinct = probe_records((Probed.same,)) do
-        call(Probed.same, [1, 2, 3])
-        call(Probed.same, [1, 2, 4])
-    end
-    quiet = findings_of(Rebuilds(), distinct)
-    @test isempty(quiet)
-end
-
-@testset "rebuilds: a repeat inside an ambient call is set apart, and a channel-fed call is set apart" begin
-    covered = probe_records((Probed.leaf,); ambient = (Probed.around,)) do
-        call(Probed.around, 5)
-        call(Probed.around, 5)
-    end
-    apart = findings_of(Rebuilds(), covered)
-    @test isempty(apart)
-
-    fed_channel = Channel{Int}(1)
-    fed = probe_records((Probed.echo,)) do
-        call(Probed.echo, fed_channel)
-        call(Probed.echo, fed_channel)
-    end
-    fed_findings = findings_of(Rebuilds(), fed)
-    @test isempty(fed_findings)
-
-    plain = probe_records((Probed.echo,)) do
-        call(Probed.echo, 1)
-        call(Probed.echo, 1)
-    end
-    plain_findings = findings_of(Rebuilds(), plain)
-    @test length(plain_findings) == 1
-    plain_finding = only(plain_findings)
-    @test ev(plain_finding, :function) == "echo"
-end
-
-@testset "rebuilds: a repeat inside another repeat's interval on one task counts once" begin
-    original = traced_call(; name = :work, arguments = WORK_HASH, caller = :wrap, start_s = 0.0, stop_s = SPAN_S)
-    outer = traced_call(; name = :work, arguments = WORK_HASH, caller = :wrap, start_s = REPEAT_START_S, stop_s = REPEAT_STOP_S)
-    inner = traced_call(; name = :work, arguments = WORK_HASH, caller = :wrap, start_s = REPEAT_START_S, stop_s = NESTED_STOP_S)
-    fired = findings_of(Rebuilds(), [original, outer, inner])
-    finding = only(fired)
-    @test ev(finding, :function) == "work"
-    @test ev(finding, :caller) == "wrap"
-    @test ev(finding, :repeats) == "1"
-    @test ev(finding, :seconds) == "1.5"
-end
-
-@testset "two names: two producers of one value fire, and one name twice is a rebuild" begin
-    source = """
+const SHARED_REF = load_package("SharedRef", """
     function left(x)
         Ref(x)
     end
@@ -115,57 +18,24 @@ end
     function twin_b(x)
         x
     end
-    """
-    loaded = indexed_module(:TwoNames, source)
-    mod = loaded.mod
-    probes = Probes(functions = (mod.left, mod.right, mod.twin, mod.twin_b), slow_s = 0.0)
-    armed = ArchCheck.arm!(probes, loaded.ctx)
-    local shared
-    try
-        Base.invokelatest(mod.left, 1)
-        Base.invokelatest(mod.right, 1)
-    finally
-        shared = ArchCheck.disarm!(armed)
-    end
-    shared_ctx = with_records(shared.records; base = loaded.ctx)
-    fired = ArchCheck.run(TwoNames(), shared_ctx)
-    @test length(fired) == 2
-    labels = [ev(finding, :functions) for finding in fired]
-    @test sort(labels) == ["left right", "left right"]
-    @test ev(fired[1], :values) == "2"
-    symbols = [finding.symbol for finding in fired]
-    @test sort(symbols) == ["left", "right"]
-    kinds_match = all(finding -> finding.kind === :two_names, fired)
-    @test kinds_match
+    """)
 
-    again = probe_records((Probed.echo,)) do
-        call(Probed.echo, Ref(1))
-        call(Probed.echo, Ref(1))
+const NESTED_REPEAT = load_package("NestedRepeat", """
+    const depth = Ref(0)
+    function work(x)
+        sleep(0.02)
+        if depth[] > 0
+            depth[] = depth[] - 1
+            work(x)
+        end
+        sleep(0.02)
+        x
     end
-    again_ctx = with_records(again)
-    one_name = ArchCheck.run(TwoNames(), again_ctx)
-    @test isempty(one_name)
-    rebuilt = findings_of(Rebuilds(), again)
-    @test length(rebuilt) == 1
+    """)
 
-    bits_probes = Probes(functions = (mod.twin, mod.twin_b), slow_s = 0.0)
-    bits_armed = ArchCheck.arm!(bits_probes, loaded.ctx)
-    local bits
-    try
-        Base.invokelatest(mod.twin, 1)
-        Base.invokelatest(mod.twin_b, 1)
-    finally
-        bits = ArchCheck.disarm!(bits_armed)
-    end
-    bits_ctx = with_records(bits.records; base = loaded.ctx)
-    bits_findings = ArchCheck.run(TwoNames(), bits_ctx)
-    @test isempty(bits_findings)
-end
-
-@testset "waits: a result a later call reads is quiet, and a result nobody reads fires" begin
-    source = """
+const UNREAD_RESULT = load_package("UnreadResult", """
     function produced()
-        sleep($WAIT_FLOOR_S)
+        sleep(0.05)
         Ref(1)
     end
 
@@ -209,48 +79,140 @@ end
         end
         looked(Ref(5))
     end
-    """
-    loaded = indexed_module(:WaitLink, source)
-    mod = loaded.mod
+    """)
+
+@testset "the same arguments fire once and distinct arguments stay quiet" begin
+    checks = (Rebuilds(),)
+    functions = (Probed.same,)
+    repeated_call = function ()
+        Probed.same([1, 2, 3])
+        Probed.same([1, 2, 3])
+    end
+    probes = Probes(; functions, slow_s = 0.0)
+    fired = gate_findings(Probed; checks, probes, workload = repeated_call)
+    rows = evidence_rows(fired, :function, :caller, :repeats)
+    @test rows == [(:rebuild, "same", "same", "", "1")]
+
+    distinct_call = function ()
+        Probed.same([1, 2, 3])
+        Probed.same([1, 2, 4])
+    end
+    quiet = gate_findings(Probed; checks, probes, workload = distinct_call)
+    @test isempty(quiet)
+end
+
+@testset "a repeat inside an ambient call is set apart, and a channel-fed call is set apart" begin
+    checks = (Rebuilds(),)
+    covered_call = function ()
+        Probed.around(5)
+        Probed.around(5)
+    end
+    covered_probes = Probes(; functions = (Probed.leaf,), ambient = (Probed.around,), slow_s = 0.0)
+    apart = gate_findings(Probed; checks, probes = covered_probes, workload = covered_call)
+    @test isempty(apart)
+
+    fed_channel = Channel{Int}(1)
+    fed_call = function ()
+        Probed.echo(fed_channel)
+        Probed.echo(fed_channel)
+    end
+    echo_probes = Probes(; functions = (Probed.echo,), slow_s = 0.0)
+    fed = gate_findings(Probed; checks, probes = echo_probes, workload = fed_call)
+    @test isempty(fed)
+
+    plain_call = function ()
+        Probed.echo(1)
+        Probed.echo(1)
+    end
+    plain = gate_findings(Probed; checks, probes = echo_probes, workload = plain_call)
+    rows = evidence_rows(plain, :function, :repeats)
+    @test rows == [(:rebuild, "echo", "echo", "1")]
+end
+
+@testset "a nested repeat of the same arguments counts once" begin
+    pkg = NESTED_REPEAT.pkg
+    checks = (Rebuilds(),)
+    functions = (pkg.work,)
+    nested_call = function ()
+        pkg.depth[] = 2
+        pkg.work(1)
+    end
+    probes = Probes(; functions, slow_s = 0.0)
+    nested = gate_findings(pkg; checks, probes, workload = nested_call)
+    nested_rows = evidence_rows(nested, :function, :repeats)
+    @test nested_rows == [(:rebuild, "work", "work", "1")]
+
+    sequential_call = function ()
+        pkg.depth[] = 0
+        pkg.work(1)
+        pkg.work(1)
+        pkg.work(1)
+    end
+    sequential = gate_findings(pkg; checks, probes, workload = sequential_call)
+    sequential_rows = evidence_rows(sequential, :function, :repeats)
+    @test sequential_rows == [(:rebuild, "work", "work", "2")]
+end
+
+@testset "two producers of one value fire, and one name twice is a rebuild" begin
+    mod = SHARED_REF.pkg
+    share_value = function ()
+        mod.left(1)
+        mod.right(1)
+    end
+    probes = Probes(; functions = (mod.left, mod.right, mod.twin, mod.twin_b), slow_s = 0.0)
+    fired = gate_findings(mod; checks = (TwoNames(),), probes, workload = share_value)
+    rows = evidence_rows(fired, :functions, :values)
+    @test rows == [
+        (:two_names, "left", "left right", "2"),
+        (:two_names, "right", "left right", "2"),
+    ]
+
+    echo_refs = function ()
+        Probed.echo(Ref(1))
+        Probed.echo(Ref(1))
+    end
+    echo_probes = Probes(; functions = (Probed.echo,), slow_s = 0.0)
+    one_name = gate_findings(Probed; checks = (TwoNames(),), probes = echo_probes, workload = echo_refs)
+    @test isempty(one_name)
+    rebuilt = gate_findings(Probed; checks = (Rebuilds(),), probes = echo_probes, workload = echo_refs)
+    rebuilt_rows = evidence_rows(rebuilt, :function, :repeats)
+    @test rebuilt_rows == [(:rebuild, "echo", "echo", "1")]
+
+    share_bits = function ()
+        mod.twin(1)
+        mod.twin_b(1)
+    end
+    bit_probes = Probes(; functions = (mod.twin, mod.twin_b), slow_s = 0.0)
+    bits = gate_findings(mod; checks = (TwoNames(),), probes = bit_probes, workload = share_bits)
+    @test isempty(bits)
+end
+
+@testset "a result a later call reads is quiet, and a result nobody reads fires" begin
+    mod = UNREAD_RESULT.pkg
     targets = (mod.produced, mod.looked, mod.reads_result, mod.drops_result, mod.reads_broadcast,
                mod.drops_broadcast, mod.drops_each, mod.drops_sync)
-    probes = Probes(functions = targets, slow_s = 0.0)
-
-    function waited(called)
-        armed = ArchCheck.arm!(probes, loaded.ctx)
-        local traced
-        try
-            Base.invokelatest(called)
-        finally
-            traced = ArchCheck.disarm!(armed)
-        end
-        ctx = with_records(traced.records; waits = traced.waits, base = loaded.ctx)
-        ArchCheck.run(Waits(), ctx)
-    end
-
-    quiet = waited(mod.reads_result)
+    checks = (Waits(),)
+    probes = Probes(; functions = targets, slow_s = 0.0)
+    quiet = gate_findings(mod; checks, probes, workload = mod.reads_result)
     @test isempty(quiet)
-    broadcast_quiet = waited(mod.reads_broadcast)
+    broadcast_quiet = gate_findings(mod; checks, probes, workload = mod.reads_broadcast)
     @test isempty(broadcast_quiet)
 
-    fired = waited(mod.drops_result)
+    fired = gate_findings(mod; checks, probes, workload = mod.drops_result)
+    rows = evidence_rows(fired, :consumer, :waited)
+    @test rows == [(:wait, "produced", "drops_result", "produced")]
     finding = only(fired)
-    @test finding.kind === :wait
-    @test finding.symbol == "produced"
-    @test ev(finding, :consumer) == "drops_result"
-    @test ev(finding, :waited) == "produced"
     seconds = ev(finding, :seconds)
     waited_s = parse(Float64, seconds)
     @test waited_s >= WAIT_FLOOR_S
 
-    each = waited(mod.drops_each)
-    each_finding = only(each)
-    @test ev(each_finding, :waited) == "produced"
-    spread = waited(mod.drops_broadcast)
-    spread_finding = only(spread)
-    @test ev(spread_finding, :waited) == "produced"
-    synced = waited(mod.drops_sync)
-    synced_finding = only(synced)
-    @test ev(synced_finding, :consumer) == "drops_sync"
-    @test ev(synced_finding, :waited) == "produced"
+    each = gate_findings(mod; checks, probes, workload = mod.drops_each)
+    each_rows = evidence_rows(each, :waited)
+    @test each_rows == [(:wait, "produced", "produced")]
+    spread = gate_findings(mod; checks, probes, workload = mod.drops_broadcast)
+    spread_rows = evidence_rows(spread, :waited)
+    @test spread_rows == [(:wait, "produced", "produced")]
+    synced = gate_findings(mod; checks, probes, workload = mod.drops_sync)
+    synced_rows = evidence_rows(synced, :consumer, :waited)
+    @test synced_rows == [(:wait, "produced", "drops_sync", "produced")]
 end
