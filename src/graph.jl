@@ -542,6 +542,14 @@ end
 
 files_of(index::SourceIndex, mod::Symbol) = [f for f in index.files if f.mod === mod]
 
+# The indexed file at a repo-relative path; nothing for a path the index does not hold.
+function indexed_file(index::SourceIndex, path::AbstractString)
+    for file in index.files
+        file.path == path && return file
+    end
+    nothing
+end
+
 # Where each def lives - the one owner of a finding's location, so every check reports the same form.
 function def_sites(index::SourceIndex)
     sites = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()

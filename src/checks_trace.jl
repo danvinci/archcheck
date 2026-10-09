@@ -45,11 +45,10 @@ function trace_waits(ctx)
     observed.waits
 end
 
+# A probed method is one `arm!` found in the index, so its file is indexed.
 function module_at(index, path::String)
-    for file in index.files
-        file.path == path && return file.mod
-    end
-    Symbol("")
+    file = indexed_file(index, path)
+    file.mod
 end
 
 function seconds_text(seconds::Float64)
@@ -283,7 +282,7 @@ function root_child(records)
     root
 end
 
-function product_used(wait, reached)
+function result_read(wait, reached)
     for id in wait.reads
         id in reached && return true
     end
@@ -307,7 +306,7 @@ function note_wait!(totals, records, wait)
     later = later_use(records, wait)
     later.blocked || return nothing
     children = child_calls(records, wait)
-    used = product_used(wait, later.reads)
+    used = result_read(wait, later.reads)
     if !used && wait.result_id != UInt(0)
         root = root_child(children)
         if !isnothing(root)

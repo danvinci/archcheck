@@ -68,12 +68,6 @@ struct MethodSource
     signature::String   # printed signature of the wrapper
 end
 
-struct LocatedMethod
-    file::String       # repo-relative path
-    line::Int          # source line
-    definition::Expr   # top-level statement that defines it
-end
-
 struct OpenFrame
     name::Symbol                 # function running
     file::String                 # repo-relative path
@@ -752,81 +746,30 @@ function rewrite_definition(definition::Expr, name::Symbol, file::String, line::
     Expr(:function, copied, probed)
 end
 
-function macro_body(node)
-    children = child_nodes(node)
-    children === nothing && return nothing
-    body = nothing
-    for child in children
-        kind = JS.kind(child)
-        selected = kind == K"function" || kind == K"=" || kind == K"macrocall"
-        selected || continue
-        body = child
+# The statement evaluated again: the method form with the macro calls that wrap it. A docstring stays out, since
+# the docs outlive the deleted method and evaluating one again replaces them.
+function definition_statement(form)
+    node = form
+    while !isnothing(node.parent)
+        JS.kind(node.parent) == K"macrocall" || break
+        node = node.parent
     end
-    body
-end
-
-function method_form(node)
-    kind = JS.kind(node)
-    if kind == K"macrocall"
-        inner = macro_body(node)
-        isnothing(inner) && return nothing
-        return method_form(inner)
-    end
-    is_method_form(node) || return nothing
     node
 end
 
-function matches_method(node, method)
-    form = method_form(node)
-    isnothing(form) && return false
-    located = JS.source_location(form)
-    line = Int(located[1])
-    line == method.line || return false
-    signature = child_nodes(form)[1]
-    called = sig_name(signature)
-    isnothing(called) || called === method.name
+function is_in_struct(form)
+    node = form.parent
+    while !isnothing(node)
+        JS.kind(node) == K"struct" && return true
+        node = node.parent
+    end
+    false
 end
 
-function find_definition(node, method)
-    kind = JS.kind(node)
-    if kind == K"toplevel" || kind == K"block"
-        children = child_nodes(node)
-        children === nothing && return nothing
-        for child in children
-            found = find_definition(child, method)
-            isnothing(found) || return found
-        end
-        return nothing
-    end
-    if kind == K"module"
-        children = child_nodes(node)
-        children === nothing && return nothing
-        for child in children
-            JS.kind(child) == K"block" || continue
-            found = find_definition(child, method)
-            isnothing(found) || return found
-        end
-        return nothing
-    end
-    matches_method(node, method) || return nothing
-    Expr(node)
-end
-
-function locate_method(index, method)
-    method_path = String(method.file)
-    method_path = normpath(method_path)
-    for file in index.files
-        absolute = joinpath(index.repo, file.path)
-        absolute = normpath(absolute)
-        relative = normpath(file.path)
-        matched = method_path == absolute || method_path == relative
-        matched || continue
-        found = find_definition(file.tree, method)
-        isnothing(found) && continue
-        return LocatedMethod(file.path, method.line, found)
-    end
-    nothing
-end
+# A type's default constructors have no source form, and its inner constructors call `new`, which only its struct
+# body defines; its outer constructors are probed.
+is_unprobed_constructor(::Type, located) = isnothing(located) || is_in_struct(located.form)
+is_unprobed_constructor(::Any, located) = false
 
 function note_skip!(skipped, method, reason::String)
     label = string(method)
@@ -893,19 +836,20 @@ function lookup_method(source)
     nothing
 end
 
-function install_method!(method, is_probed::Bool, index, originals, skipped)
+function install_method!(method, located, is_probed::Bool, originals, skipped)
     if isdefined(method, :generator)
         note_skip!(skipped, method, "generated")
         return nothing
     end
-    located = locate_method(index, method)
     if isnothing(located)
         note_skip!(skipped, method, "no source site in the index")
         return nothing
     end
-    saved = deepcopy(located.definition)
+    statement = definition_statement(located.form)
+    saved = Expr(statement)
     retag_lines!(saved, method.file)
-    probed = rewrite_definition(saved, method.name, located.file, located.line, is_probed)
+    line = Int(method.line)
+    probed = rewrite_definition(saved, method.name, located.file.path, line, is_probed)
     if isnothing(probed)
         note_skip!(skipped, method, "a form the rewrite does not take")
         return nothing
@@ -932,7 +876,9 @@ function install!(functions, is_probed::Bool, ctx, originals, skipped)
         for method in defined
             home = method.module
             home in modules || continue
-            install_method!(method, is_probed, ctx.index, originals, skipped)
+            located = method_form(ctx.index, method)
+            is_unprobed_constructor(target, located) && continue
+            install_method!(method, located, is_probed, originals, skipped)
         end
     end
     nothing

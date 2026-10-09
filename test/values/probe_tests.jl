@@ -345,6 +345,37 @@ end
     @test endswith(source_file, "ScaledKw.jl")
 end
 
+@testset "probes: a struct's outer constructor and a documented method are probed" begin
+    source = """
+    struct Boxed
+        value::Int
+        Boxed(value::Int, scale::Int) = new(value * scale)
+    end
+
+    "A box from a float, rounded."
+    Boxed(value::Float64) = Boxed(round(Int, value), 1)
+
+    "Twice the boxed value."
+    twice(box::Boxed) = 2 * box.value
+    """
+    loaded = indexed_module(:BoxedCase, source)
+    mod = loaded.mod
+    probes = Probes(functions = (mod.Boxed, mod.twice), slow_s = 0.0)
+    armed = ArchCheck.arm!(probes, loaded.ctx)
+    local traced
+    try
+        box = Base.invokelatest(mod.Boxed, 2.4)
+        doubled = Base.invokelatest(mod.twice, box)
+        @test doubled == 4
+    finally
+        traced = ArchCheck.disarm!(armed)
+    end
+    names = [record.name for record in traced.records]
+    @test sort(names) == [:Boxed, :twice]
+    restored = Base.invokelatest(mod.Boxed, 3.0)
+    @test restored.value == 3
+end
+
 @testset "probes: padding bytes stay out of an argument hash" begin
     low = pad_with(0x00)
     high = pad_with(0xff)

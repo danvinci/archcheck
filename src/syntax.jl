@@ -94,6 +94,7 @@ struct FileScan
     tupletail::Dict{Symbol,Int}      # function -> slot count when its body ends in a bare tuple; absent otherwise
     imports::Set{Symbol}             # names this file's `import` clauses bind: a path's last name, or its `as` alias
     callsites::Dict{MethodSite,Vector{CallSite}}   # each method -> the calls its body writes, in source order
+    forms::Dict{MethodSite,JS.SyntaxNode}          # each method -> its definition form in this file's parse
 end
 
 # a type name, unwrapping `<:` (supertype) and `{}` (parameters) to the bare Identifier.
@@ -1122,26 +1123,14 @@ function walk_defs!(fs, n, depth, current)
             end
         end
         if length(kids) >= 2
-            receiver = callable_receiver(kids[1])
-            qualified = qualified_method_name(kids[1])
-            if top
-                site = MethodSite(nm, def_line)
-                opened = ScanScope(nm, Set{Symbol}(), depth + 1, 0, site, false)
-                absorb_method!(fs, kids[1], kids[2], opened)
-            elseif !isnothing(qualified)
-                site = MethodSite(qualified, def_line)
-                opened = ScanScope(qualified, Set{Symbol}(), depth + 1, 0, site, false)
-                absorb_method!(fs, kids[1], kids[2], opened)
-            elseif receiver !== nothing
-                site = MethodSite(receiver, def_line)
-                opened = ScanScope(receiver, Set{Symbol}(), depth + 1, 0, site, false)
-                absorb_method!(fs, kids[1], kids[2], opened)
-            elseif current !== nothing && current in fs.types
-                site = MethodSite(current, def_line)
-                opened = ScanScope(current, Set{Symbol}(), depth + 1, 0, site, false)
-                absorb_method!(fs, kids[1], kids[2], opened)
-            else
+            owner = method_owner(kids[1], nm, top, current, fs.types)
+            if isnothing(owner)
                 walk_defs!(fs, kids[2], depth + 1, current)
+            else
+                site = MethodSite(owner, def_line)
+                fs.forms[site] = n
+                opened = ScanScope(owner, Set{Symbol}(), depth + 1, 0, site, false)
+                absorb_method!(fs, kids[1], kids[2], opened)
             end
         end
     elseif k == K"->"
@@ -1153,9 +1142,21 @@ function walk_defs!(fs, n, depth, current)
     end
 end
 
+# The name a method's calls are filed under: its own name at top level, else a qualified name, a callable's
+# receiver type, or the type whose body holds it. A method that is none of these belongs to its enclosing one.
+function method_owner(signature, name, top, current, types)
+    top && return name
+    qualified = qualified_method_name(signature)
+    isnothing(qualified) || return qualified
+    receiver = callable_receiver(signature)
+    isnothing(receiver) || return receiver
+    !isnothing(current) && current in types && return current
+    nothing
+end
+
 empty_scan() = FileScan(Symbol[], Symbol[], Dict{Symbol,Set{Symbol}}(), Set{Symbol}(), Dict{Symbol,Int}(),
                         Dict{Symbol,Vector{Union{Symbol,Nothing}}}(), Dict{Symbol,Int}(), Set{Symbol}(),
-                        Dict{MethodSite,Vector{CallSite}}())
+                        Dict{MethodSite,Vector{CallSite}}(), Dict{MethodSite,JS.SyntaxNode}())
 
 # The walk, over an already-parsed tree.
 function scan_tree(tree)

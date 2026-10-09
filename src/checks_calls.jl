@@ -88,70 +88,11 @@ function first_child(node)
     children[1]
 end
 
-function files_by_path(index)
-    found = Dict{String,FileNode}()
-    for file in index.files
-        found[file.path] = file
-    end
-    found
-end
-
-function scanned_site(node)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
-    signature = kids[1]
-    name = sig_name(signature)
-    if isnothing(name)
-        name = qualified_method_name(signature)
-    end
-    if isnothing(name)
-        name = callable_receiver(signature)
-    end
-    isnothing(name) && return nothing
-    MethodSite(name, source_line(node))
-end
-
-function record_method_nodes!(found, node)
-    top = method_at_top(node)
-    if !isnothing(top)
-        site = scanned_site(top)
-        if !isnothing(site)
-            found[site] = top
-        end
-    end
-    children = child_nodes(node)
-    isnothing(children) && return
-    for child in children
-        record_method_nodes!(found, child)
-    end
-end
-
-function method_nodes(file, cache)
-    haskey(cache, file.path) && return cache[file.path]
-    found = Dict{MethodSite,Any}()
-    record_method_nodes!(found, file.tree)
-    cache[file.path] = found
-    found
-end
-
-function node_at(files, cache, method, repo)
-    path, line = method_site(method, repo)
-    file = get(files, path, nothing)
-    isnothing(file) && return nothing
-    nodes = method_nodes(file, cache)
-    for (site, node) in nodes
-        site.line == line || continue
-        site_names_method(site, method) || continue
-        return (file = file, node = node, path = path)
-    end
-    nothing
-end
-
-function body_loops(files, cache, method, repo)
+function body_loops(index, method)
     method.name in LOOP_CALLS && return true
-    located = node_at(files, cache, method, repo)
+    located = method_form(index, method)
     isnothing(located) && return false
-    body = method_body(located.node)
+    body = method_body(located.form)
     isnothing(body) && return false
     node_holds_loop(body)
 end
@@ -171,7 +112,7 @@ function callees_of(ordered, method)
 end
 
 # A bang name on the repeated callee is a mutator. A loop in its body, or in a callee two hops away, is the work a repeat costs.
-function costs_work(files, cache, ordered, method, repo)
+function costs_work(index, ordered, method)
     name_mutates(method.name) && return false
     frontier = Method[method]
     seen = Set{Method}()
@@ -181,7 +122,7 @@ function costs_work(files, cache, ordered, method, repo)
         for current in frontier
             current in seen && continue
             push!(seen, current)
-            body_loops(files, cache, current, repo) && return true
+            body_loops(index, current) && return true
             depth == LOOP_HOPS && continue
             for callee in callees_of(ordered, current)
                 push!(nxt, callee)
@@ -203,10 +144,10 @@ function resolved_targets(ordered, caller, call)
     found
 end
 
-function repeated_costs(files, cache, ordered, caller, call, repo)
+function repeated_costs(index, ordered, caller, call)
     targets = resolved_targets(ordered, caller, call)
     for target in targets
-        costs_work(files, cache, ordered, target, repo) && return true
+        costs_work(index, ordered, target) && return true
     end
     isempty(targets) || return false
     call.callee in LOOP_CALLS || return false
@@ -245,10 +186,10 @@ function first_path(ordered, start, goals)
     nothing
 end
 
-function reach_costing(files, cache, ordered, helpers, inners, repo)
+function reach_costing(index, ordered, helpers, inners)
     costing = Set{Method}()
     for method in inners
-        costs_work(files, cache, ordered, method, repo) && push!(costing, method)
+        costs_work(index, ordered, method) && push!(costing, method)
     end
     isempty(costing) && return nothing
     ordered_helpers = sort(collect(helpers); lt = method_before)
@@ -295,14 +236,14 @@ function earliest_line(calls)
     line
 end
 
-function twice_findings(file, caller, grouped, ordered, files, cache, repo)
+function twice_findings(file, caller, grouped, ordered, index)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the same call is written twice"
     for (_, matched) in grouped
         length(matched) < 2 && continue
         sample = matched[1]
-        repeated_costs(files, cache, ordered, caller, sample, repo) || continue
+        repeated_costs(index, ordered, caller, sample) || continue
         text = call_text(sample)
         reached = string(sample.callee)
         evidence = [:calls => text, :reaches => reached]
@@ -313,7 +254,7 @@ function twice_findings(file, caller, grouped, ordered, files, cache, repo)
     findings
 end
 
-function reach_findings(file, caller, grouped, ordered, files, cache, repo)
+function reach_findings(file, caller, grouped, ordered, index)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the caller asks a question a helper already asks"
@@ -327,7 +268,7 @@ function reach_findings(file, caller, grouped, ordered, files, cache, repo)
             inner_call = inners[1]
             helper_methods = resolved_targets(ordered, caller, helper_call)
             inner_methods = resolved_targets(ordered, caller, inner_call)
-            path = reach_costing(files, cache, ordered, helper_methods, inner_methods, repo)
+            path = reach_costing(index, ordered, helper_methods, inner_methods)
             isnothing(path) && continue
             helper_text = call_text(helper_call)
             inner_text = call_text(inner_call)
@@ -342,14 +283,14 @@ function reach_findings(file, caller, grouped, ordered, files, cache, repo)
     findings
 end
 
-function method_overlap_findings(file, caller, calls, ordered, files, cache, repo)
+function method_overlap_findings(file, caller, calls, ordered, index)
     findings = Finding[]
     groups = group_calls(calls)
     for bucket in values(groups)
         grouped = calls_by_identity(bucket)
-        twice = twice_findings(file, caller, grouped, ordered, files, cache, repo)
+        twice = twice_findings(file, caller, grouped, ordered, index)
         append!(findings, twice)
-        reached = reach_findings(file, caller, grouped, ordered, files, cache, repo)
+        reached = reach_findings(file, caller, grouped, ordered, index)
         append!(findings, reached)
     end
     findings
@@ -362,13 +303,6 @@ function module_agrees(method, file_mod)
     root = string(file_mod)
     prefix = root * "."
     startswith(text, prefix)
-end
-
-function site_names_method(site, method)
-    site.name === method.name && return true
-    text = string(site.name)
-    suffix = "." * string(method.name)
-    endswith(text, suffix)
 end
 
 function methods_by_site(methods, repo)
@@ -398,14 +332,12 @@ function run(::OverlappingCalls, ctx)
     defined = project_methods(package_modules(ctx))
     by_site = methods_by_site(defined, repo)
     ordered = ordered_callees(ctx.methods)
-    files = files_by_path(ctx.index)
-    cache = Dict{String,Dict{MethodSite,Any}}()
     findings = Finding[]
     for file in ctx.index.files
         for (site, calls) in file.scan.callsites
             caller = caller_at(by_site, file, site)
             isnothing(caller) && continue
-            found = method_overlap_findings(file, caller, calls, ordered, files, cache, repo)
+            found = method_overlap_findings(file, caller, calls, ordered, ctx.index)
             append!(findings, found)
         end
     end
@@ -524,11 +456,11 @@ function form_text(node)
     collapse_source(raw)
 end
 
-function has_keeper(files, cache, methods_of, repo)
+function has_keeper(index, methods_of)
     for method in methods_of
-        located = node_at(files, cache, method, repo)
+        located = method_form(index, method)
         isnothing(located) && continue
-        value = method_value(located.node)
+        value = method_value(located.form)
         is_get_keep(value) && return true
     end
     false
@@ -541,19 +473,16 @@ function run(check::KeptBuilders, ctx)
     prefix = parts[2]
     func = find_builder(ctx, name, prefix)
     isnothing(func) && return Finding[]
-    repo = ctx.index.repo
-    files = files_by_path(ctx.index)
-    cache = Dict{String,Dict{MethodSite,Any}}()
     methods_of = collect(methods(func))
-    keeper = has_keeper(files, cache, methods_of, repo)
+    keeper = has_keeper(ctx.index, methods_of)
     findings = Finding[]
     detail = "the method builds a value and drops it"
     builder_text = string(check.builder)
     for method in methods_of
-        located = node_at(files, cache, method, repo)
+        located = method_form(ctx.index, method)
         isnothing(located) && continue
-        path_is_exempt(located.path, check.exempt_dirs) && continue
-        value = method_value(located.node)
+        path_is_exempt(located.file.path, check.exempt_dirs) && continue
+        value = method_value(located.form)
         isnothing(value) && continue
         is_get_keep(value) && continue
         if keeper && is_builder_call(value, check.builder, name)
@@ -562,7 +491,7 @@ function run(check::KeptBuilders, ctx)
         form = form_text(value)
         evidence = [:builder => builder_text, :form => form]
         symbol = string(method.name)
-        line = source_line(located.node)
+        line = source_line(located.form)
         finding = Finding(located.file.mod, :kept_builder, located.file.path, symbol, line, detail, evidence)
         push!(findings, finding)
     end
