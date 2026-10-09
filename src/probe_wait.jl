@@ -1,15 +1,16 @@
-# Waits a probed method makes, and the close of a synced block.
+# Waits a probed method makes, and the close of a synced block. The waited object is a task, or any other value
+# `fetch` and `wait` accept, such as a `Future` that `@spawnat` puts in a synced block.
 
-function record_wait(frame::OpenFrame, child::Task, started::Float64, stopped::Float64, result)
+function record_wait(frame::OpenFrame, child, started::Float64, stopped::Float64, result)
     identity = result_identity(result)
     reached = read_ids((result,))
     site = (frame.file, frame.line)
     consumer_task = objectid(current_task())
-    child_task = objectid(child)
-    WaitRecord(frame.name, site, consumer_task, child_task, started, stopped, identity, reached)
+    child_id = objectid(child)
+    WaitRecord(frame.name, site, consumer_task, child_id, started, stopped, identity, reached)
 end
 
-function finish_wait(child::Task, started::Float64, result)
+function finish_wait(child, started::Float64, result)
     frame = probed_frame()
     isnothing(frame) && return result
     session = ACTIVE[]
@@ -20,7 +21,7 @@ function finish_wait(child::Task, started::Float64, result)
     result
 end
 
-function probe_fetch(child::Task)
+function probe_fetch(child)
     started = time()
     try
         result = Base.fetch(child)
@@ -31,11 +32,7 @@ function probe_fetch(child::Task)
     end
 end
 
-function probe_fetch(value)
-    Base.fetch(value)
-end
-
-function probe_wait(child::Task)
+function probe_wait(child)
     started = time()
     try
         Base.wait(child)
@@ -47,26 +44,15 @@ function probe_wait(child::Task)
     nothing
 end
 
-function probe_wait(value)
-    Base.wait(value)
-end
-
-function wait_synced(item::Task, errors)
-    started = time()
-    Base._wait(item)
-    finish_wait(item, started, nothing)
-    Base.istaskfailed(item) || return nothing
-    failed = Base.TaskFailedException(item)
-    push!(errors, failed)
-    nothing
-end
-
+# `wait` on a failed task throws its `TaskFailedException`, the error `@sync` collects for it.
 function wait_synced(item, errors)
+    started = time()
     try
         Base.wait(item)
-    catch error
-        push!(errors, error)
+    catch failure
+        push!(errors, failure)
     end
+    finish_wait(item, started, nothing)
     nothing
 end
 

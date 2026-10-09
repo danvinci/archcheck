@@ -18,12 +18,13 @@ struct ProbeRecord
     is_ambient::Bool             # this call is a non-probed function, or one encloses it
 end
 
-"""One wait a probed method made for a task. The result identity is an `objectid`, so it matches the same object only."""
+"""One wait a probed method made on a task or another waitable value. Identities are `objectid`s, so each matches
+the same object only."""
 struct WaitRecord
     consumer::Symbol             # function that waited
     site::Tuple{String,Int}      # that method's file and line
     task::UInt                   # objectid of the waiting task
-    child::UInt                  # objectid of the task that was waited
+    child::UInt                  # objectid of the waited object: a task, or a value such as a `Future`
     start_s::Float64             # time() when the wait began (s)
     stop_s::Float64              # time() when the wait ended (s)
     result_id::UInt              # objectid of a non-bits result; 0 for a bits value
