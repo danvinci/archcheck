@@ -107,7 +107,7 @@ ModulePiracy(; strict::Bool = false) = ModulePiracy(strict)
 struct FileBackEdges <: Check end
 """Runs in `CHECKS`. Every function a definition calls lives in one lower-ranked file. The module's types and the package's exported or public names are vocabulary and place nothing."""
 struct FileSinkable <: Check end
-"""Runs in `CHECKS`. A definition touches only modules that rank below its own, or one file holds several such definitions."""
+"""Runs in `CHECKS`. A definition touches only modules that rank below its own, and no package its extension alone loads, or one file holds several such definitions."""
 struct Sinkable <: Check end
 """Runs in `CHECKS`. A function body ends in a bare tuple of three or more slots."""
 struct TupleReturns <: Check end
@@ -241,7 +241,7 @@ kinds(::FileSinkable) = (:file_sinkable => :advisory,)
 function run(::Sinkable, ctx)
     body_calls = Dict(m => cg.refs for (m, cg) in ctx.callgraphs)
     grouped = methods_by_function(ctx.defined)
-    sink = check_sinkable(ctx.mods, ctx.graph.rank, body_calls, ctx.sites, grouped; repo = ctx.index.repo)
+    sink = check_sinkable(ctx.mods, ctx.graph.rank, body_calls, ctx.sites, grouped, ctx.root; repo = ctx.index.repo)
     vcat(sink, check_extract_candidates(sink))
 end
 kinds(::Sinkable) = (:sinkable => :advisory, :extract_candidate => :advisory)

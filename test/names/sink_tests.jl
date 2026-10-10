@@ -228,6 +228,12 @@ end
     @test !any(pair -> pair.first === :sinks_to, wide.evidence)
 end
 
+@testset "an extension's definition that touches its trigger stays, and one that touches only the root can move" begin
+    found = module_sinkable(HOSTED)
+    rows = evidence_rows(found, :sinks_to)
+    @test rows == [(:sinkable, "scaled", "Hosted")]
+end
+
 @testset "a module and one it encloses exporting one name collide only when strict" begin
     ctx = case_context(NESTED_NAME)
     @test isempty(ArchCheck.run(OwnerUniqueness(), ctx))

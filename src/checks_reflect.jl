@@ -199,16 +199,6 @@ function type_module(@nospecialize(declared))
     parentmodule(unwrapped)
 end
 
-# Project modules a method signature's argument types touch.
-function sig_modules!(found, @nospecialize(sig), project_keys)
-    _, arguments = split_signature(sig)
-    for argument in arguments
-        home = type_module(argument)
-        haskey(project_keys, home) && push!(found, project_keys[home])
-    end
-    found
-end
-
 # A keyword-argument body is its own generic named #f#N; the written name is the first segment.
 function written_name(name::Symbol)
     text = string(name)
@@ -341,11 +331,15 @@ function methods_owned_by(mod, name, grouped)
     filter(method -> method.module === mod, defined)
 end
 
-function add_signature_modules!(footprint, owned, project_keys)
+function add_argument_owners!(owners, owned)
     for method in owned
-        sig_modules!(footprint, method.sig, project_keys)
+        _, arguments = split_signature(method.sig)
+        for argument in arguments
+            home = type_module(argument)
+            isnothing(home) || push!(owners, home)
+        end
     end
-    footprint
+    owners
 end
 
 owned_subject(value::Function) = value
@@ -362,23 +356,80 @@ function binding_owner(home, name, value)
     parentmodule(subject)
 end
 
-function add_call_modules!(footprint, home, called_names, project_keys)
+function add_call_owners!(owners, home, called_names)
     for called_name in called_names
         isdefined(home, called_name) || continue
         value = getproperty(home, called_name)
         value isa Module && continue
         owner = binding_owner(home, called_name, value)
-        haskey(project_keys, owner) || continue
-        push!(footprint, project_keys[owner])
+        push!(owners, owner)
+    end
+    owners
+end
+
+# The modules owning the argument types a definition's methods take and the names its body calls.
+function touched_owners(home, owned, called_names)
+    owners = Set{Module}()
+    add_argument_owners!(owners, owned)
+    add_call_owners!(owners, home, called_names)
+    owners
+end
+
+# The project modules among the owners a definition touches, by key.
+function footprint_of(owners, project_keys)
+    footprint = Set{Symbol}()
+    for owner in owners
+        haskey(project_keys, owner) && push!(footprint, project_keys[owner])
     end
     footprint
 end
 
-function footprint_of(home, owned, called_names, project_keys)
-    footprint = Set{Symbol}()
-    add_signature_modules!(footprint, owned, project_keys)
-    add_call_modules!(footprint, home, called_names, project_keys)
-    footprint
+# The packages the project lists under [deps]: all the package's code outside its extensions can load.
+function project_dependencies(repo)
+    dependencies = Set{Base.UUID}()
+    project = Base.env_project_file(repo)
+    project isa String || return dependencies
+    parsed = Base.parsed_toml(project)
+    listed = get(parsed, "deps", nothing)
+    isnothing(listed) && return dependencies
+    for uuid in values(listed)
+        text = uuid::String
+        push!(dependencies, Base.UUID(text))
+    end
+    dependencies
+end
+
+# Whether the root can load the package a module belongs to: the language, the package itself, or a dependency.
+function root_loads(mod::Module, root::Module, dependencies)
+    package = Base.moduleroot(mod)
+    package === Base.moduleroot(root) && return true
+    id = Base.PkgId(package)
+    isnothing(id.uuid) && return true
+    id.uuid in dependencies
+end
+
+# Each module a body writes a path through, `Dep` in `Dep.f(x)`.
+function written_modules(home, called_names)
+    written = Module[]
+    for called_name in called_names
+        isdefined(home, called_name) || continue
+        value = getproperty(home, called_name)
+        value isa Module && push!(written, value)
+    end
+    written
+end
+
+# An extension also loads its trigger packages, which the project leaves out of its dependencies. A definition
+# touching one stays in the extension.
+function touches_trigger(home, owners, called_names, root, dependencies)
+    Base.moduleroot(home) === Base.moduleroot(root) && return false
+    for owner in owners
+        root_loads(owner, root, dependencies) || return true
+    end
+    for written in written_modules(home, called_names)
+        root_loads(written, root, dependencies) || return true
+    end
+    false
 end
 
 function ranks_below_home(footprint, key, own_rank, rank)
@@ -412,23 +463,26 @@ function sink_finding(key, name, owned, footprint, rank, sites, repo)
 end
 
 function append_sink_findings!(findings, mod, key, own_rank, rank, calls_by_def, called_at_home, project_keys, sites,
-                               grouped, repo)
+                               grouped, repo, root, dependencies)
     for name in owned_defs(mod)
         name in called_at_home && continue
         owned = methods_owned_by(mod, name, grouped)
         isempty(owned) && continue
         called_names = get(calls_by_def, name, ())
-        footprint = footprint_of(mod, owned, called_names, project_keys)
+        owners = touched_owners(mod, owned, called_names)
+        footprint = footprint_of(owners, project_keys)
         isempty(footprint) && continue
         ranks_below_home(footprint, key, own_rank, rank) || continue
+        touches_trigger(mod, owners, called_names, root, dependencies) && continue
         finding = sink_finding(key, name, owned, footprint, rank, sites, repo)
         push!(findings, finding)
     end
     findings
 end
 
-function check_sinkable(mods, rank, body_calls, sites, grouped; repo)
+function check_sinkable(mods, rank, body_calls, sites, grouped, root; repo)
     project_keys = Dict(mod => module_key(mod) for mod in mods)
+    dependencies = project_dependencies(repo)
     findings = Finding[]
     empty_calls = Dict{Symbol,Set{Symbol}}()
     for mod in mods
@@ -438,7 +492,7 @@ function check_sinkable(mods, rank, body_calls, sites, grouped; repo)
         calls_by_def = get(body_calls, key, empty_calls)
         called_at_home = names_called_at_home(calls_by_def)
         append_sink_findings!(findings, mod, key, own_rank, rank, calls_by_def, called_at_home, project_keys, sites,
-                              grouped, repo)
+                              grouped, repo, root, dependencies)
     end
     findings
 end

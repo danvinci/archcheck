@@ -292,7 +292,7 @@ end
 end
 
 # Extensions on loaded triggers, one also named by a fallback include as older Julia needs, and one whose trigger is
-# absent.
+# absent. One extension's definitions call the root, one of them with its trigger's type.
 const HOSTED = load_package("Hosted", """
 _inner() = 1
 @static if false
@@ -301,8 +301,10 @@ end
 """, [
     "../ext/HostedRandomExt.jl" => """
     module HostedRandomExt; __precompile__(false)
+    using Random
     using Hosted: _inner
     scaled(x::Int) = map(step -> step * _inner(), 1:x)
+    draw(source::Random.AbstractRNG) = rand(source) * _inner()
     end
     """,
     "../ext/HostedTestExt.jl" => "module HostedTestExt; __precompile__(false)\nusing Hosted: _inner\nend\n",
