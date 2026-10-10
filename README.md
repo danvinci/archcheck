@@ -65,6 +65,16 @@ ArchCheck.gate(MyPackage;
 
 `Rebuilds` reports a function evaluated again on equal arguments, and `TwoNames` two functions producing one value (a function returning its own argument produces none), each within one call of a probed caller; calls the workload makes itself are its own choice and stay unjudged. `Waits` reports a waited result nobody reads, and `UnreachedMethods` the methods the run never compiled.
 
+The package's own test suite serves as the workload when the gate runs at the end of `test/runtests.jl`, after the tests:
+
+```julia
+ArchCheck.gate(MyPackage;
+    checks = (ArchCheck.CHECKS..., UnreachedMethods()),
+    workload = PriorRun())
+```
+
+`PriorRun()` runs nothing, so `UnreachedMethods` reports the methods the tests never compiled. A test that errors still counts every method it ran. Probes record only calls made while they are armed, so the gate refuses them beside `PriorRun()`.
+
 ## Writing a check
 
 A check is a `Check` subtype with `ArchCheck.kinds` and `ArchCheck.run` methods, passed through `checks`. `run` reads a `Context`: the one parse of the package (`ctx.index`), its loaded modules, and what the workload did. `ArchCheck.run(check, Context(MyPackage))` runs one check alone.

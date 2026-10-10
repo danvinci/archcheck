@@ -65,7 +65,7 @@ export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders
 export Independent, ReaderSet, ScanSeeds, OverlappingCalls, InferredCalls, OptAnalysis, OptEntry
 export UnreachedMethods, Rebuilds, TwoNames, Waits, UnreadWaits
-export Derived, Probes
+export Derived, Probes, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation, ProbeRecord, WaitRecord
 public gate, run, kinds, phase, CHECKS

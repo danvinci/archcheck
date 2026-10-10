@@ -8,6 +8,16 @@ struct Observation
     seconds::Float64                 # the workload's wall time (s)
 end
 
+"""The workload of a gate called where the package's code already ran, as at the end of `test/runtests.jl`: it runs
+nothing, so the gate reads what the earlier run compiled. Probes armed after that run record nothing, so none may join it."""
+struct PriorRun end
+
+(::PriorRun)() = nothing
+
+# Whether probes armed around the workload's call can record what it runs.
+records_calls(workload) = true
+records_calls(::PriorRun) = false
+
 # A keyword call compiles the body function, so that specialization counts for the method which declares the keywords.
 function keyword_body(method::Method)
     keywords = Base.kwarg_decl(method)

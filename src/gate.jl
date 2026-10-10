@@ -9,7 +9,7 @@ function checks_in(checks, wanted::Symbol)
     Tuple(check for check in checks if phase(check) === wanted)
 end
 
-"""Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()` with `probes` armed, then walks the method graph from `entries` and runs the checks that read the graph or the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names."""
+"""Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()` with `probes` armed, then walks the method graph from `entries` and runs the checks that read the graph or the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names. Called at the end of `test/runtests.jl` with `workload = PriorRun()`, it reads what the test suite ran."""
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
@@ -29,6 +29,9 @@ function gate(pkg::Module;
         waiting = typeof.(observing)
         isempty(observing) || throw(ArgumentError("workload checks $waiting need a workload"))
         isnothing(probes) || throw(ArgumentError("probes observe a workload, and none is declared"))
+    end
+    if !isnothing(probes) && !records_calls(workload)
+        throw(ArgumentError("probes record the calls a workload makes, and $(typeof(workload)) ran before they were armed"))
     end
     parsed = Context(pkg; src, entry_dirs, derived)   # the one parse, src/ and entry dirs
     findings = run_checks(parsed, static)

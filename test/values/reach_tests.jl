@@ -1,5 +1,6 @@
 # A method the workload left uncompiled stays a finding. A call in the method graph that can land on it accounts for it.
 
+# Its test suite calls two of its methods, as a package's own tests do before the gate at the end of runtests.jl.
 const LEFT_UNCALLED = load_package("LeftUncalled", """
     called(x::Int) = x + 1
     uncalled(x::Int) = x + 2
@@ -10,7 +11,12 @@ const LEFT_UNCALLED = load_package("LeftUncalled", """
         edged(x)
         hidden(value)
     end
-    """)
+    """, [
+    "../test/runtests.jl" => """
+    LeftUncalled.called(1)
+    LeftUncalled.onlykw(; extra = 4)
+    """,
+])
 
 const TWIN_CONSTRUCTOR = load_package("TwinConstructor", """
     struct Held
@@ -87,16 +93,16 @@ const MACRO_BUILT = load_package("MacroBuilt", """
     spare(x::Int) = x + 1
     """)
 
-@testset "only the methods nobody called and no graph call lands on are unreached, the graph's entry included" begin
+@testset "after the package's own test suite, only the methods it left uncalled and no graph call lands on are unreached" begin
     pkg = LEFT_UNCALLED.pkg
+    suite = joinpath(LEFT_UNCALLED.root, "test", "runtests.jl")
+    Base.include(Main, suite)
     entry = (pkg.route, Tuple{Int,Any})
-    reach_workload = function ()
-        pkg.called(1)
-        pkg.onlykw(; extra = 4)
-    end
     checks = (UnreachedMethods(),)
     entries = (entry,)
-    found = gate_findings(pkg; checks, workload = reach_workload, entries)
+    probes = Probes(functions = (pkg.called,))
+    @test_throws ArgumentError gate_findings(pkg; checks, workload = PriorRun(), probes)
+    found = gate_findings(pkg; checks, workload = PriorRun(), entries)
     uncalled = only(methods(pkg.uncalled))
     route = only(methods(pkg.route))
     hit = only(finding for finding in found if finding.symbol == "uncalled")
