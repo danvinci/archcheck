@@ -1,104 +1,41 @@
 # file-backedge as Julia's load reads it: a method binds the names its body reads when it runs, so a method reads a
 # name late when the load makes that name's first binding only after the method's file is done.
 
-# ---- what each method reads ----
-
-"""One member read through a qualifier that can name a module."""
-struct MemberRead
-    qualifier::JS.SyntaxNode   # the code before the dot
-    member::Symbol             # the name after it
-    bound::Set{Symbol}         # names local where the read sits
-end
-
-"""The names one method reads when it runs: each bare name, and each member read through a qualifier."""
-struct MethodReads
-    refs::Dict{Symbol,Set{Symbol}}   # walk target -> bare names its code reads
-    members::Vector{MemberRead}      # each member read through a qualifier
-end
-
-function note_member!(reads::MethodReads, scope, qualifier, member)
-    is_module_path(qualifier, scope.bound) || return
-    read = MemberRead(qualifier, member, scope.bound)
-    push!(reads.members, read)
-end
-
-"""A method loaded code defines at its top level: a function's method, a macro, a type's inner constructors, or an
-anonymous function."""
-struct ReaderForm
-    form::JS.SyntaxNode   # the definition
-    name::Symbol          # the name a finding gives it
-end
+# ---- the methods loaded code defines ----
 
 const ANONYMOUS_READER = Symbol("->")
 
-# The methods a piece of loaded code defines outside any other method, past branches this Julia skips.
-function collect_readers!(readers, node)
-    kind = JS.kind(node)
-    kind == K"quote" && return readers
-    if is_method_form(node)
-        children = child_nodes(node)
-        child_count(children) < 2 && return readers
-        name = method_name_of(children[1])
-        isnothing(name) || push!(readers, ReaderForm(node, name))
-        return readers
-    end
-    if kind == K"macro"
-        children = child_nodes(node)
-        name = sig_name(children[1])
-        isnothing(name) || push!(readers, ReaderForm(node, Symbol("@", name)))
-        return readers
-    end
-    if kind == K"struct"
-        children = child_nodes(node)
-        name = type_name(children[1])
-        isnothing(name) || push!(readers, ReaderForm(node, name))
-        return readers
-    end
-    if kind == K"->" || kind == K"do"
-        push!(readers, ReaderForm(node, ANONYMOUS_READER))
-        return readers
-    end
-    for child in live_children(node)
-        collect_readers!(readers, child)
-    end
-    readers
-end
-
-const READS_TARGET = :_
-
-function inner_constructors(node)
-    children = child_nodes(node)
-    body = last(children)
-    JS.kind(body) == K"block" || return JS.SyntaxNode[]
-    statements = child_nodes(body)
-    isnothing(statements) && return JS.SyntaxNode[]
-    filter(is_inner_constructor, statements)
-end
-
-function form_reads(form::JS.SyntaxNode)
-    refs = Dict(READS_TARGET => Set{Symbol}())
-    reads = MethodReads(refs, MemberRead[])
-    scope = ScanScope(READS_TARGET, Set{Symbol}(), 0, 0, nothing, false)
+# The name a finding gives a method form: its function, `@name` for a macro, `->` for an anonymous function.
+function reader_name(form)::Union{Nothing,Symbol}
     kind = JS.kind(form)
-    if kind == K"macro"
-        children = child_nodes(form)
-        absorb_method!(reads, children[1], children[2], scope)
-    elseif kind == K"struct"
-        for constructor in inner_constructors(form)
-            walk_scoped!(reads, constructor, scope, nothing)
-        end
-    else
-        walk_scoped!(reads, form, scope, nothing)
-    end
-    reads
+    kind == K"->" && return ANONYMOUS_READER
+    kind == K"do" && return ANONYMOUS_READER
+    signature = first(child_nodes(form))
+    kind == K"macro" || return method_name_of(signature)
+    name = sig_name(signature)
+    isnothing(name) && return nothing
+    Symbol("@", name)
 end
 
-function bare_reads(reads::MethodReads)
-    names = Set{Symbol}()
-    for read in values(reads.refs)
-        union!(names, read)
+# The name of a method form loaded code defines, judged once per form; nothing for a form in quoted code or in a
+# branch this Julia skips while it loads.
+function loaded_reader!(readers, form, root)
+    haskey(readers, form) && return readers[form]
+    named = reader_name(form)
+    if in_quote(form, root) || in_skipped_branch(form, root)
+        named = nothing
     end
-    names
+    readers[form] = named
+    named
+end
+
+function in_quote(node, root)
+    current = node.parent
+    while !isnothing(current) && current !== root
+        JS.kind(current) == K"quote" && return true
+        current = current.parent
+    end
+    false
 end
 
 # ---- the judgement ----
@@ -176,11 +113,9 @@ end
 
 # The package module a qualifier names, resolved from the code's module through bindings the parse sees. Nothing
 # for a local, another package's module, or a step the load binds late, judged as that step's own read.
-function member_module(judge::LateJudge, key::Symbol, read::MemberRead, started::Int)
-    path = dotted_names(read.qualifier)
+function member_module(judge::LateJudge, key::Symbol, qualifier, started::Int)
+    path = dotted_names(qualifier)
     isnothing(path) && return nothing
-    head = first(path)
-    head in read.bound && return nothing
     current = get(judge.by_key, key, nothing)
     for name in path
         current isa Module || return nothing
@@ -196,7 +131,7 @@ function member_module(judge::LateJudge, key::Symbol, read::MemberRead, started:
     get(judge.by_module, current, nothing)
 end
 
-function note_late!(edges, judge::LateJudge, position::Int, reader::ReaderForm, name::Symbol, binding)
+function note_late!(edges, judge::LateJudge, position::Int, reader::Symbol, name::Symbol, binding)
     isnothing(binding) && return edges
     files = judge.walk.index.files
     file = files[position]
@@ -206,28 +141,30 @@ function note_late!(edges, judge::LateJudge, position::Int, reader::ReaderForm, 
     edge = get!(edges, pair) do
         LateEdge(file.mod, position, binding.code, Set{Symbol}(), Set{Symbol}())
     end
-    push!(edge.readers, reader.name)
+    push!(edge.readers, reader)
     push!(edge.names, name)
     edges
 end
 
-function judge_reader!(edges, judge::LateJudge, position::Int, reader::ReaderForm)
+# One read a method makes when it runs: its bare name in the code's module, or its member in the package module its
+# qualifier names. A signature's annotations run where the method is defined, so they read nothing late.
+function judge_read!(edges, judge::LateJudge, position::Int, readers, read::NameRead)
+    form = read.method
+    isnothing(form) && return edges
+    read.in_signature && return edges
     file = judge.walk.index.files[position]
+    reader = loaded_reader!(readers, form, file.tree)
+    isnothing(reader) && return edges
     load = judge.walk.loads[position]
-    byte = JS.first_byte(reader.form)
+    byte = JS.first_byte(form)
     started = started_at(load, byte)
-    reads = form_reads(reader.form)
-    for name in bare_reads(reads)
-        binding = late_binding(judge, file.mod, name, started)
-        note_late!(edges, judge, position, reader, name, binding)
+    holder = file.mod
+    if is_member(read)
+        holder = member_module(judge, file.mod, read.qualifier, started)
+        isnothing(holder) && return edges
     end
-    for read in reads.members
-        through = member_module(judge, file.mod, read, started)
-        isnothing(through) && continue
-        binding = late_binding(judge, through, read.member, started)
-        note_late!(edges, judge, position, reader, read.member, binding)
-    end
-    edges
+    binding = late_binding(judge, holder, read.name, started)
+    note_late!(edges, judge, position, reader, read.name, binding)
 end
 
 # Two load places below the module place they share: `1->3` for two files of one module.
@@ -265,9 +202,9 @@ function check_file_backedges(index::SourceIndex, mods, package::Module)
     edges = Dict{Tuple{String,String},LateEdge}()
     for position in walk.order
         file = index.files[position]
-        readers = collect_readers!(ReaderForm[], file.tree)
-        for reader in readers
-            judge_reader!(edges, judge, position, reader)
+        readers = IdDict{JS.SyntaxNode,Union{Nothing,Symbol}}()
+        for read in file.scan.reads
+            judge_read!(edges, judge, position, readers, read)
         end
     end
     findings = Finding[]

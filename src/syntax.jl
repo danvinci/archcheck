@@ -18,6 +18,20 @@ struct CallSite
     is_used::Bool        # the call's value is read
 end
 
+"""One name code reads, as the index's scoped walk meets it: a bare name, or a member read through a qualifier that
+can name a module. A name the code declares (an argument, a local, a field, a type parameter) is no read."""
+struct NameRead
+    name::Symbol                              # the name as Julia binds it, a macro's with its `@`
+    qualifier::Union{Nothing,JS.SyntaxNode}   # the code a member is read through; nothing for a bare name
+    through::Union{Nothing,Module}            # the loaded module the qualifier names, resolved once at index build
+    def::Union{Nothing,Symbol}                # refs key of the definition holding the read; nothing outside any
+    method::Union{Nothing,JS.SyntaxNode}      # outermost method, macro or closure form holding it; nothing in load-time code
+    line::Int                                 # source line of the read
+    in_signature::Bool                        # in a signature's annotations, which run where the method is defined
+end
+
+is_member(read::NameRead) = !isnothing(read.qualifier)
+
 """A member read through a qualifier that can name a module: `g` in `M.g`. It joins its def's `refs` once the index
 resolves the qualifier to one of the package's modules."""
 struct QualifiedRead
@@ -40,6 +54,7 @@ struct FileScan
     imports::Set{Symbol}                                         # names this file's import clauses bind
     callsites::Dict{MethodSite,Vector{CallSite}}                 # each method -> the calls its body writes, source order
     forms::Dict{MethodSite,JS.SyntaxNode}                        # each method -> its definition form, nested methods included
+    reads::Vector{NameRead}                                      # every name the code reads, in walk order
 end
 
 function empty_scan()
@@ -55,7 +70,9 @@ function empty_scan()
     imports = Set{Symbol}()
     callsites = Dict{MethodSite,Vector{CallSite}}()
     forms = Dict{MethodSite,JS.SyntaxNode}()
-    FileScan(funcs, constructors, types, refs, modrefs, members, line, argtypes, tupletail, imports, callsites, forms)
+    reads = NameRead[]
+    FileScan(funcs, constructors, types, refs, modrefs, members, line, argtypes, tupletail, imports, callsites, forms,
+             reads)
 end
 
 # `nothing` on failure, so a caller accounts for it.

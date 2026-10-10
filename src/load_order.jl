@@ -126,6 +126,32 @@ function live_children(node)
     children
 end
 
+# Whether a child of an `if` or `elseif` runs when this Julia loads it: the condition does, an `elseif` does unless an
+# earlier condition is decided true, and a branch does when the load takes it.
+function is_live_child(conditional, child)
+    children = child_nodes(conditional)
+    child === first(children) && return true
+    if JS.kind(child) == K"elseif"
+        condition = static_condition(first(children))
+        return condition !== true
+    end
+    any(branch -> branch === child, live_branches(conditional))
+end
+
+# Whether `node` sits, below `root`, in a branch this Julia skips while it loads, judged by the load's own rule.
+function in_skipped_branch(node, root)
+    child = node
+    current = node.parent
+    while !isnothing(current) && child !== root
+        kind = JS.kind(current)
+        is_conditional = kind == K"if" || kind == K"elseif"
+        is_conditional && !is_live_child(current, child) && return true
+        child = current
+        current = current.parent
+    end
+    false
+end
+
 # What loaded code includes and opens, in source order, past branches this Julia skips and method bodies, which
 # include only when called.
 function collect_live_events!(events, node)
@@ -170,8 +196,6 @@ function is_local_scope(kind)
     kind == K"do" && return true
     false
 end
-
-is_type_form(kind) = kind == K"struct" || kind == K"abstract" || kind == K"primitive"
 
 function add_site!(sites, name, node, is_import)
     isnothing(name) && return sites

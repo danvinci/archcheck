@@ -260,10 +260,6 @@ struct ReachUnit
     from::Symbol          # key of the module the code belongs to; :Entry for an entry script
 end
 
-# The module the code of a unit sits in, which reads its own names freely; an entry script sits in none.
-code_home(names::Module) = names
-code_home(script::ScriptNames) = script.home
-
 # The unit's code reading `name` through `through`; nothing when `through` is the code's own module or one the
 # package reads on purpose, holds no such name, or declares it.
 function reach_finding(modules::ReachModules, unit::ReachUnit, home, through::Module, name::Symbol, line, via::Symbol)
@@ -312,32 +308,6 @@ function clause_reads(modules::ReachModules, home, clause)
     reads
 end
 
-# Whether a child of an `if` or `elseif` runs when this Julia loads it: the condition does, an `elseif` does unless an
-# earlier condition is decided true, and a branch does when the load takes it.
-function is_live_child(conditional, child)
-    children = child_nodes(conditional)
-    child === first(children) && return true
-    if JS.kind(child) == K"elseif"
-        condition = static_condition(first(children))
-        return condition !== true
-    end
-    any(branch -> branch === child, live_branches(conditional))
-end
-
-# Whether `node` sits, below `root`, in a branch this Julia skips while it loads, judged by the load's own rule.
-function in_skipped_branch(node, root)
-    child = node
-    current = node.parent
-    while !isnothing(current) && child !== root
-        kind = JS.kind(current)
-        is_conditional = kind == K"if" || kind == K"elseif"
-        is_conditional && !is_live_child(current, child) && return true
-        child = current
-        current = current.parent
-    end
-    false
-end
-
 function clause_reach!(findings, modules::ReachModules, unit::ReachUnit, home, clause, line_kind)
     in_skipped_branch(clause, unit.tree) && return
     reads = clause_reads(modules, home, clause)
@@ -355,43 +325,17 @@ function clause_reaches!(findings, unit::ReachUnit, modules::ReachModules, home)
     each_clause((clause, line_kind) -> clause_reach!(findings, modules, unit, home, clause, line_kind), unit.tree)
 end
 
-# Whether `node` sits in a module block inside `root`: that block's code is a unit of its own.
-function in_inner_module(node, root)
-    current = node.parent
-    while !isnothing(current) && current !== root
-        JS.kind(current) == K"module" && return true
-        current = current.parent
+# Each member the unit's code reads through a loaded module, the module its qualifier names resolved by the walk.
+function qualified_reaches!(findings, unit::ReachUnit, modules::ReachModules, home, reads)
+    for read in reads
+        is_member(read) || continue
+        through = read.through
+        isnothing(through) && continue
+        found = reach_finding(modules, unit, home, through, read.name, read.line, :qualified)
+        isnothing(found) && continue
+        in_skipped_branch(read.qualifier, unit.tree) && continue
+        push!(findings, found)
     end
-    false
-end
-
-# The scoped walk's callback over one unit: each step of a qualified path, judged where the walk meets it.
-struct QualifiedReader{N}
-    findings::Vector{Finding}   # where each reach is recorded
-    modules::ReachModules       # the modules a reference resolves against
-    names::N                    # what a bare name binds where the code sits: its loaded module, or a script's names
-    unit::ReachUnit             # the code walked
-end
-
-function (reader::QualifiedReader)(qualifier, member, line, bound)
-    unit = reader.unit
-    in_inner_module(qualifier, unit.tree) && return
-    through = resolve_loaded_module(qualifier, reader.names, bound)
-    isnothing(through) && return
-    home = code_home(reader.names)
-    found = reach_finding(reader.modules, unit, home, through, member, line, :qualified)
-    isnothing(found) && return
-    in_skipped_branch(qualifier, unit.tree) && return
-    push!(reader.findings, found)
-end
-
-function qualified_reaches!(findings, unit::ReachUnit, modules::ReachModules, names)
-    reader = QualifiedReader(findings, modules, names, unit)
-    scan = empty_scan()
-    target = :_
-    scan.refs[target] = Set{Symbol}()
-    scope = ScanScope(target, Set{Symbol}(), 0, 0, nothing, false)
-    walk_scoped!(scan, unit.tree, scope, reader)
 end
 
 # reaches-internal: a name read through any module that neither exports nor declares it, by a qualified step or a
@@ -404,14 +348,15 @@ function check_reaches_internal(index::SourceIndex, mods, package::Module; allow
         isnothing(home) && continue
         unit = ReachUnit(file.path, file.tree, file.mod)
         clause_reaches!(findings, unit, modules, home)
-        qualified_reaches!(findings, unit, modules, home)
+        qualified_reaches!(findings, unit, modules, home, file.scan.reads)
     end
     for (path, tree) in index.scripts
         unit = ReachUnit(path, tree, :Entry)
         home = script_home(modules, tree)
         clause_reaches!(findings, unit, modules, home)
         names = script_names(tree, modules, home)
-        qualified_reaches!(findings, unit, modules, names)
+        reads = code_reads(tree, names)
+        qualified_reaches!(findings, unit, modules, home, reads)
     end
     unique(found -> (found.file, found.line, found.symbol), findings)
 end

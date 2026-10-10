@@ -189,7 +189,7 @@ function walk_method_def!(scan, node, depth, current)
     end
     site = MethodSite(owner, line)
     scan.forms[site] = node
-    opened = ScanScope(owner, Set{Symbol}(), depth + 1, 0, site, false)
+    opened = opening_scope(owner, depth + 1, site)
     absorb_method!(scan, children[1], body, opened)
 end
 
