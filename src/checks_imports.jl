@@ -325,7 +325,8 @@ end
 
 # implicit-import and stale-import, per loaded module of the package, extensions included.
 function check_imported_names(index::SourceIndex, mods, package::Module)
-    modules = ReachModules(mods, package)
+    no_allowed = ()
+    modules = ReachModules(mods, package, no_allowed)
     findings = Finding[]
     for home in mods
         key = module_key(home)

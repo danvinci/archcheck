@@ -200,8 +200,9 @@ end
 function type_head(@nospecialize(applied))
     applied isa Union && return nothing
     applied isa Type || return nothing
-    name = Base.typename(applied)
-    name.wrapper
+    unwrapped = Base.unwrap_unionall(applied)
+    unwrapped isa DataType || return nothing
+    unwrapped.name.wrapper
 end
 
 function bind_annotated!(types, mod, arg, typevars)

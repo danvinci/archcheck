@@ -76,6 +76,10 @@ using .Cc
     docs(m) = D.meta(m)
     widened(x) = Core.Compiler.widenconst(x)
     inlined() = Base.@_inline_meta
+    if VERSION < v"1.0"
+        using Base: uniontypes
+        skipped(t) = Base.has_free_typevars(t)
+    end
     """,
     "cc/Cc.jl" => """
     module Cc

@@ -175,8 +175,8 @@ function script_path_module(modules::ReachModules, path_node)
     target.named
 end
 
-# A listed name of a `:` clause and the name it binds in the script: itself, or the name after its `as`.
-function listed_binding(item)
+# A listed name's path in a `:` clause and the name it binds in the script: itself, or the name after its `as`.
+function listed_source_binding(item)
     if JS.kind(item) == K"as"
         renamed = renamed_parts(item)
         return renamed.path, renamed.bound
@@ -215,7 +215,7 @@ function script_clause!(script::ScriptNames, modules::ReachModules, clause, line
     base = script_path_module(modules, first(children))
     isnothing(base) && return
     for item in children[2:end]
-        path, bound = listed_binding(item)
+        path, bound = listed_source_binding(item)
         length(path) == 1 || continue
         isnothing(bound) && continue
         member = bound_module(base, only(path))
@@ -271,7 +271,7 @@ function reach_finding(modules::ReachModules, unit::ReachUnit, home, through::Mo
     through in modules.allowed && return nothing
     isdefined(through, name) || return nothing
     Base.ispublic(through, name) && return nothing
-    defining = Base.binding_module(through, name)
+    defining = which(through, name)
     owner = module_label(defining, modules)
     reached = module_label(through, modules)
     symbol = "$reached.$name"
@@ -312,7 +312,34 @@ function clause_reads(modules::ReachModules, home, clause)
     reads
 end
 
+# Whether a child of an `if` or `elseif` runs when this Julia loads it: the condition does, an `elseif` does unless an
+# earlier condition is decided true, and a branch does when the load takes it.
+function is_live_child(conditional, child)
+    children = child_nodes(conditional)
+    child === first(children) && return true
+    if JS.kind(child) == K"elseif"
+        condition = static_condition(first(children))
+        return condition !== true
+    end
+    any(branch -> branch === child, live_branches(conditional))
+end
+
+# Whether `node` sits, below `root`, in a branch this Julia skips while it loads, judged by the load's own rule.
+function in_skipped_branch(node, root)
+    child = node
+    current = node.parent
+    while !isnothing(current) && child !== root
+        kind = JS.kind(current)
+        is_conditional = kind == K"if" || kind == K"elseif"
+        is_conditional && !is_live_child(current, child) && return true
+        child = current
+        current = current.parent
+    end
+    false
+end
+
 function clause_reach!(findings, modules::ReachModules, unit::ReachUnit, home, clause, line_kind)
+    in_skipped_branch(clause, unit.tree) && return
     reads = clause_reads(modules, home, clause)
     isnothing(reads) && return
     via = Symbol(string(line_kind))
@@ -353,7 +380,9 @@ function (reader::QualifiedReader)(qualifier, member, line, bound)
     isnothing(through) && return
     home = code_home(reader.names)
     found = reach_finding(reader.modules, unit, home, through, member, line, :qualified)
-    isnothing(found) || push!(reader.findings, found)
+    isnothing(found) && return
+    in_skipped_branch(qualifier, unit.tree) && return
+    push!(reader.findings, found)
 end
 
 function qualified_reaches!(findings, unit::ReachUnit, modules::ReachModules, names)

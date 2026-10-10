@@ -350,7 +350,7 @@ owned_subject(@nospecialize(value)) = typeof(value)
 function binding_owner(home, name, value)
     unwrapped = Base.unwrap_unionall(value)
     if unwrapped isa Union
-        return Base.binding_module(home, name)
+        return which(home, name)
     end
     subject = owned_subject(value)
     parentmodule(subject)

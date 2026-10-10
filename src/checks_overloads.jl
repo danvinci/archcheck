@@ -21,7 +21,8 @@ end
 function element_type(@nospecialize(slot), @nospecialize(signature))
     array = Base.unwrap_unionall(slot)
     array isa DataType || return Any
-    array_name = Base.typename(AbstractArray)
+    abstract_array = Base.unwrap_unionall(AbstractArray)
+    array_name = abstract_array.name
     while array.name !== array_name
         array = supertype(array)
     end
