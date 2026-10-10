@@ -91,15 +91,12 @@ function returned_sentinel(node, sentinels)
     kind == K"function" && return nothing
     kind == K"->" && return nothing
     kind == K"quote" && return nothing
-    if kind == K"return"
-        children = child_nodes(node)
-        one_value = !isnothing(children) && length(children) == 1
-        if one_value && is_sentinel_literal(children[1], sentinels)
-            marker = children[1]
-            return JS.sourcetext(marker)
-        end
-    end
     children = child_nodes(node)
+    is_single_return = kind == K"return" && child_count(children) == 1
+    if is_single_return && is_sentinel_literal(children[1], sentinels)
+        marker = children[1]
+        return JS.sourcetext(marker)
+    end
     isnothing(children) && return nothing
     for child in children
         found = returned_sentinel(child, sentinels)
