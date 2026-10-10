@@ -18,50 +18,6 @@ end
 
 kinds(::KeptBuilders) = (:kept_builder => :advisory,)
 
-function split_builder(builder)
-    text = string(builder)
-    parts = split(text, ".")
-    name = Symbol(parts[end])
-    prefix = parts[1:end-1]
-    (name, prefix)
-end
-
-function tail_matches(mod, prefix)
-    isempty(prefix) && return false
-    names = fullname(mod)
-    length(names) < 2 && return false
-    below = names[2:end]
-    length(below) < length(prefix) && return false
-    start = length(below) - length(prefix) + 1
-    for index in eachindex(prefix)
-        piece = string(below[start + index - 1])
-        piece == prefix[index] || return false
-    end
-    true
-end
-
-function owned_value(value::Union{Function,Type}, mod::Module)
-    parentmodule(value) === mod || return nothing
-    value
-end
-
-owned_value(::Any, ::Module) = nothing
-
-function owned_callable(mod, name)
-    isdefined(mod, name) || return nothing
-    value = getfield(mod, name)
-    owned_value(value, mod)
-end
-
-function find_builder(ctx, name, prefix)
-    for mod in package_modules(ctx)
-        tail_matches(mod, prefix) || continue
-        func = owned_callable(mod, name)
-        isnothing(func) || return func
-    end
-    nothing
-end
-
 function unwrap_return(node)
     JS.kind(node) == K"return" || return node
     children = child_nodes(node)
@@ -146,10 +102,8 @@ end
 
 # A call of the builder is kept when some method of that function keeps its value, exempt directories included.
 function run(check::KeptBuilders, ctx)
-    parts = split_builder(check.builder)
-    name = parts[1]
-    prefix = parts[2]
-    func = find_builder(ctx, name, prefix)
+    name, _ = path_parts(check.builder)
+    func = package_callable(ctx, check.builder)
     isnothing(func) && return Finding[]
     methods_of = collect(methods(func))
     keeper = has_keeper(ctx.index, methods_of)

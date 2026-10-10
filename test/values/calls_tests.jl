@@ -478,6 +478,14 @@ end
 const KEEP_PROBE = kept_case("KeepProbe", KEPT_VENDOR, KEPT_USE)
 const KEEP_BARE = kept_case("KeepBare", BARE_VENDOR, BARE_USE)
 
+const KEEP_ROOT = load_package("KeepRoot", """
+    const STORE = Dict{Int,Int}()
+    shape(x::Int) = get!(STORE, x) do
+        x
+    end
+    shape(x::Float64) = x + 1.0
+    """)
+
 @testset "calls" begin
     @testset "a helper that reaches the repeated callee fires, and one that does not stays quiet" begin
         found = CALL_PROBE_FOUND
@@ -610,5 +618,12 @@ const KEEP_BARE = kept_case("KeepBare", BARE_VENDOR, BARE_USE)
         end
         @test any(form -> occursin("OpenCascade.Shape", form), forms)
         @test "x + 1.0" in forms
+    end
+
+    @testset "a builder in the package's root module is named bare" begin
+        ctx = case_context(KEEP_ROOT)
+        found = ArchCheck.run(KeptBuilders(:shape), ctx)
+        rows = evidence_rows(found, :builder, :form)
+        @test rows == [(:kept_builder, "shape", "shape", "x + 1.0")]
     end
 end
