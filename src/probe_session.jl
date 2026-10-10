@@ -18,6 +18,7 @@ struct ProbeRecord
     is_fed::Bool                 # an argument is a Channel: workers fed from one share their arguments by design
     is_ambient::Bool             # this call is a non-probed function, or one encloses it
     is_argument_returned::Bool   # the non-bits result is one of the call's arguments, the same object
+    body::DataType               # the probed body's closure type, whose effects are the original body's
 end
 
 """One wait a probed method made on a task or another waitable value. Identities are `objectid`s, so each matches
@@ -209,7 +210,7 @@ function probe_enter(session::ProbeSession, name::Symbol, file::String, line::In
     Invocation(name, number)
 end
 
-function make_record(frame::OpenFrame, result, stopped::Float64)
+function make_record(frame::OpenFrame, result, stopped::Float64, body::DataType)
     arguments = frame.arguments
     argument_hash = content_hash(arguments)
     keyed = frame.key_hash
@@ -227,7 +228,7 @@ function make_record(frame::OpenFrame, result, stopped::Float64)
     returned = is_argument_result(result, arguments)
     ProbeRecord(frame.name, site, caller.name, caller.id, names, task_id,
                 frame.started, stopped, argument_hash, result_hash, identity, reached, fed,
-                frame.is_ambient, returned)
+                frame.is_ambient, returned, body)
 end
 
 function push_record(session::ProbeSession, record::ProbeRecord)
@@ -244,14 +245,14 @@ function push_wait(session::ProbeSession, record::WaitRecord)
     nothing
 end
 
-function probe_leave(session::ProbeSession, result)
+function probe_leave(session::ProbeSession, result, body::DataType)
     is_recording(session) && return nothing
     frame = close_frame(session)
     stopped = time()
     duration = stopped - frame.started
     duration >= session.slow_s || return nothing
     record = unrecorded(session) do
-        make_record(frame, result, stopped)
+        make_record(frame, result, stopped, body)
     end
     push_record(session, record)
     nothing

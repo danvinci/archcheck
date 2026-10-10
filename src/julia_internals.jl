@@ -165,3 +165,18 @@ has_padding(type::DataType) = Base.datatype_haspadding(type)
 
 # The local `@sync` binds its task list to, `Base.sync_varname`; an `@async` inside the block pushes its task there.
 sync_binding() = Base.sync_varname
+
+"""Whether the native code compiled for `signature` is unconditionally consistent; nothing when none is compiled. A
+`CodeInstance` keeps its effects in `ipo_purity_bits`, which `Compiler.decode_effects` reads (Compiler/src/effects.jl)."""
+function compiled_consistency(signature::Type)
+    instance = Base.method_instance(signature)
+    isnothing(instance) && return nothing
+    isdefined(instance, :cache) || return nothing
+    code = instance.cache
+    while !isnothing(code.owner)
+        isdefined(code, :next) || return nothing
+        code = code.next
+    end
+    effects = Core.Compiler.decode_effects(code.ipo_purity_bits)
+    Core.Compiler.is_consistent(effects)
+end

@@ -432,18 +432,16 @@ function key_hash_expr(session::ProbeSession, key, positional, keywords, produce
     :($hashed($compute, $session, $key_name, $producer_name))
 end
 
-function scoped_run(is_probed::Bool, parent_pair, scope, parent, invocation, rewritten)
+function scoped_run(is_probed::Bool, parent_pair, scope, parent, invocation, body)
     if is_probed
         return quote
             $parent_pair = $parent => $invocation
             $scope($parent_pair) do
-                (() -> $rewritten)()
+                $body()
             end
         end
     end
-    quote
-        (() -> $rewritten)()
-    end
+    :($body())
 end
 
 """One method a probe rewrites: the session its calls record in, and where the method is written."""
@@ -462,19 +460,23 @@ function probe_body(site::ProbeSite, shape::ArgumentShape, body)
     name = site.name
     result = gensym(:probe_result)
     invocation = gensym(:invocation)
+    body_closure = gensym(:probe_body)
     arguments = shape.arguments
     hashed = key_hash_expr(session, site.key, shape.positional, shape.keywords, name)
     rewritten = rewrite_waits(body, site)
     enter = GlobalRef(@__MODULE__, :probe_enter)
     leave = GlobalRef(@__MODULE__, :probe_leave)
     abort = GlobalRef(@__MODULE__, :probe_abort)
+    type_of = GlobalRef(Core, :typeof)
     quoted_name = QuoteNode(name)
     scope = GlobalRef(Base.ScopedValues, :with)
     parent = session.parent
     parent_pair = gensym(:parent_pair)
     entered = :($enter($session, $quoted_name, $(site.file), $(site.line), $arguments, $hashed, $(site.is_probed)))
-    run = scoped_run(site.is_probed, parent_pair, scope, parent, invocation, rewritten)
+    run = scoped_run(site.is_probed, parent_pair, scope, parent, invocation, body_closure)
+    # The method's own code runs in this closure, whose compiled specialization records that code's effects.
     quote
+        $body_closure = () -> $rewritten
         $invocation = $entered
         local $result
         try
@@ -483,7 +485,7 @@ function probe_body(site::ProbeSite, shape::ArgumentShape, body)
             $abort($session)
             rethrow()
         end
-        $leave($session, $result)
+        $leave($session, $result, $type_of($body_closure))
         $result
     end
 end

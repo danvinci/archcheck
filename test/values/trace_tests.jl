@@ -105,6 +105,9 @@ const UNREAD_RESULT = load_package("UnreadResult", """
     fired = gate_findings(Probed; checks, probes, workload = repeated_call)
     rows = evidence_rows(fired, :function, :caller, :repeats)
     @test rows == [(:rebuild, "same", "same", "call_both", "1")]
+    # `same` sums the vector it is handed, which another call may change between two calls.
+    mutable_read = only(fired)
+    @test !any(pair -> pair.first === :consistent, mutable_read.evidence)
 
     across_calls = function ()
         Probed.call_both(Probed.same, Probed.same, [1, 2, 3], [1, 2, 4])
@@ -137,8 +140,8 @@ end
 
     plain_call = () -> Probed.call_both(Probed.echo, Probed.echo, 1, 1)
     plain = gate_findings(Probed; checks, probes = echo_probes, workload = plain_call)
-    rows = evidence_rows(plain, :function, :repeats)
-    @test rows == [(:rebuild, "echo", "echo", "1")]
+    rows = evidence_rows(plain, :function, :repeats, :consistent)
+    @test rows == [(:rebuild, "echo", "echo", "1", "true")]
 end
 
 @testset "a recursive call is an invocation of its own, so recursion on one argument is no repeat" begin

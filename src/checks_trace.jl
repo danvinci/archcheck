@@ -131,7 +131,23 @@ function total_seconds(records)
     total
 end
 
-function rebuild_finding(index, key, records)
+function body_consistency!(known, body::DataType)
+    get!(known, body) do
+        signature = Tuple{body}
+        compiled_consistency(signature)
+    end
+end
+
+# The probe's own calls make a body that calls a probed function inconsistent, so only a bit that holds is a fact.
+function is_consistent_repeat(known, records)
+    for record in records
+        holds = body_consistency!(known, record.body)
+        holds === true || return false
+    end
+    true
+end
+
+function rebuild_finding(index, key, records, is_consistent::Bool)
     mod = module_at(index, key.file, key.line)
     count = length(records)
     total = total_seconds(records)
@@ -145,6 +161,7 @@ function rebuild_finding(index, key, records)
         :repeats => repeat_count,
         :seconds => seconds,
     ]
+    is_consistent && push!(evidence, :consistent => "true")
     detail = "the same arguments were evaluated again within one call of the caller"
     Finding(mod, :rebuild, key.file, function_name, key.line, detail, evidence)
 end
@@ -153,9 +170,11 @@ function rebuild_findings(index, records)
     kept = judged_ordered(records)
     slots = repeat_slots(kept)
     grouped = group_repeats(kept, slots)
+    known = Dict{DataType,Union{Nothing,Bool}}()
     found = Finding[]
     for (key, repeats) in grouped
-        finding = rebuild_finding(index, key, repeats)
+        is_consistent = is_consistent_repeat(known, repeats)
+        finding = rebuild_finding(index, key, repeats, is_consistent)
         push!(found, finding)
     end
     found

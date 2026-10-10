@@ -177,11 +177,12 @@ end
 function internal_sites()
     callees = (:visit, :kwarg_decl, :bodyfunction, :delete_method, :method_argnames, :fixup_stdlib_path, :moduleloc,
                :meta, :Binding, :datatype_haspadding, :loaded_modules, :env_project_file, :parsed_toml, :PkgId,
-               :sync_varname, :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module)
+               :sync_varname, :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module,
+               :decode_effects)
     boundary = "src/julia_internals.jl"
     operations = (:project_dependencies, :argument_names, :loaded_package, :top_modules, :recorded_docs, :each_loaded_method,
                   :sync_binding, :drop_method!, :declares_keywords, :package_uuid, :body_function, :has_padding,
-                  :module_site, :recorded_path)
+                  :module_site, :recorded_path, :compiled_consistency)
     allowed = Tuple{String,Symbol}[]
     for operation in operations
         push!(allowed, (boundary, operation))

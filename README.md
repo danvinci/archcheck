@@ -63,7 +63,7 @@ ArchCheck.gate(MyPackage;
     probes = Probes(functions = (MyPackage.solve, MyPackage.load)))
 ```
 
-`Rebuilds` reports a function evaluated again on equal arguments, and `TwoNames` two functions producing one value (a function returning its own argument produces none), each within one call of a probed caller; calls the workload makes itself are its own choice and stay unjudged. `Waits` reports a waited result nobody reads, and `UnreachedMethods` the methods the run never compiled.
+`Rebuilds` reports a function evaluated again on equal arguments, and `TwoNames` two functions producing one value (a function returning its own argument produces none), each within one call of a probed caller; calls the workload makes itself are its own choice and stay unjudged. A `rebuild` carries `consistent` when the compiler proved the repeated code returns an equal result for equal arguments. `Waits` reports a waited result nobody reads, and `UnreachedMethods` the methods the run never compiled.
 
 The package's own test suite serves as the workload when the gate runs at the end of `test/runtests.jl`, after the tests:
 
