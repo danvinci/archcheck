@@ -2,12 +2,12 @@
 # Probes stay out: arming one redefines methods, which an image build refuses. A red gate here fails the build.
 function precompile_checks()
     readers = ((run, Tuple{Any}), (kinds, Tuple{}))
-    named_here = (("src/precompile.jl", :precompile_checks),)
+    named_here = ("src/precompile.jl",)
     configured = (
         OverlappingCalls(),
         UnreadWaits(),
         ReaderSet(Check, readers),
-        CallerWhitelist((:precompile_checks,), named_here),
+        CallerWhitelist((:precompile_checks,), (), named_here),
         SentinelReturns(("src",)),
         StringPayloads(("src",)),
         ScanSeeds(("src",)),

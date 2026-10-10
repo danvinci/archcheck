@@ -34,7 +34,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 
 | Check | A finding |
 |---|---|
-| `CallerWhitelist` | a call to a listed function from outside its allowed callers |
+| `CallerWhitelist` | a call to a listed function from outside its allowed callers, or a reference to one in load-time code |
 | `Independent` | a reference between modules declared independent |
 | `DeclaredExtensions` | a method on another module's function that its owner leaves unmarked public or undocumented |
 | `ReaderSet` | a concrete subtype missing a method its supertype requires |

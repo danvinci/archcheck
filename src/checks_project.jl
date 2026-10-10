@@ -1,7 +1,7 @@
 # Parameterized checks a package configures: who may call a name, which public functions return a
 # sentinel, and where a string-keyed dictionary carries a value with no single layout.
 
-"""Configured through `gate(...; checks)` with the names, the definitions allowed to call them, and directories to skip. A call from outside that list is a finding."""
+"""Configured through `gate(...; checks)` with the names, the definitions allowed to call them, and directories to skip. A call from outside that list is a finding, and so is a reference in load-time code outside every definition."""
 struct CallerWhitelist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
     callees::C       # function names a body may reference only from an allowed def
     allowed::A       # (repo-relative path, def name) pairs that may reference them
@@ -198,6 +198,32 @@ function written_names(scan::FileScan)
     written
 end
 
+# Each guarded name a file's load-time code reads outside every definition, with the line of its first read there. A
+# clause or a definition names a function without reading it, so neither counts; a bound reference does.
+function load_time_reads(scan::FileScan, names)
+    found = Dict{Symbol,Int}()
+    for read in scan.reads
+        isnothing(read.def) || continue
+        read.is_quoted && continue
+        read.in_export && continue
+        read.name in names || continue
+        get!(found, read.name, read.line)
+    end
+    found
+end
+
+# Load-time code is no definition, so no allowed pair covers it; one finding names the file.
+function load_time_finding(file, loaded)
+    called_names = collect(keys(loaded))
+    ordered = sort!(called_names; by = string)
+    listed = join(ordered, " ")
+    prose = join(ordered, ", ")
+    detail = "load-time code references " * prose
+    line = minimum(values(loaded))
+    evidence = [:calls => listed]
+    Finding(file.mod, :unlisted_caller, file.path, "", line, detail, evidence)
+end
+
 function run(check::CallerWhitelist, ctx)
     findings = Finding[]
     for prefix in check.exempt_dirs
@@ -224,6 +250,8 @@ function run(check::CallerWhitelist, ctx)
             finding = Finding(file.mod, :unlisted_caller, file.path, symbol, line, detail, evidence)
             push!(findings, finding)
         end
+        loaded = load_time_reads(file.scan, names)
+        isempty(loaded) || push!(findings, load_time_finding(file, loaded))
     end
     findings
 end
