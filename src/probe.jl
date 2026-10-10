@@ -2,7 +2,9 @@
 # method is evaluated again from its parsed source with an entry and an exit probe, and restored afterwards.
 
 """What a package asks the gate to observe: the functions to probe, and the functions whose callees read state no
-argument shows (a session over a global library), whose calls the analyses set apart."""
+argument shows (a session over a global library), whose calls the analyses set apart. Each is the function itself
+or its path in the package, `:name` in the root module or `:(Sub.name)`, so a package's own tests can name one it
+keeps internal."""
 Base.@kwdef struct Probes{F<:Tuple,A<:Tuple}
     functions::F              # every method of each, defined in the package, is probed
     ambient::A = ()           # a probed call inside one of these reads state its arguments do not show
@@ -297,6 +299,24 @@ function restore_originals(originals)
     nothing
 end
 
+function probed_function(ctx, path::Symbol)
+    found = package_callable(ctx, path)
+    isnothing(found) && throw(ArgumentError("no function in the package is at the path $path"))
+    found
+end
+
+probed_function(ctx, path::Expr) = probed_function(ctx, Symbol(string(path)))
+probed_function(ctx, target) = target
+
+function probed_functions(ctx, targets)
+    resolved = Any[]
+    for target in targets
+        found = probed_function(ctx, target)
+        push!(resolved, found)
+    end
+    resolved
+end
+
 function except_installed(functions, installed)
     kept = Any[]
     for func in functions
@@ -325,8 +345,10 @@ function arm!(probes::Probes, ctx)
     try
         producers = keyed_producers(ctx.derived)
         install!(producers, session, true, ctx, originals, skipped)
-        listed = except_installed(probes.functions, producers)
-        ambient = except_installed(probes.ambient, producers)
+        named = probed_functions(ctx, probes.functions)
+        named_ambient = probed_functions(ctx, probes.ambient)
+        listed = except_installed(named, producers)
+        ambient = except_installed(named_ambient, producers)
         install!(listed, session, true, ctx, originals, skipped)
         install!(ambient, session, false, ctx, originals, skipped)
         isempty(skipped) || throw(skip_error(skipped))

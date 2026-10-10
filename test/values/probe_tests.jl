@@ -444,6 +444,19 @@ end
     @test names == [:by_local, :by_loop, :by_parameter, :quoted]
 end
 
+@testset "a function named by its path in the package is probed, and a path naming nothing is refused" begin
+    pkg = NEST_OUTER.pkg
+    probes = Probes(; functions = (:outer_step,), slow_s = 0.0)
+    workload = () -> pkg.outer_step(1)
+    seen = observed_gate(pkg; workload, probes)
+    names = [record.name for record in seen.observed.records]
+    @test names == [:outer_step]
+    absent = Probes(; functions = (:(Inner.absent),), slow_s = 0.0)
+    refused = caught(gate_findings, pkg; workload, probes = absent)
+    @test refused isa ArgumentError
+    @test occursin("Inner.absent", sprint(showerror, refused))
+end
+
 @testset "a session armed inside another keeps its calls apart" begin
     outer_pkg = NEST_OUTER.pkg
     inner_pkg = NEST_INNER.pkg
