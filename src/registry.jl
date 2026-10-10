@@ -202,7 +202,7 @@ kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
 run(::PrivateImports, ctx) = check_private_imports(ctx.index)
 kinds(::PrivateImports) = (:private_import => :advisory,)
 
-run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.mods; repo = ctx.index.repo)
+run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
 
 run(::AbstractFields, ctx) = check_abstract_fields(ctx.mods, ctx.sites)

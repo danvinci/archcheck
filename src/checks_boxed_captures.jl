@@ -16,33 +16,23 @@ function count_boxes(method::Method)
     count(has_box, lowered.code)
 end
 
-function check_boxed_captures(mods; repo)
+# Every method the package defines, a method on another package's function included.
+function check_boxed_captures(defined; repo)
     findings = Finding[]
     seen = Set{Tuple{String,Int}}()
-    for mod in mods
-        for name in names(mod; all = true)
-            is_self = name === nameof(mod)
-            is_builtin = name in (:eval, :include)
-            (is_self || is_builtin) && continue
-            isdefined(mod, name) || continue
-            value = getproperty(mod, name)
-            value isa Function || continue
-            for method in methods(value)
-                method.module === mod || continue
-                boxes = count_boxes(method)
-                boxes == 0 && continue
-                key = method_site(method, repo)
-                key in seen && continue
-                push!(seen, key)
-                file, line = key
-                symbol = written_name(name)
-                detail = "a captured local is assigned in more than one place, so lowering boxes it"
-                evidence = [:boxes => string(boxes)]
-                owner = module_key(mod)
-                finding = Finding(owner, :boxed_capture, file, symbol, line, detail, evidence)
-                push!(findings, finding)
-            end
-        end
+    for method in defined
+        boxes = count_boxes(method)
+        boxes == 0 && continue
+        key = method_site(method, repo)
+        key in seen && continue
+        push!(seen, key)
+        file, line = key
+        symbol = written_name(method.name)
+        detail = "a captured local is assigned in more than one place, so lowering boxes it"
+        evidence = [:boxes => string(boxes)]
+        owner = module_key(method.module)
+        finding = Finding(owner, :boxed_capture, file, symbol, line, detail, evidence)
+        push!(findings, finding)
     end
     findings
 end
