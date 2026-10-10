@@ -20,6 +20,13 @@ const BOXED_REACH = load_package("BoxedReach", """
         total
     end
     unboxed(x) = map(y -> y + x, (1, 2))
+    eval(Base.remove_linenums!(:(function unlocated()
+        tally = 0
+        step = () -> (tally += 1)
+        step()
+        tally = 4
+        tally
+    end)))
     """, [
     "inner/Inner.jl" => """
     module Inner
@@ -38,5 +45,12 @@ const BOXED_REACH = load_package("BoxedReach", """
     ctx = case_context(BOXED_REACH)
     found = ArchCheck.run(BoxedCaptures(), ctx)
     rows = sort([(f.mod, f.symbol) for f in found])
-    @test rows == [(:BoxedReach, "at_root"), (:BoxedReach, "show"), (:Inner, "own")]
+    @test rows == [(:BoxedReach, "at_root"), (:BoxedReach, "show"), (:BoxedReach, "unlocated"), (:Inner, "own")]
+end
+
+@testset "a method Julia recorded without a file keeps that recorded name, wherever the gate runs" begin
+    ctx = case_context(BOXED_REACH)
+    found = ArchCheck.run(BoxedCaptures(), ctx)
+    unlocated = only(f for f in found if f.symbol == "unlocated")
+    @test unlocated.file == "none"
 end

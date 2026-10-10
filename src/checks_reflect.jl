@@ -232,6 +232,8 @@ end
 # build machine's path; the fixup maps them to this installation.
 function recorded_path(file, repo)
     local_path = Base.fixup_stdlib_path(string(file))
+    # Code evaluated without line information records `none`, which names no file.
+    isabspath(local_path) || return local_path
     relpath(local_path, repo)
 end
 
