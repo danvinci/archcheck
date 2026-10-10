@@ -67,4 +67,6 @@ export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation, ProbeRecord, WaitRecord
 public gate, run, kinds, phase, CHECKS
 
+include("precompile.jl")   # last: it gates the finished module
+
 end # module ArchCheck
