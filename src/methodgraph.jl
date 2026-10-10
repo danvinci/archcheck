@@ -1,10 +1,33 @@
 # The method zoom of the call graph: the methods each call can land on. The name graph merges every method of a
 # function into one node; this one keeps them apart.
 
+"""What the walk's inference proved about one call a walked method writes, merged over its instances. Nothrow and
+consistent hold at every instance passing concrete arguments, since abstract ones taint them; the rest at every one."""
+struct CallFact
+    file::Symbol            # file the call's line sits in, as the code records it; empty when it records none
+    line::Int               # source line of the call; 0 when the code records none
+    callee::Symbol          # name of the function or type called; empty when the callee's type names neither
+    via::Symbol             # :call, :apply for a splatted call, :kwcall for a call with keywords
+    is_used::Bool           # some instance reads the call's value
+    is_failing::Bool        # at every instance no method matches any argument type inference allows there
+    failing::String         # the call signatures no method matches, `;`-joined; empty when a method matches
+    is_stub::Bool           # the called function has no method at all
+    is_forward::Bool        # keywords passed through a splat whose names inference does not know
+    is_concrete::Bool       # some instance passes concrete arguments
+    is_effect_free::Bool    # writes no state
+    is_terminating::Bool    # terminates
+    is_nothrow::Bool        # cannot throw
+    is_consistent::Bool     # equal arguments give an equal result
+    is_generated::Bool      # a method the call matches is `@generated`
+    is_value::Bool          # returns, and returns a value other than `nothing`
+    returns::String         # the inferred return type at the first instance walked; empty unless it drops a pure value
+end
+
 """Calls between methods. An edge joins a caller to a method a call can land on: the one inference resolved, or, for
 a call left to runtime dispatch, each package method the call's inferred types match."""
 struct MethodGraph
-    edges::Dict{Method,Set{Method}}   # caller -> methods its calls can land on; every walked method is a key
+    edges::Dict{Method,Set{Method}}         # caller -> methods its calls can land on; every walked method is a key
+    calls::Dict{Method,Vector{CallFact}}    # caller -> what the walk's inference proved about each call it writes
 end
 
 # A keyword body is the generated `#name#N` function. Its edges belong to the method the source wrote.
@@ -49,13 +72,17 @@ end
 
 function walk_methods(entries, landings::CallLandings)
     edges = Dict{Method,Set{Method}}()
+    calls = Dict{Method,Vector{CallFact}}()
     pending = Core.MethodInstance[]
     walked = Dict{Method,Any}()   # method -> the signature its walks cover
     # A walk only widens what it covers, so a specialization met once stays covered.
     met = Base.IdSet{Core.MethodInstance}()
+    # Instances inference reached from an entry, at types the code passes; call facts are read at these alone.
+    inferred = Base.IdSet{Core.MethodInstance}()
     for entry in entries
         instance = entry_instance(entry)
         push!(pending, instance)
+        push!(inferred, instance)
     end
     # A resolved call is an edge on the inference frame, including one the optimized code drops.
     interp = Core.Compiler.NativeInterpreter()
@@ -65,10 +92,11 @@ function walk_methods(entries, landings::CallLandings)
         push!(met, reached)
         instance = covering_instance(walked, reached)
         isnothing(instance) && continue
+        reached in inferred && push!(inferred, instance)
         walked[instance.def] = instance.specTypes
-        expand_instance!(edges, pending, instance, landings, interp)
+        expand_instance!(edges, calls, pending, instance, landings, interp, inferred)
     end
-    MethodGraph(edges)
+    MethodGraph(edges, calls)
 end
 
 # Each held method's function as the signature up to its function slot, open after it.
@@ -131,26 +159,238 @@ function entry_instance(@nospecialize(entry))
     instance
 end
 
-function expand_instance!(edges, pending, instance, landings::CallLandings, interp)
+function expand_instance!(edges, calls, pending, instance, landings::CallLandings, interp, inferred)
     module_set = landings.module_set
-    is_keyword = is_kwcall_method(instance.def)
-    frame = inference_frame(instance, interp; optimize = !is_keyword)
+    is_inferred = instance in inferred
+    frame = inference_frame(instance, interp)
     isnothing(frame) && return
-    if is_keyword
+    if is_kwcall_method(instance.def)
         body = keyword_body_from(frame)
-        isnothing(body) || push!(pending, body)
+        isnothing(body) && return
+        push!(pending, body)
+        is_inferred && push!(inferred, body)
         return
     end
     caller = written_method(instance.def)
     get!(edges, caller, Set{Method}())
+    if is_inferred
+        facts = get!(Vector{CallFact}, calls, caller)
+        record_calls!(facts, frame)
+        mark_inferred!(inferred, frame)
+    end
+    code = optimized_code(frame, interp)
     record_resolved!(edges, pending, frame, caller, module_set)
-    record_dispatched!(edges, pending, frame.src, instance, caller, landings)
+    isnothing(code) || record_dispatched!(edges, pending, code, instance, caller, landings)
 end
 
-# One inference for both readers: the frame keeps its resolved calls, and `optimize` makes `src` the code `code_typed`
-# returns. Nothing when inference fails.
-function inference_frame(instance::Core.MethodInstance, interp; optimize::Bool)
-    Core.Compiler.typeinf_frame(interp, instance, optimize)
+function mark_inferred!(inferred, frame)
+    for edge in frame.edges
+        target = called_instance(edge)
+        isnothing(target) || push!(inferred, target)
+    end
+end
+
+# One inference for every reader: the frame keeps its resolved calls and, per statement, its call info, effect flags
+# and readers; `src` is the unoptimized code. Nothing when inference fails.
+function inference_frame(instance::Core.MethodInstance, interp)
+    Core.Compiler.typeinf_frame(interp, instance, false)
+end
+
+# The code `code_typed` returns, built from the frame the way `Core.Compiler.typeinf_frame` builds it when asked to
+# optimize (Compiler/src/typeinfer.jl); nothing for a constant result, whose code calls nothing.
+function optimized_code(frame, interp)
+    Core.Compiler.result_is_constabi(interp, frame.result) && return nothing
+    state = Core.Compiler.OptimizationState(frame, interp)
+    Core.Compiler.optimize(interp, state, frame.result)
+    inlined = Core.svec(state.inlining.edges...)
+    Core.Compiler.ir_to_codeinf!(state, frame, inlined)
+end
+
+# Every call the frame's code writes, read before the optimizer rewrites the statements it describes. Inference
+# leaves `stmt_info`, `ssaflags` and `ssavalue_uses` indexed as `src.code` (Compiler/src/inferencestate.jl).
+function record_calls!(facts, frame)
+    code = frame.src
+    for position in eachindex(code.code)
+        info = frame.stmt_info[position]
+        branches = call_branches!(Core.Compiler.MethodMatchInfo[], info)
+        isempty(branches) && continue
+        route = call_route(info)
+        fact = call_fact(frame, position, branches, route)
+        merge_fact!(facts, fact)
+    end
+end
+
+# The dispatches of one statement's call, each a `MethodMatchInfo` (Compiler/src/stmtinfo.jl): a constant-propagated
+# call keeps its dispatch in `call`, a splatted one in each `ApplyCallInfo`, a union-split one a branch per member type.
+call_branches!(found, info::Core.Compiler.ConstCallInfo) = call_branches!(found, info.call)
+call_branches!(found, info::Core.Compiler.ApplyCallInfo) = call_branches!(found, info.call)
+call_branches!(found, info::Core.Compiler.UnionSplitInfo) = append!(found, info.split)
+call_branches!(found, info::Core.Compiler.MethodMatchInfo) = push!(found, info)
+call_branches!(found, @nospecialize(info)) = found
+
+function call_branches!(found, info::Core.Compiler.UnionSplitApplyCallInfo)
+    for inner in info.infos
+        call_branches!(found, inner)
+    end
+    found
+end
+
+call_route(::Core.Compiler.ApplyCallInfo) = :apply
+call_route(::Core.Compiler.UnionSplitApplyCallInfo) = :apply
+call_route(@nospecialize(info)) = :call
+
+# A statement's effect flags are the call's effects at the argument types inference holds there
+# (`flags_for_effects`, Compiler/src/optimize.jl).
+has_flag(flags::UInt32, flag::UInt32) = flags & flag == flag
+
+function call_fact(frame, position, branches, route)
+    code = frame.src
+    signature = Base.unwrap_unionall(first(branches).atype)
+    parameters = signature.parameters
+    is_keyword = length(parameters) >= 3 && parameters[1] === typeof(Core.kwcall)
+    called = is_keyword ? parameters[3] : parameters[1]
+    via = is_keyword ? :kwcall : route
+    file, line = statement_site(frame, position)
+    statement = code.code[position]
+    is_bare_call = statement isa Expr && statement.head === :call
+    is_used = !is_bare_call || !isempty(frame.ssavalue_uses[position])
+    is_failing = all(is_unmatched, branches)
+    failing = is_failing ? join((string(branch.atype) for branch in branches), "; ") : ""
+    is_stub = is_failing && has_no_method(called)
+    is_forward = is_keyword && !has_known_names(parameters[2])
+    is_concrete = all(branch -> Base.isdispatchtuple(branch.atype), branches)
+    flags = frame.ssaflags[position]
+    is_effect_free = has_flag(flags, Core.Compiler.IR_FLAG_EFFECT_FREE)
+    is_terminating = has_flag(flags, Core.Compiler.IR_FLAG_TERMINATES)
+    is_nothrow = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_NOTHROW)
+    is_consistent = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_CONSISTENT)
+    is_generated = any(matches_generated, branches)
+    returned = returned_type(branches)
+    is_value = returned !== Nothing && returned !== Union{}
+    is_dropped = !is_used && is_effect_free
+    returns = is_dropped ? string(returned) : ""
+    callee = callee_slot_name(called)
+    CallFact(file, line, callee, via, is_used, is_failing, failing, is_stub, is_forward, is_concrete,
+             is_effect_free, is_terminating, is_nothrow, is_consistent, is_generated, is_value, returns)
+end
+
+# The file and line a statement of unoptimized code records; a macro's expansion keeps the line of its call.
+function statement_site(frame, position)
+    stack = Base.IRShow.buildLineInfoNode(frame.src.debuginfo, frame.linfo, position)
+    isempty(stack) && return (Symbol(""), 0)
+    node = last(stack)
+    (node.file, Int(node.line))
+end
+
+# A `MethodMatchInfo` holds the dispatch's matches in `results.matches` and, per match, the `CodeInstance` inference
+# produced for it in `edges`, or nothing (Compiler/src/stmtinfo.jl).
+is_unmatched(branch::Core.Compiler.MethodMatchInfo) = isempty(branch.results.matches)
+
+function matches_generated(branch::Core.Compiler.MethodMatchInfo)
+    for match in branch.results.matches
+        Base.hasgenerator(match.method) && return true
+    end
+    false
+end
+
+# The union of the return types the matched instances inferred; a match inference left without an instance returns
+# what any call may.
+function returned_type(branches)
+    returned = Union{}
+    for branch in branches
+        for edge in branch.edges
+            inferred = edge isa Core.CodeInstance ? edge.rettype : Any
+            returned = Union{returned, inferred}
+        end
+    end
+    returned
+end
+
+function has_no_method(@nospecialize(called))
+    func = function_instance(called)
+    isnothing(func) && return false
+    isempty(methods(func))
+end
+
+function has_known_names(@nospecialize(keywords))
+    keywords isa DataType || return false
+    keywords <: NamedTuple || return false
+    first(keywords.parameters) isa Tuple
+end
+
+# The name a callee slot's type gives the call: a function's, a callable object type's, or a constructed type's.
+function callee_slot_name(@nospecialize(called))
+    func = function_instance(called)
+    isnothing(func) || return nameof(func)
+    is_callable_type = called isa DataType && !Base.isType(called)
+    is_callable_type && return nameof(called)
+    Base.isType(called) || return Symbol("")
+    written = only(called.parameters)
+    held = Base.unwrap_unionall(written)
+    held isa DataType || return Symbol("")
+    nameof(held)
+end
+
+# One fact per site, callee and route: two calls of one callee on one line, or one call at two instances, merge.
+function merge_fact!(facts, fact::CallFact)
+    for index in eachindex(facts)
+        known = facts[index]
+        is_same = (known.file, known.line, known.callee, known.via) == (fact.file, fact.line, fact.callee, fact.via)
+        is_same || continue
+        facts[index] = merged_fact(known, fact)
+        return facts
+    end
+    push!(facts, fact)
+end
+
+function merged_fact(known::CallFact, fact::CallFact)
+    is_failing = known.is_failing && fact.is_failing
+    failing = is_failing ? known.failing : ""
+    CallFact(known.file, known.line, known.callee, known.via,
+             known.is_used || fact.is_used,
+             is_failing, failing,
+             known.is_stub && fact.is_stub,
+             known.is_forward && fact.is_forward,
+             known.is_concrete || fact.is_concrete,
+             known.is_effect_free && fact.is_effect_free,
+             known.is_terminating && fact.is_terminating,
+             known.is_nothrow && fact.is_nothrow,
+             known.is_consistent && fact.is_consistent,
+             known.is_generated || fact.is_generated,
+             known.is_value && fact.is_value,
+             known.returns)
+end
+
+# The repo-relative file a fact's call sits in, as an indexed file names it; empty when the code records none.
+function fact_path(fact::CallFact, repo)
+    fact.file === Symbol("") && return ""
+    recorded_path(fact.file, repo)
+end
+
+"""Every call fact the graph holds, by the repo-relative file, line and callee name of its call."""
+function facts_by_site(graph::MethodGraph, repo)
+    found = Dict{Tuple{String,Int,Symbol},Vector{CallFact}}()
+    for facts in values(graph.calls)
+        for fact in facts
+            path = fact_path(fact, repo)
+            key = (path, fact.line, fact.callee)
+            at = get!(Vector{CallFact}, found, key)
+            push!(at, fact)
+        end
+    end
+    found
+end
+
+"""A call fact's effect bits as inference prints them: `+` holds, `!` fails, for consistent, effect-free, nothrow and
+terminates."""
+function effects_text(fact::CallFact)
+    marks = ((fact.is_consistent, "c"), (fact.is_effect_free, "e"), (fact.is_nothrow, "n"), (fact.is_terminating, "t"))
+    parts = String[]
+    for (holds, letter) in marks
+        sign = holds ? "+" : "!"
+        push!(parts, sign * letter)
+    end
+    join(parts, ",")
 end
 
 function keyword_body_from(frame)

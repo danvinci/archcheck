@@ -115,7 +115,7 @@ function stray_call(x::Int)
     guarded(x)
 end
 
-# overlapping_call: one question asked twice, and the callee loops
+# overlapping_call: one question asked twice of an immutable value, and the callee loops
 function spin(xs)
     total = 0
     for value in xs

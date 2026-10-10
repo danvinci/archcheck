@@ -13,18 +13,18 @@ end
 record_symbols(records) = Set(record[1] for record in records)
 
 const CALL_BODY = """
-function inner(xs::Vector{Int})
+function inner(xs::Int)
     total = 0
-    for x in xs
+    for x in 1:xs
         total += x
     end
     total
 end
-helper(xs::Vector{Int}) = inner(xs)
-ask(xs::Vector{Int}) = helper(xs) + inner(xs)
-ask_twice(xs::Vector{Int}) = inner(xs) + inner(xs)
-other(xs::Vector{Int}) = length(xs)
-ask_miss(xs::Vector{Int}) = other(xs) + inner(xs)
+helper(xs::Int) = inner(xs)
+ask(xs::Int) = helper(xs) + inner(xs)
+ask_twice(xs::Int) = inner(xs) + inner(xs)
+other(xs::Int) = abs(xs)
+ask_miss(xs::Int) = other(xs) + inner(xs)
 plain(x::Int) = x + 1
 wrap(x::Int) = plain(x)
 ask_plain(x::Int) = wrap(x) + plain(x)
@@ -37,16 +37,16 @@ end
 prep(xs::Vector{Int}) = store!(xs)
 ask_store(xs::Vector{Int}) = prep(xs) + store!(xs)
 ask_twice_store(xs::Vector{Int}) = store!(xs) + store!(xs)
-function scaled(xs::Vector{Int}; factor)
+function scaled(xs::Int; factor)
     total = 0
-    for x in xs
+    for x in 1:xs
         total += x * factor
     end
     total
 end
-via(xs::Vector{Int}; factor) = scaled(xs; factor)
-ask_differ(xs::Vector{Int}) = via(xs; factor = 1) + scaled(xs; factor = 2)
-ask_same(xs::Vector{Int}) = via(xs; factor = 1) + scaled(xs; factor = 1)
+via(xs::Int; factor) = scaled(xs; factor)
+ask_differ(xs::Int) = via(xs; factor = 1) + scaled(xs; factor = 2)
+ask_same(xs::Int) = via(xs; factor = 1) + scaled(xs; factor = 1)
 leaf(x::Int) = x + 1
 function leaf(xs::Vector{Int})
     total = 0
@@ -57,21 +57,21 @@ function leaf(xs::Vector{Int})
 end
 around(x::Int) = leaf(x)
 ask_leaf(x::Int) = around(x) + leaf(x)
-function deep(xs::Vector{Int})
+function deep(xs::Int)
     total = 0
-    for x in xs
+    for x in 1:xs
         total += x
     end
     total
 end
-mid(xs::Vector{Int}) = deep(xs)
-shallow(xs::Vector{Int}) = mid(xs)
-shell(xs::Vector{Int}) = shallow(xs)
-ask_near(xs::Vector{Int}) = shell(xs) + shallow(xs)
-lower(xs::Vector{Int}) = mid(xs)
-upper(xs::Vector{Int}) = lower(xs)
-ask_far(xs::Vector{Int}) = upper(xs) + upper(xs)
-ask_sum(xs::Vector{Int}) = sum(xs) + sum(xs)
+mid(xs::Int) = deep(xs)
+shallow(xs::Int) = mid(xs)
+shell(xs::Int) = shallow(xs)
+ask_near(xs::Int) = shell(xs) + shallow(xs)
+lower(xs::Int) = mid(xs)
+upper(xs::Int) = lower(xs)
+ask_far(xs::Int) = upper(xs) + upper(xs)
+ask_sum(xs::Int) = sum(xs) + sum(xs)
 ask_map(xs::Vector{Int}) = map!(identity, xs, xs) + map!(identity, xs, xs)
 function while_child(kids::Vector{Int}, index::Int, outer::Int)
     total = 0
@@ -120,26 +120,26 @@ function falls_through(kind::Int, kids::Vector{Int}, index::Int, outer::Int)
     end
     while_child(kids, index, outer)
 end
-tail_part(xs::Vector{Int}) = inner(xs[2:end])
-ask_part(xs::Vector{Int}) = tail_part(xs) + inner(xs)
-function rebind_part(xs::Vector{Int})
-    xs = xs[2:end]
+tail_part(xs::Int) = inner(xs - 1)
+ask_part(xs::Int) = tail_part(xs) + inner(xs)
+function rebind_part(xs::Int)
+    xs = xs - 1
     inner(xs)
 end
-ask_rebind(xs::Vector{Int}) = rebind_part(xs) + inner(xs)
-function scaled_sum(scale::Int, xs::Vector{Int})
+ask_rebind(xs::Int) = rebind_part(xs) + inner(xs)
+function scaled_sum(scale::Int, xs::Int)
     total = 0
-    for x in xs
+    for x in 1:xs
         total += scale * x
     end
     total
 end
-scaled_tail(scale::Int, xs::Vector{Int}) = scaled_sum(scale, xs[2:end])
-ask_scaled(scale::Int, xs::Vector{Int}) = scaled_tail(scale, xs) + scaled_sum(scale, xs)
-flipped(xs::Vector{Int}, scale::Int) = scaled_sum(scale, xs)
-swapped(scale::Int, xs::Vector{Int}) = flipped(xs, scale)
-ask_swap(scale::Int, xs::Vector{Int}) = swapped(scale, xs) + scaled_sum(scale, xs)
-function two_loops(groups::Vector{Vector{Int}}, others::Vector{Vector{Int}})
+scaled_tail(scale::Int, xs::Int) = scaled_sum(scale, xs - 1)
+ask_scaled(scale::Int, xs::Int) = scaled_tail(scale, xs) + scaled_sum(scale, xs)
+flipped(xs::Int, scale::Int) = scaled_sum(scale, xs)
+swapped(scale::Int, xs::Int) = flipped(xs, scale)
+ask_swap(scale::Int, xs::Int) = swapped(scale, xs) + scaled_sum(scale, xs)
+function two_loops(groups::NTuple{2,Int}, others::NTuple{2,Int})
     total = 0
     for xs in groups
         total += inner(xs)
@@ -149,12 +149,12 @@ function two_loops(groups::Vector{Vector{Int}}, others::Vector{Vector{Int}})
     end
     total
 end
-function rebound_twice(xs::Vector{Int})
+function rebound_twice(xs::Int)
     total = inner(xs)
-    xs = reverse(xs)
+    xs = -xs
     total + inner(xs)
 end
-function same_loops(groups::Vector{Vector{Int}})
+function same_loops(groups::NTuple{2,Int})
     total = 0
     for xs in groups
         total += inner(xs)
@@ -171,53 +171,53 @@ function gap_all(groups)
     end
     gap
 end
-function gap_each(groups::Vector{Vector{Int}})
+function gap_each(groups::NTuple{2,NTuple{2,Int}})
     nearest = 0
     for group in groups
         nearest = max(nearest, gap_all((group,)))
     end
     nearest
 end
-ask_each(groups::Vector{Vector{Int}}) = gap_each(groups) + gap_all(groups)
-function gap_bare(groups::Vector{Vector{Int}})
+ask_each(groups::NTuple{2,NTuple{2,Int}}) = gap_each(groups) + gap_all(groups)
+function gap_bare(groups::NTuple{2,NTuple{2,Int}})
     nearest = 0
     for group in groups
         nearest = max(nearest, gap_all(group))
     end
     nearest
 end
-ask_bare(groups::Vector{Vector{Int}}) = gap_bare(groups) + gap_all(groups)
+ask_bare(groups::NTuple{2,NTuple{2,Int}}) = gap_bare(groups) + gap_all(groups)
 """
 
 const BRANCH_ARGUMENTS = Tuple{Int,Vector{Int},Int,Int}
 const BRANCH_NAMES = (:child_locals, :arm_pair, :returned_twice, :same_arm, :falls_through)
 const FLOW_ENTRIES = (
-    (:ask_part, Tuple{Vector{Int}}),
-    (:ask_rebind, Tuple{Vector{Int}}),
-    (:ask_scaled, Tuple{Int,Vector{Int}}),
-    (:ask_swap, Tuple{Int,Vector{Int}}),
-    (:two_loops, Tuple{Vector{Vector{Int}},Vector{Vector{Int}}}),
-    (:rebound_twice, Tuple{Vector{Int}}),
-    (:same_loops, Tuple{Vector{Vector{Int}}}),
-    (:ask_each, Tuple{Vector{Vector{Int}}}),
-    (:ask_bare, Tuple{Vector{Vector{Int}}}),
+    (:ask_part, Tuple{Int}),
+    (:ask_rebind, Tuple{Int}),
+    (:ask_scaled, Tuple{Int,Int}),
+    (:ask_swap, Tuple{Int,Int}),
+    (:two_loops, Tuple{NTuple{2,Int},NTuple{2,Int}}),
+    (:rebound_twice, Tuple{Int}),
+    (:same_loops, Tuple{NTuple{2,Int}}),
+    (:ask_each, Tuple{NTuple{2,NTuple{2,Int}}}),
+    (:ask_bare, Tuple{NTuple{2,NTuple{2,Int}}}),
 )
 const CALL_PROBE = load_package("CallProbe", CALL_BODY)
 
 function call_entries(pkg)
     rows = (
-        (:ask, Vector{Int}),
-        (:ask_twice, Vector{Int}),
-        (:ask_miss, Vector{Int}),
+        (:ask, Int),
+        (:ask_twice, Int),
+        (:ask_miss, Int),
         (:ask_plain, Int),
         (:ask_store, Vector{Int}),
         (:ask_twice_store, Vector{Int}),
-        (:ask_differ, Vector{Int}),
-        (:ask_same, Vector{Int}),
+        (:ask_differ, Int),
+        (:ask_same, Int),
         (:ask_leaf, Int),
-        (:ask_near, Vector{Int}),
-        (:ask_far, Vector{Int}),
-        (:ask_sum, Vector{Int}),
+        (:ask_near, Int),
+        (:ask_far, Int),
+        (:ask_sum, Int),
         (:ask_map, Vector{Int}),
     )
     entries = Tuple[]
@@ -398,6 +398,8 @@ function expected_overlaps(edges, loops)
     if index_costs(edges, loops, 1)
         push!(expected, ("ask_twice", "m1(x)", "m1"))
     end
+    # `bang!` loops and writes nothing: its name carries no effect.
+    push!(expected, ("ask_bang", "bang!(x)", "bang!"))
     expected
 end
 
@@ -500,7 +502,7 @@ const KEEP_ROOT = load_package("KeepRoot", """
         end
     end
 
-    @testset "a loop-free callee and a bang callee stay quiet" begin
+    @testset "a loop-free callee and a stateful callee stay quiet" begin
         found = CALL_PROBE_FOUND
         got = overlap_records(found)
         symbols = record_symbols(got)

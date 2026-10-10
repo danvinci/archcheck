@@ -42,10 +42,6 @@ function qualifier_matches(method, qualifier)
     endswith(path, suffix)
 end
 
-function name_mutates(name)
-    endswith(string(name), "!")
-end
-
 function is_loop_call(node)
     JS.kind(node) == K"call" || return false
     children = child_nodes(node)
@@ -88,9 +84,8 @@ function callees_of(ordered, method)
     get(ordered, method, Method[])
 end
 
-# A bang name on the repeated callee is a mutator. A loop in its body, or in a callee two hops away, is the work a repeat costs.
+# A loop in the repeated callee's body, or in a callee two hops away, is the work a repeat costs.
 function costs_work(index, ordered, method)
-    name_mutates(method.name) && return false
     frontier = Method[method]
     seen = Set{Method}()
     depth = 0
@@ -127,9 +122,26 @@ function repeated_costs(index, ordered, caller, call)
         costs_work(index, ordered, target) && return true
     end
     isempty(targets) || return false
-    call.callee in LOOP_CALLS || return false
-    !name_mutates(call.callee)
+    call.callee in LOOP_CALLS
 end
+
+# A repeat asks one question only when inference proves each of its calls writes nothing and gives equal results
+# for equal concrete arguments. The effects of the first call, or nothing when one is unproven.
+function proven_effects(facts, path, placed_calls)
+    shown = nothing
+    for placed in placed_calls
+        call = placed.call
+        key = (path, call.line, call.callee)
+        at = get(facts, key, CallFact[])
+        isempty(at) && return nothing
+        all(is_pure_call, at) || return nothing
+        isnothing(shown) || continue
+        shown = effects_text(first(at))
+    end
+    shown
+end
+
+is_pure_call(fact::CallFact) = fact.is_concrete && fact.is_effect_free && fact.is_consistent
 
 # A method's body, the parameter name at each positional slot, and the loop elements each parameter yields. A name
 # the body binds again holds another value there, so its slot carries nothing.
@@ -351,7 +363,7 @@ function cross_line(helpers, inners)
     found
 end
 
-function twice_findings(file, caller, grouped, ordered, index)
+function twice_findings(file, caller, grouped, ordered, index, facts)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the same call is written twice"
@@ -360,16 +372,18 @@ function twice_findings(file, caller, grouped, ordered, index)
         isnothing(line) && continue
         sample = matched[1].call
         repeated_costs(index, ordered, caller, sample) || continue
+        effects = proven_effects(facts, file.path, matched)
+        isnothing(effects) && continue
         text = call_text(sample)
         reached = string(sample.callee)
-        evidence = [:calls => text, :reaches => reached]
+        evidence = [:calls => text, :reaches => reached, :effects => effects]
         finding = Finding(file.mod, :overlapping_call, file.path, symbol, line, detail, evidence)
         push!(findings, finding)
     end
     findings
 end
 
-function reach_findings(file, caller, grouped, ordered, index)
+function reach_findings(file, caller, grouped, ordered, index, facts)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the caller asks a question a helper already asks"
@@ -387,11 +401,14 @@ function reach_findings(file, caller, grouped, ordered, index)
             inner_methods = resolved_targets(ordered, caller, inner_call)
             path = reach_costing(index, ordered, helper_methods, inner_methods)
             isnothing(path) && continue
+            isnothing(proven_effects(facts, file.path, helpers)) && continue
+            effects = proven_effects(facts, file.path, inners)
+            isnothing(effects) && continue
             helper_text = call_text(helper_call)
             inner_text = call_text(inner_call)
             calls_text = helper_text * " " * inner_text
             reached = path_names(path)
-            evidence = [:calls => calls_text, :reaches => reached]
+            evidence = [:calls => calls_text, :reaches => reached, :effects => effects]
             finding = Finding(file.mod, :overlapping_call, file.path, symbol, line, detail, evidence)
             push!(findings, finding)
         end
@@ -399,14 +416,14 @@ function reach_findings(file, caller, grouped, ordered, index)
     findings
 end
 
-function method_overlap_findings(file, caller, placed, ordered, index)
+function method_overlap_findings(file, caller, placed, ordered, index, facts)
     findings = Finding[]
     groups = group_by(placed, Tuple{String,String}, argument_key)
     for bucket in values(groups)
         grouped = group_by(bucket, Tuple{Symbol,String}, callee_key)
-        twice = twice_findings(file, caller, grouped, ordered, index)
+        twice = twice_findings(file, caller, grouped, ordered, index, facts)
         append!(findings, twice)
-        reached = reach_findings(file, caller, grouped, ordered, index)
+        reached = reach_findings(file, caller, grouped, ordered, index, facts)
         append!(findings, reached)
     end
     findings
@@ -424,6 +441,7 @@ end
 function run(::OverlappingCalls, ctx)
     isnothing(ctx.methods) && throw(ArgumentError("OverlappingCalls needs entries"))
     ordered = ordered_callees(ctx.methods)
+    facts = facts_by_site(ctx.methods, ctx.index.repo)
     seen = Set{Tuple{String,Symbol,Int}}()
     findings = Finding[]
     for method in ctx.defined
@@ -436,7 +454,7 @@ function run(::OverlappingCalls, ctx)
         calls = get(located.file.scan.callsites, located.site, CallSite[])
         isempty(calls) && continue
         placed = place_calls(located.form, calls)
-        found = method_overlap_findings(located.file, method, placed, ordered, ctx.index)
+        found = method_overlap_findings(located.file, method, placed, ordered, ctx.index, facts)
         append!(findings, found)
     end
     findings

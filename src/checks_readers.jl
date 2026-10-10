@@ -108,7 +108,7 @@ function read_typed!(item, ctx)
         root = Base.moduleroot(method.module)
         (root === Core || root === Base) && continue
         instance = declared_instance(method)
-        frame = inference_frame(instance, interp; optimize = false)
+        frame = inference_frame(instance, interp)
         isnothing(frame) && continue
         code = frame.src
         for stmt in code.code

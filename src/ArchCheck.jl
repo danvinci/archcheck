@@ -39,6 +39,7 @@ include("checks_imports.jl")
 include("checks_project.jl")
 include("call_paths.jl")
 include("checks_calls.jl")
+include("checks_inferred.jl")
 include("checks_kept.jl")
 include("checks_overloads.jl")
 include("checks_clones.jl")
@@ -61,7 +62,7 @@ export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders
-export Independent, ReaderSet, ScanSeeds, OverlappingCalls, OptAnalysis, OptEntry
+export Independent, ReaderSet, ScanSeeds, OverlappingCalls, InferredCalls, OptAnalysis, OptEntry
 export UnreachedMethods, Rebuilds, TwoNames, Waits, UnreadWaits
 export Derived, Probes
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph

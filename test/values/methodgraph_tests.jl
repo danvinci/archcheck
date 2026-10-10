@@ -145,6 +145,58 @@ const PASSED_HELPER = load_package("PassedHelper", """
     captured(xs::Vector{Int}, k::Int) = map(x -> helper(x) + k, xs)
     """)
 
+# Calls the walk's inference judges: one no method takes, one into a stub, a keyword forward, a dropped pure value,
+# a guard kept for its exception, a stateful call written twice and a pure one written twice.
+const CALL_FACTS = load_package("CallFacts", """
+    function hook end
+    pair(x::Int, y::Int) = x + y
+    fails(x::Int) = pair(x)
+    stubbed(x::Int) = hook(x)
+    plain(x::Int) = x
+    forwards(x::Int, options) = plain(x; options...)
+    function drops(x::Int)
+        x == 3
+        x
+    end
+    checked(x::Int) = x > 0 ? x : throw(ArgumentError("not positive"))
+    function guards(x::Int)
+        checked(x)
+        x
+    end
+    function advance(counter::Vector{Int})
+        for _step in 1:3
+            counter[1] += 1
+        end
+        counter[1]
+    end
+    advances(counter::Vector{Int}) = advance(counter) + advance(counter)
+    function summed(n::Int)
+        total = 0
+        for step in 1:n
+            total += step
+        end
+        total
+    end
+    sums(n::Int) = summed(n) + summed(n)
+    """)
+
+function call_facts_context()
+    pkg = CALL_FACTS.pkg
+    rows = (
+        (pkg.fails, Tuple{Int}),
+        (pkg.stubbed, Tuple{Int}),
+        (pkg.forwards, Tuple{Int,Any}),
+        (pkg.drops, Tuple{Int}),
+        (pkg.guards, Tuple{Int}),
+        (pkg.advances, Tuple{Vector{Int}}),
+        (pkg.sums, Tuple{Int}),
+    )
+    case_context(CALL_FACTS; entries = rows)
+end
+
+const CALL_FACTS_CONTEXT = call_facts_context()
+const CALL_FACTS_FOUND = ArchCheck.run(InferredCalls(), CALL_FACTS_CONTEXT)
+
 # Each method writes two to four ordinary calls, cycles included. One method stays unreached.
 # A return path keeps every call in the inference edges, including a discarded result.
 function method_source(index, targets)
@@ -497,6 +549,29 @@ end
     owned = edges_in(graph, pkg)
     @test get(owned, wide, Set{Method}()) == Set{Method}()
     @test owned[on_union] == every_holds
+end
+
+@testset "a call no method takes fails, and a call into a stub or a keyword forward stays quiet" begin
+    failing = filter(finding -> finding.kind === :failing_call, CALL_FACTS_FOUND)
+    rows = evidence_rows(failing, :callee, :via, :signature)
+    @test rows == [(:failing_call, "fails", "pair", "call", "concrete")]
+end
+
+@testset "a dropped pure value is a finding, and a guard kept for its exception stays quiet" begin
+    dropped = filter(finding -> finding.kind === :dropped_value, CALL_FACTS_FOUND)
+    rows = evidence_rows(dropped, :returns)
+    @test rows == [(:dropped_value, "drops", "Bool")]
+end
+
+@testset "a stateful call written twice stays quiet, and a pure one carries its effects" begin
+    found = ArchCheck.run(OverlappingCalls(), CALL_FACTS_CONTEXT)
+    symbols = Set(finding.symbol for finding in found)
+    @test !("advances" in symbols)
+    @test "sums" in symbols
+    for finding in found
+        effects = ev(finding, :effects)
+        @test startswith(effects, "+c,+e")
+    end
 end
 
 @testset "methods of one function stay distinct nodes" begin
