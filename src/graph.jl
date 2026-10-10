@@ -491,20 +491,35 @@ function callee_node(call)
     kind == K"curly" ? first(parts) : last(parts)
 end
 
-# Names written anywhere but as a callee: stored, passed, returned, exported, or read by an entry script. A function
-# called through a value unknown at its call site was written as one of these.
+# The nodes `node` writes without holding a value: a call's callee, the type an annotation declares, a struct's header.
+function unheld_nodes!(unheld, node)
+    kind = JS.kind(node)
+    if kind == K"call" || kind == K"dotcall"
+        callee = callee_node(node)
+        isnothing(callee) || push!(unheld, callee)
+        return unheld
+    end
+    (kind == K"::" || kind == K"struct") || return unheld
+    children = child_nodes(node)
+    child_count(children) == 0 && return unheld
+    declared = kind == K"::" ? last(children) : first(children)
+    for inner in walk_nodes(declared)
+        push!(unheld, inner)
+    end
+    unheld
+end
+
+# Names written anywhere but as a callee or a declared type: stored, passed, returned, exported, or read by an entry
+# script. A function or type called through a value unknown at its call site was written as one of these.
 function value_names(index::SourceIndex)
     names = Set{Symbol}()
     for file in index.files
-        callees = Base.IdSet{JS.SyntaxNode}()
+        unheld = Base.IdSet{JS.SyntaxNode}()
         for node in walk_nodes(file.tree)
-            kind = JS.kind(node)
-            (kind == K"call" || kind == K"dotcall") || continue
-            callee = callee_node(node)
-            isnothing(callee) || push!(callees, callee)
+            unheld_nodes!(unheld, node)
         end
         for node in walk_nodes(file.tree)
-            node in callees && continue
+            node in unheld && continue
             name = node_symbol(node)
             isnothing(name) || push!(names, name)
         end

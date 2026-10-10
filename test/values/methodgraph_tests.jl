@@ -105,6 +105,39 @@ const SHARED_SIGNATURE = load_package("SharedSignature", """
     scan(types::Vector{Any}, wrapper::DataType) = any(t -> holds(t, wrapper), types)
     """)
 
+# A keyword call through a splat, and one to a callee unknown at its site; only `shifted` is held as a value.
+const KEYWORD_SPREAD = load_package("KeywordSpread", """
+    scaled(x::Int; scale::Int = 1) = x * scale
+    shifted(x::Int; shift::Int = 0) = x + shift
+    forward(args::Vector{Any}, options) = scaled(args...; options...)
+    pass(func, x::Int) = func(x; scale = 2)
+    const HELD = (shifted,)
+    """)
+
+# A type held as a value, and one the source only defines and annotates.
+const TYPE_CALLEE = load_package("TypeCallee", """
+    struct Kept
+        x::Float64
+    end
+    struct Hidden
+        x::Float64
+    end
+    make(maker::DataType) = maker(0.5)
+    hide(hidden::Hidden) = hidden.x
+    const MAKERS = (Kept,)
+    """)
+
+# `relay` inlines into `start`, carrying its call to `finish` along; more `finish` methods than inference splits a
+# call over leave that call to runtime dispatch.
+const INLINED_RELAY = load_package("InlinedRelay", """
+    finish(x::Int8) = x
+    finish(x::Int16) = x
+    finish(x::Int32) = x
+    finish(x::Int64) = x
+    @inline relay(items::Vector{Any}) = finish(items[1])
+    start(items::Vector{Any}) = relay(items)
+    """)
+
 const PASSED_HELPER = load_package("PassedHelper", """
     helper(x::Int) = x
     wrap(xs::Vector{Int}) = map(x -> helper(x), xs)
@@ -303,6 +336,49 @@ end
     @test graph.edges[anycall] == every_dest
     @test graph.edges[dyn] == Set([anycall])
     @test graph.edges[splat] == every_dest
+end
+
+@testset "a keyword call lands on the function it calls, splatted or held as a value" begin
+    pkg = KEYWORD_SPREAD.pkg
+    forward_entry = (pkg.forward, Tuple{Vector{Any},Any})
+    pass_entry = (pkg.pass, Tuple{Any,Int})
+    entries = (forward_entry, pass_entry)
+    graph = graph_of(KEYWORD_SPREAD, entries)
+    owned = edges_in(graph, pkg)
+    forward = only(methods(pkg.forward))
+    pass = only(methods(pkg.pass))
+    scaled = only(methods(pkg.scaled))
+    shifted = only(methods(pkg.shifted))
+    @test owned[forward] == Set([scaled])
+    @test owned[pass] == Set([shifted])
+end
+
+@testset "a callee held in a DataType lands on the constructors of types held as values" begin
+    pkg = TYPE_CALLEE.pkg
+    entry = (pkg.make, Tuple{DataType})
+    entries = (entry,)
+    graph = graph_of(TYPE_CALLEE, entries)
+    make = only(methods(pkg.make))
+    owned = edges_in(graph, pkg)
+    landed = get(owned, make, Set{Method}())
+    kept = Set(methods(pkg.Kept))
+    hidden = Set(methods(pkg.Hidden))
+    @test !isempty(landed)
+    @test issubset(landed, kept)
+    @test isdisjoint(landed, hidden)
+end
+
+@testset "a call inlined from a package method stays that method's edge" begin
+    pkg = INLINED_RELAY.pkg
+    entry = (pkg.start, Tuple{Vector{Any}})
+    entries = (entry,)
+    graph = graph_of(INLINED_RELAY, entries)
+    start = only(methods(pkg.start))
+    relay = only(methods(pkg.relay))
+    every_finish = Set(methods(pkg.finish))
+    owned = edges_in(graph, pkg)
+    @test owned[start] == Set([relay])
+    @test owned[relay] == every_finish
 end
 
 @testset "a call whose result is unused stays an edge" begin

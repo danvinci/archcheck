@@ -14,12 +14,32 @@ const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
 # process can land a call differently. The graph is the walk a further walk reproduces.
 const GRAPH_WALKS_MAX = 4
 
+# Where a runtime-dispatched call can land depends on its signature alone, so one graph matches each signature once.
+struct CallLandings
+    module_set::Set{Module}        # modules whose methods expand and whose methods a dispatched call can land on
+    held::Base.IdSet{Method}       # package methods a callee unknown at its site can land on
+    prefixes::Vector{Type}         # the signatures of the held methods' functions, each open after its function slot
+    by_call::IdDict{Any,Vector{Tuple{Method,Core.MethodInstance}}}   # call signature -> each landing's written method and specialization
+end
+
+function CallLandings(modules, values)
+    module_set = Set{Module}(modules)
+    held = Base.IdSet{Method}()
+    for method in project_methods(modules)
+        is_held(method, values) && push!(held, method)
+    end
+    prefixes = held_signatures(held)
+    by_call = IdDict{Any,Vector{Tuple{Method,Core.MethodInstance}}}()
+    CallLandings(module_set, held, prefixes, by_call)
+end
+
 """The calls between methods reached from `entries`, each a `Core.MethodInstance` or a `(function, argument types)`
 pair; only methods `modules` define expand, and `values` names the functions a callee unknown at its site can hold."""
 function method_graph(entries, modules, values)
+    landings = CallLandings(modules, values)
     previous = nothing
     for _walk in 1:GRAPH_WALKS_MAX
-        current = walk_methods(entries, modules, values)
+        current = walk_methods(entries, landings)
         is_settled = !isnothing(previous) && current.edges == previous.edges
         is_settled && return current
         previous = current
@@ -27,11 +47,12 @@ function method_graph(entries, modules, values)
     error("the method graph changed on each of $GRAPH_WALKS_MAX walks")
 end
 
-function walk_methods(entries, modules, values)
-    module_set = Set{Module}(modules)
+function walk_methods(entries, landings::CallLandings)
     edges = Dict{Method,Set{Method}}()
     pending = Core.MethodInstance[]
     walked = Dict{Method,Any}()   # method -> the signature its walks cover
+    # A walk only widens what it covers, so a specialization met once stays covered.
+    met = Base.IdSet{Core.MethodInstance}()
     for entry in entries
         instance = entry_instance(entry)
         push!(pending, instance)
@@ -40,12 +61,51 @@ function walk_methods(entries, modules, values)
     interp = Core.Compiler.NativeInterpreter()
     while !isempty(pending)
         reached = pop!(pending)
+        reached in met && continue
+        push!(met, reached)
         instance = covering_instance(walked, reached)
         isnothing(instance) && continue
         walked[instance.def] = instance.specTypes
-        expand_instance!(edges, pending, instance, module_set, values, interp)
+        expand_instance!(edges, pending, instance, landings, interp)
     end
     MethodGraph(edges)
+end
+
+# Each held method's function as the signature up to its function slot, open after it.
+function held_signatures(held)
+    # Types with free variables share hash buckets, so the set compares by identity: equal signatures of plain
+    # functions are one cached object.
+    found = Base.IdSet{Type}()
+    for method in held
+        prefix = callee_prefix(method)
+        push!(found, prefix)
+    end
+    collect(Type, found)
+end
+
+# A callee unknown at its site lands on what the package can hand it: a function or type the source writes as a
+# value, an anonymous function, or a callable object, whose instances any construction yields.
+function is_held(method::Method, values)
+    written = written_method(method)
+    signature = split_signature(written.sig)
+    slot = first(signature)
+    slot isa Type || return true
+    Base.isType(slot) && return written.name in values
+    slot <: Function || return true
+    can_be_value(written, values)
+end
+
+function callee_prefix(method::Method)
+    parameters = Base.unwrap_unionall(method.sig).parameters
+    if is_kwcall_method(method)
+        func = parameters[3]
+        prefix = Tuple{typeof(Core.kwcall),Any,func,Vararg{Any}}
+    else
+        func = parameters[1]
+        prefix = Tuple{func,Vararg{Any}}
+    end
+    Base.has_free_typevars(func) || return prefix
+    Base.rewrap_unionall(prefix, method.sig)
 end
 
 # A method reached outside the signature its walks cover is walked again at the join of both. Each join climbs the
@@ -71,7 +131,8 @@ function entry_instance(@nospecialize(entry))
     instance
 end
 
-function expand_instance!(edges, pending, instance, module_set, values, interp)
+function expand_instance!(edges, pending, instance, landings::CallLandings, interp)
+    module_set = landings.module_set
     is_keyword = is_kwcall_method(instance.def)
     frame = inference_frame(instance, interp; optimize = !is_keyword)
     isnothing(frame) && return
@@ -83,7 +144,7 @@ function expand_instance!(edges, pending, instance, module_set, values, interp)
     caller = written_method(instance.def)
     get!(edges, caller, Set{Method}())
     record_resolved!(edges, pending, frame, caller, module_set)
-    record_dispatched!(edges, pending, frame.src, instance, caller, module_set, values)
+    record_dispatched!(edges, pending, frame.src, instance, caller, landings)
 end
 
 # One inference for both readers: the frame keeps its resolved calls, and `optimize` makes `src` the code `code_typed`
@@ -118,51 +179,155 @@ end
 
 # A call left to runtime dispatch can land on each package method its inferred types match. Each is an edge, walked
 # at the types the call holds, so a method reached only through such a call keeps its own calls in the graph.
-function record_dispatched!(edges, pending, code, instance, caller, module_set, values)
+function record_dispatched!(edges, pending, code, instance, caller, landings::CallLandings)
+    module_set = landings.module_set
     sptypes = Core.Compiler.sptypes_from_meth_instance(instance)
-    for stmt in code.code
+    for (position, stmt) in pairs(code.code)
         stmt isa Expr || continue
         stmt.head === :call || continue
+        is_inlined_package_call(code, position, module_set) && continue
         call = dispatch_signature(code, sptypes, stmt.args)
         isnothing(call) && continue
-        for match in package_matches(call, module_set, values)
-            callee = written_method(match.method)
+        for (callee, target) in landing_targets!(landings, call)
             add_edge!(edges, caller, callee)
-            target = Core.Compiler.specialize_method(match)
             enqueue_target!(pending, target, module_set)
         end
     end
+end
+
+# The written method and the specialization of each package method `call` lands on.
+function landing_targets!(landings::CallLandings, call)
+    cached = get(landings.by_call, call, nothing)
+    isnothing(cached) || return cached
+    found = Tuple{Method,Core.MethodInstance}[]
+    for match in package_matches(call, landings)
+        callee = written_method(match.method)
+        target = Core.Compiler.specialize_method(match)
+        push!(found, (callee, target))
+    end
+    landings.by_call[call] = found
+    found
+end
+
+# The optimizer copies an inlined method's calls into its caller. A package method keeps its own: the walk reaches it
+# through the caller's resolved edge, at the types the copy holds.
+function is_inlined_package_call(code, position, module_set)
+    debuginfo = code.debuginfo
+    location = Base.IRShow.getdebugidx(debuginfo, position)
+    inlined_index = Int(location[2])
+    inlined_index == 0 && return false
+    inlined = debuginfo.edges[inlined_index].def
+    inlined isa Core.MethodInstance || return false
+    method = inlined.def
+    method isa Method || return false
+    method.module in module_set
 end
 
 # The callee and argument types inference holds at a call; nothing for a builtin, or for a call it proved unreachable.
 function dispatch_signature(code, sptypes, args)
     types = Any[]
     for arg in args
-        inferred = Core.Compiler.argextype(arg, code, sptypes)
-        widened = Core.Compiler.widenconst(inferred)
+        widened = widened_type(code, sptypes, arg)
         widened === Union{} && return nothing
         push!(types, widened)
     end
     callee = first(types)
-    # A splatted call left to runtime dispatch runs through `_apply_iterate`, which passes the function third.
-    callee === typeof(Core._apply_iterate) && return Tuple{types[3], Vararg{Any}}
+    callee === typeof(Core._apply_iterate) && return spread_signature(code, sptypes, args, types)
     callee <: Core.Builtin && return nothing
     Tuple{types...}
 end
 
-# The methods dispatch could pick for `call`, kept to those the package defines. A callee unknown at the site holds
-# a function the package writes as a value, or an anonymous one.
-function package_matches(call, module_set, values)
+function widened_type(code, sptypes, arg)
+    inferred = Core.Compiler.argextype(arg, code, sptypes)
+    Core.Compiler.widenconst(inferred)
+end
+
+# A splatted call runs through `_apply_iterate(iterate, f, spreads...)`, which calls `f` on the spreads' members in
+# order. A spread of known length adds its member types; the first of unknown length leaves the rest open.
+function spread_signature(code, sptypes, args, types)
+    flattened = Any[types[3]]
+    for index in 4:length(args)
+        members = spread_members(code, sptypes, args[index], types[index])
+        if isnothing(members)
+            push!(flattened, Vararg{Any})
+            break
+        end
+        append!(flattened, members)
+    end
+    Tuple{flattened...}
+end
+
+# The member types of a spread of known length: a tuple, or a `Core.svec` the code builds, as a keyword call's
+# arguments are. Nothing for any other spread.
+function spread_members(code, sptypes, arg, @nospecialize(spread))
+    if spread isa DataType && spread <: Tuple
+        parameters = spread.parameters
+        is_open = !isempty(parameters) && Base.isvarargtype(last(parameters))
+        is_open && return nothing
+        return collect(Any, parameters)
+    end
+    spread === Core.SimpleVector || return nothing
+    built_members(code, sptypes, arg)
+end
+
+# The argument types of the `Core.svec` call whose result `arg` names.
+function built_members(code, sptypes, arg::Core.SSAValue)
+    built = code.code[arg.id]
+    built isa Expr || return nothing
+    built.head === :call || return nothing
+    builder = widened_type(code, sptypes, first(built.args))
+    builder === typeof(Core.svec) || return nothing
+    members = Any[]
+    for member in built.args[2:end]
+        member_type = widened_type(code, sptypes, member)
+        push!(members, member_type)
+    end
+    members
+end
+
+built_members(code, sptypes, @nospecialize(::Any)) = nothing
+
+# The function a call calls: a keyword call holds it in its third slot.
+function called_function(call)
+    head = fieldtype(call, 1)
+    head === typeof(Core.kwcall) || return head
+    fieldtype(call, 3)
+end
+
+# The methods dispatch could pick for `call`, kept to those the package defines. A callee is known when its type
+# names one function or type; a `DataType` names none, so a call on it matches what the package holds.
+function package_matches(call, landings::CallLandings)
+    callee = called_function(call)
+    is_type_object = callee <: Type && !Base.isType(callee)
+    is_known = Base.isType(callee) || (isconcretetype(callee) && !is_type_object)
+    is_known && return known_matches(call, landings.module_set)
+    held_matches(call, landings)
+end
+
+function known_matches(call, module_set)
     world = Base.get_world_counter()
     matches = Base._methods_by_ftype(call, -1, world)::Vector
-    callee = fieldtype(call, 1)
-    is_known = isconcretetype(callee) || Base.isType(callee)
     kept = Core.MethodMatch[]
     for match in matches
         written = written_method(match.method)
         written.module in module_set || continue
-        is_known || can_be_value(written, values) || continue
         push!(kept, match)
+    end
+    kept
+end
+
+# Each held signature the call's types admit, matched against that function's own methods, kept to held methods.
+function held_matches(call, landings::CallLandings)
+    world = Base.get_world_counter()
+    kept = Core.MethodMatch[]
+    for prefix in landings.prefixes
+        narrowed = typeintersect(call, prefix)
+        narrowed === Union{} && continue
+        matches = Base._methods_by_ftype(narrowed, -1, world)::Vector
+        for match in matches
+            match.method in landings.held || continue
+            push!(kept, match)
+        end
     end
     kept
 end
