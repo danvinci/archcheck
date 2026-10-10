@@ -163,7 +163,6 @@ function inference_sites()
     callees = (:typeinf, :typeinf_frame, :code_typed, :code_typed_by_type, :return_types, :report_opt)
     allowed = (
         ("src/methodgraph.jl", :inference_frame),
-        ("src/checks_readers.jl", :read_typed!),
         ("src/checks_readers.jl", :producer_shape),
         ("src/checks_derived.jl", :key_returns_bits),
         ("src/checks_opt.jl", :analyze_entries),

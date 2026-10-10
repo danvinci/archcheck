@@ -96,26 +96,24 @@ function reached_methods(graph)
     methods
 end
 
+# Each reached method's own typed code, at its declared signature: a signature lookup would also return the code of
+# narrower methods it admits.
 function read_typed!(item, ctx)
     seen = Set{NTuple{4,String}}()
     repo = ctx.index.repo
+    interp = Core.Compiler.NativeInterpreter()
     for method in reached_methods(ctx.methods)
         root = Base.moduleroot(method.module)
         (root === Core || root === Base) && continue
-        listed = Base.code_typed_by_type(method.sig; optimize = false)
-        for entry in listed
-            info = code_info_of(entry)
-            isnothing(info) && continue
-            for stmt in info.code
-                scan_expr!(item, info, stmt, seen, method, repo)
-            end
+        instance = declared_instance(method)
+        frame = inference_frame(instance, interp; optimize = false)
+        isnothing(frame) && continue
+        code = frame.src
+        for stmt in code.code
+            scan_expr!(item, code, stmt, seen, method, repo)
         end
     end
 end
-
-code_info_of(item::Pair{Core.CodeInfo}) = item.first
-code_info_of(item::Core.CodeInfo) = item
-code_info_of(@nospecialize(item)) = nothing
 
 function scan_expr!(item, code, expr::Expr, seen, method, repo)
     head = expr.head

@@ -112,6 +112,23 @@ const FIELD_OUTSIDE = load_package("FieldOutside", """
         """,
 ])
 
+const NARROW_METHOD = load_package("NarrowMethod", """
+    struct Bound
+        meters::Float64
+    end
+    distance(a::Float64, b::Float64) = Bound(min(a, b))
+    consume(x::Bound) = x.meters
+    other(x::Bound) = x.meters
+    function pass_wide(a::Real, b::Float64)
+        bound = distance(1.0, b)
+        consume(bound)
+    end
+    function pass_wide(a::Int, b::Float64)
+        bound = distance(1.0, b)
+        other(bound)
+    end
+    """)
+
 function wrap_declared()
     pkg = WRAPPED_BOUND.pkg
     readers = (pkg.consume,)
@@ -162,6 +179,15 @@ end
     end
     @test caught isa ArgumentError
     @test occursin("entries", caught.msg)
+end
+
+@testset "typed code comes from the reached method, not a narrower one its signature admits" begin
+    pkg = NARROW_METHOD.pkg
+    declared = (Derived(pkg.distance; readers = (pkg.consume,)),)
+    entry = (pkg.pass_wide, Tuple{Float64,Float64})
+    found = unlisted_findings(NARROW_METHOD; entries = (entry,), derived = declared)
+    rows = evidence_rows(found, :callee, :via, :derived)
+    @test rows == [(:unlisted_reader, "pass_wide", "other", "parse", "distance")]
 end
 
 @testset "a bare number passed to an unlisted callee is reported" begin
