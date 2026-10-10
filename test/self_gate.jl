@@ -170,9 +170,9 @@ function inference_sites()
     CallerWhitelist(callees, allowed)
 end
 
-# The internals ArchCheck reads on purpose: Base's reflection, loading and parser, Core's lowered code and method
-# types, the compiler's inference, recorded docstrings, and the exhibit modules whose planted internals the gate names.
-const READ_INTERNALS = (Base, Core, Base.Compiler, Base.Docs, Exhibits, Exhibits.Low, Exhibits.Shape,
+# The internals ArchCheck reads on purpose: Base's reflection, loading and parser, Core's method types, inference and
+# its inlining record, recorded docstrings, and the exhibit modules whose planted internals the gate names.
+const READ_INTERNALS = (Base, Core, Base.Compiler, Base.IRShow, Base.Docs, Exhibits, Exhibits.Low, Exhibits.Shape,
                         Exhibits.Contracts)
 
 function static_checks()
