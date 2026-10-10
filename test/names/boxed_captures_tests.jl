@@ -1,5 +1,5 @@
 # A closure that assigns a captured local boxes it, wherever the method sits: the root module of a package with
-# submodules, a submodule, or another package's function.
+# submodules, a submodule, another package's function, or code evaluated with no file, reported as Julia recorded it.
 
 const BOXED_REACH = load_package("BoxedReach", """
     include("inner/Inner.jl")
@@ -41,16 +41,11 @@ const BOXED_REACH = load_package("BoxedReach", """
     """,
 ])
 
-@testset "a boxed capture is found in the root, a submodule, and a method on another package's function" begin
+@testset "a boxed capture is found in the root, a submodule, another package's function, and code with no file" begin
     ctx = case_context(BOXED_REACH)
     found = ArchCheck.run(BoxedCaptures(), ctx)
     rows = sort([(f.mod, f.symbol) for f in found])
     @test rows == [(:BoxedReach, "at_root"), (:BoxedReach, "show"), (:BoxedReach, "unlocated"), (:Inner, "own")]
-end
-
-@testset "a method Julia recorded without a file keeps that recorded name, wherever the gate runs" begin
-    ctx = case_context(BOXED_REACH)
-    found = ArchCheck.run(BoxedCaptures(), ctx)
     unlocated = only(f for f in found if f.symbol == "unlocated")
     @test unlocated.file == "none"
 end
