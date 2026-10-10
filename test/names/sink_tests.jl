@@ -72,7 +72,7 @@ include("low.jl")
 include("high.jl")
 """, [
     "low.jl" => "leaf(x) = x\n",
-    "high.jl" => "stray(x) = leaf(x)\n",
+    "high.jl" => "stray(x) = leaf(x)\nrelay(x) = Base.stray(x)\n",
 ])
 
 const UPWARD_SINK = load_package("UpwardSink", """
@@ -262,7 +262,7 @@ end
     @test ev(candidate, :defs) == "3"
 end
 
-@testset "a definition whose callees share one lower file can move there" begin
+@testset "a definition whose callees share one lower file can move there, and another package's member calls none" begin
     down = file_sinkable(DOWNWARD_SINK)
     stray = only(down)
     @test stray.symbol == "stray"

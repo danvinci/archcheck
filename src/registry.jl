@@ -31,7 +31,7 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     parses = package_parses(src)
     dir2mod = package_layout(parses, spine, root)
     extensions = loaded_extensions(pkg, parses.repo)
-    index = build_source_index(parses, src, dir2mod; entry_dirs, root, extensions)
+    index = build_source_index(parses, src, dir2mod; entry_dirs, package = pkg, extensions)
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
     mods = Module[]
     for key in ordered

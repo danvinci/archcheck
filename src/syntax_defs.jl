@@ -85,7 +85,8 @@ function walk_dotted_def!(scan, node, depth, current)
     member = children[2].val
     member isa Symbol || return true
     is_module_path(children[1], ()) || return true
-    push!(ref_set(scan, current), member)
+    read = QualifiedRead(current, children[1], member)
+    push!(scan.members, read)
     true
 end
 

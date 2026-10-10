@@ -50,6 +50,8 @@ struct IndexBuild
     repo::String                                              # root every path below is relative to
     src_root::String                                          # absolute src/ being indexed
     root::Symbol                                              # package name, the root module's key
+    package::Module                                           # the loaded package, whose modules qualifiers resolve to
+    loaded::Dict{Symbol,Module}                               # each ranked module this Julia loaded, by key
     extensions::Vector{Pair{Symbol,String}}                   # loaded extension -> its absolute entry file
     ranks::Dict{Symbol,Vector{Int}}                           # module -> its load position in each enclosing module
     dir2mod::Dict{String,Symbol}                              # src subdir -> module, nested by dotted key
@@ -109,13 +111,16 @@ function nested_dirs(build::IndexBuild, moddir)
     inner
 end
 
-function start_index(parses::Parses, src_root::AbstractString, dir2mod, root, extensions)
+function start_index(parses::Parses, src_root::AbstractString, dir2mod, package::Module, extensions)
     rooted = source_root(src_root)
+    root = nameof(package)
     dirs = nest_modules(parses, rooted, dir2mod)
     build = IndexBuild(
         parses.repo,
         rooted,
         root,
+        package,
+        Dict{Symbol,Module}(),
         extensions,
         Dict{Symbol,Vector{Int}}(),
         dirs,
@@ -283,11 +288,48 @@ function note_includes!(build::IndexBuild, owner::Symbol, path, rel, tree)
     end
 end
 
+# The ranked modules this Julia loaded, once every load walk has ranked them.
+function load_modules!(build::IndexBuild)
+    for key in keys(build.ranks)
+        loaded = loaded_module(build.package, key)
+        if !isnothing(loaded)
+            build.loaded[key] = loaded
+        end
+    end
+end
+
+# A member read through a qualifier naming one of the package's modules, from where the code sits. Code this Julia
+# did not load, a splice, a macro's result or a head name its module does not bind may name one, so it counts.
+function reads_package_name(build::IndexBuild, home, read::QualifiedRead, no_locals)
+    isnothing(home) && return true
+    path = dotted_names(read.qualifier)
+    isnothing(path) && return true
+    head = first(path)
+    isdefined(home, head) || return true
+    through = resolve_loaded_module(read.qualifier, home, no_locals)
+    isnothing(through) && return false
+    through in values(build.loaded)
+end
+
+# Each member read the package's own module qualifies joins the refs of the def that reads it.
+function file_member_reads!(build::IndexBuild, owner::Symbol, scan::FileScan)
+    home = get(build.loaded, owner, nothing)
+    # The walk filed only qualifiers whose head is no local, so resolution binds none.
+    no_locals = Set{Symbol}()
+    for read in scan.members
+        reads_package_name(build, home, read, no_locals) || continue
+        names = ref_set(scan, read.target)
+        push!(names, read.member)
+    end
+    scan
+end
+
 function add_node!(build::IndexBuild, owner::Symbol, path, filerank, iswrapper, code)
     rel = relpath(path, build.repo)
     name = basename(rel)
     modrank = module_rank(build, owner)
-    scan = scan_tree(code)
+    parsed = scan_tree(code)
+    scan = file_member_reads!(build, owner, parsed)
     bodies = method_bodies(code, rel, owner)
     node = FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code, bodies)
     push!(build.nodes, node)
@@ -458,11 +500,12 @@ function source_index(build::IndexBuild)
     )
 end
 
-function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; entry_dirs = String[], root::Symbol,
-                            extensions = Pair{Symbol,String}[])
-    build = start_index(parses, src_root, dir2mod, root, extensions)
+function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; entry_dirs = String[],
+                            package::Module, extensions = Pair{Symbol,String}[])
+    build = start_index(parses, src_root, dir2mod, package, extensions)
     walk_package!(build)
     walk_extensions!(build)
+    load_modules!(build)
     index_placements!(build)
     add_loose_files!(build)
     add_refs!(build)

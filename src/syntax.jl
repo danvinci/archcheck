@@ -18,13 +18,22 @@ struct CallSite
     is_used::Bool        # the call's value is read
 end
 
+"""A member read through a qualifier that can name a module: `g` in `M.g`. It joins its def's `refs` once the index
+resolves the qualifier to one of the package's modules."""
+struct QualifiedRead
+    target::Union{Nothing,Symbol}   # refs key of the def whose code reads it; nothing for code outside any def
+    qualifier::JS.SyntaxNode        # the code before the dot
+    member::Symbol                  # the name after it
+end
+
 # One file's top-level defs and, per def, the names its body references. Closures are included.
 struct FileScan
     funcs::Vector{Symbol}                                        # top-level function names, source order
     constructors::Set{Symbol}                                    # type names a top-level curly head (`T{P}(x) = ...`) adds methods to
     types::Vector{Symbol}                                        # top-level struct and abstract type names
-    refs::Dict{Symbol,Set{Symbol}}                               # definition or qualified method -> referenced names
+    refs::Dict{Symbol,Set{Symbol}}                               # definition or qualified method -> bare names it reads, and members read through a package module
     modrefs::Set{Symbol}                                         # names referenced outside any function
+    members::Vector{QualifiedRead}                               # every member read through a qualifier, source order
     line::Dict{Symbol,Int}                                       # def name -> source line
     argtypes::Dict{Symbol,Vector{Union{Symbol,Nothing}}}         # function -> positional declared types; last method wins
     tupletail::Dict{Symbol,Int}                                  # function -> slot count when its body ends in a bare tuple
@@ -39,13 +48,14 @@ function empty_scan()
     types = Symbol[]
     refs = Dict{Symbol,Set{Symbol}}()
     modrefs = Set{Symbol}()
+    members = QualifiedRead[]
     line = Dict{Symbol,Int}()
     argtypes = Dict{Symbol,Vector{Union{Symbol,Nothing}}}()
     tupletail = Dict{Symbol,Int}()
     imports = Set{Symbol}()
     callsites = Dict{MethodSite,Vector{CallSite}}()
     forms = Dict{MethodSite,JS.SyntaxNode}()
-    FileScan(funcs, constructors, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms)
+    FileScan(funcs, constructors, types, refs, modrefs, members, line, argtypes, tupletail, imports, callsites, forms)
 end
 
 # `nothing` on failure, so a caller accounts for it.

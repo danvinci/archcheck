@@ -154,10 +154,11 @@ function scope_children!(scan, node, scope, on_qualified)
     end
 end
 
-# A member read through a qualifier that can name a module: a file scan files the member as a reference of its def.
+# A member read through a qualifier that can name a module, kept for the index to resolve against the loaded modules.
 function note_member!(scan::FileScan, scope, qualifier, member)
     is_module_path(qualifier, scope.bound) || return
-    push!(scan.refs[scope.target], member)
+    read = QualifiedRead(scope.target, qualifier, member)
+    push!(scan.members, read)
 end
 
 function scope_plain!(scan, node, scope, on_qualified)

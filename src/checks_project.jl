@@ -186,6 +186,17 @@ function is_string_payload(node, modules)
     concreteness === false
 end
 
+# Each name a def's code writes, a member read through any module included: `JS.parseall` calls `parseall`.
+function written_names(scan::FileScan)
+    written = Dict(def => copy(used) for (def, used) in scan.refs)
+    for read in scan.members
+        isnothing(read.target) && continue
+        names = get!(Set{Symbol}, written, read.target)
+        push!(names, read.member)
+    end
+    written
+end
+
 function run(check::CallerWhitelist, ctx)
     findings = Finding[]
     for prefix in check.exempt_dirs
@@ -195,7 +206,8 @@ function run(check::CallerWhitelist, ctx)
     allowed = Set(check.allowed)
     for file in ctx.index.files
         any(prefix -> is_under(file.path, prefix), check.exempt_dirs) && continue
-        for (def, used) in file.scan.refs
+        written = written_names(file.scan)
+        for (def, used) in written
             called = intersect(used, names)
             isempty(called) && continue
             pair = (file.path, def)

@@ -275,7 +275,7 @@ include("aa/Aa.jl")
 using .Aa
 include("body.jl")
 """, [
-    "aa/Aa.jl" => "module Aa\npos_qualified() = 1\nend\n",
+    "aa/Aa.jl" => "module Aa\npos_qualified() = 1\npos_renamed() = 1\nend\n",
     "body.jl" => """
     argument_owner(x) = x.neg_argument_field
     neg_argument_field() = 1
@@ -292,6 +292,14 @@ include("body.jl")
     const TOP_VALUE = (; neg_top_field = 1).neg_top_field
     neg_top_field() = 1
     qualified_owner() = Aa.pos_qualified()
+    const RENAMED = Aa
+    renamed_owner() = RENAMED.pos_renamed()
+    foreign_owner() = Base.neg_foreign_member()
+    neg_foreign_member() = 1
+    if false
+        Base.neg_foreign_top()
+    end
+    neg_foreign_top() = 1
     const SELF = @__MODULE__
     spliced_owner() = :(\$SELF.pos_spliced())
     pos_spliced() = 1
@@ -300,13 +308,15 @@ include("body.jl")
     """,
 ])
 
-@testset "a field read is not a reference to the function it shares a name with" begin
+@testset "a field read or another package's member is not a reference to the function it shares a name with" begin
     dead = dead_findings(FIELD_READS)
-    for name in ("neg_argument_field", "neg_nested_field", "neg_call_field", "neg_loop_field", "neg_top_field")
+    unread = ("neg_argument_field", "neg_nested_field", "neg_call_field", "neg_loop_field", "neg_top_field",
+              "neg_foreign_member", "neg_foreign_top")
+    for name in unread
         @test isempty(dead[name].evidence)
     end
-    named = ("pos_qualified" => "qualified_owner", "pos_spliced" => "spliced_owner",
-             "pos_macro_qualified" => "macro_owner")
+    named = ("pos_qualified" => "qualified_owner", "pos_renamed" => "renamed_owner",
+             "pos_spliced" => "spliced_owner", "pos_macro_qualified" => "macro_owner")
     for (name, owner) in named
         @test ev(dead[name], :named_by) == owner
     end
