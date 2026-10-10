@@ -4,70 +4,73 @@ const TYPE_COMPARISONS = (:(==), :(===), :(!=), :(!==), :(<:))
 
 function check_type_branches(index::SourceIndex)
     findings = Finding[]
-    discarded = IdSet{JS.SyntaxNode}()   # nodes whose value is discarded, where && and || pick a path
     for file in index.files
-        visit_type_branch!(findings, discarded, file, file.tree, "", Symbol[])
+        walk = BranchWalk(findings, file)
+        visit_type_branch!(walk, file.tree, false, "", Symbol[])
     end
     findings
 end
 
-function visit_type_branch!(findings, discarded, file, node, owner, params)
+# One file's walk: where findings go and the file they name.
+struct BranchWalk
+    findings::Vector{Finding}   # every type branch found, in walk order
+    file::FileNode              # the code being walked
+end
+
+# `is_discarded` says the node's value is discarded, where && and || pick a path.
+function visit_type_branch!(walk::BranchWalk, node, is_discarded::Bool, owner::String, params::Vector{Symbol})
     children = child_nodes(node)
     isnothing(children) && return
-    mark_discarded!(discarded, node, children)
     kind = JS.kind(node)
-    label = branch_label(kind)
-    marker = Val(label)
-    visit_label!(marker, findings, discarded, file, node, children, owner, params)
-end
-
-# Labels group the node kinds that share one walk.
-# A signature on a syntax kind changes compilation of the parser the workload runs under.
-function branch_label(kind)
-    kind == K"->" && return :cleared
-    kind == K"do" && return :cleared
-    kind == K"function" && return :function_form
-    kind == K"=" && return :assign
-    kind == K"for" && return :for_loop
-    kind == K"generator" && return :generator
-    kind == K"if" && return :branch
-    kind == K"elseif" && return :branch
-    kind == K"?" && return :branch
-    kind == K"&&" && return :short_circuit
-    kind == K"||" && return :short_circuit
-    :other
-end
-
-function mark_discarded!(discarded, node, children)
-    parent_discarded = node in discarded
-    for index in eachindex(children)
-        is_discarded = child_discarded(node, index, parent_discarded)
-        is_discarded || continue
-        push!(discarded, children[index])
+    if kind == K"->" || kind == K"do"
+        visit_cleared!(walk, node, 1:length(children), is_discarded)
+    elseif kind == K"function"
+        visit_method_scope!(walk, node, children, is_discarded)
+    elseif kind == K"="
+        visit_assign!(walk, node, children, is_discarded, owner, params)
+    elseif kind == K"for"
+        last_index = length(children)
+        visit_loop!(walk, node, 1:(last_index - 1), last_index, is_discarded, owner, params)
+    elseif kind == K"generator"
+        visit_loop!(walk, node, 2:length(children), 1, is_discarded, owner, params)
+    elseif kind == K"if" || kind == K"elseif" || kind == K"?"
+        record_type_branch!(walk, children, owner, params)
+        visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
+    elseif kind == K"&&" || kind == K"||"
+        if is_discarded
+            record_type_branch!(walk, children, owner, params)
+        end
+        visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
+    else
+        visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
     end
 end
 
-function visit_children!(findings, discarded, file, children, owner, params)
-    for child in children
-        visit_type_branch!(findings, discarded, file, child, owner, params)
+# The child at `index` of `node`, visited with its own discard flag.
+function visit_child!(walk::BranchWalk, node, index, node_is_discarded, owner, params)
+    children = child_nodes(node)
+    child_is_discarded = child_discarded(node, index, node_is_discarded)
+    visit_type_branch!(walk, children[index], child_is_discarded, owner, params)
+end
+
+function visit_children!(walk::BranchWalk, node, indices, is_discarded, owner, params)
+    for index in indices
+        visit_child!(walk, node, index, is_discarded, owner, params)
     end
 end
 
 # An anonymous function and a do-block bind their own parameters, hiding the method's.
-function visit_cleared!(findings, discarded, file, children)
-    for part in children
-        visit_type_branch!(findings, discarded, file, part, "", Symbol[])
+function visit_cleared!(walk::BranchWalk, node, indices, is_discarded)
+    for index in indices
+        visit_child!(walk, node, index, is_discarded, "", Symbol[])
     end
-end
-
-function visit_label!(::Val{:cleared}, findings, discarded, file, node, children, owner, params)
-    visit_cleared!(findings, discarded, file, children)
 end
 
 function method_name(call)
     children = child_nodes(call)
     head = first(children)
-    JS.sourcetext(head)
+    text = JS.sourcetext(head)
+    String(text)
 end
 
 function unwrap_binding(item)
@@ -108,58 +111,40 @@ function method_parameters(call)
     params
 end
 
-function visit_method_body!(findings, discarded, file, children, call)
+function visit_method_body!(walk::BranchWalk, node, children, is_discarded, call)
     owner = method_name(call)
     params = method_parameters(call)
-    for part in children[2:end]
-        visit_type_branch!(findings, discarded, file, part, owner, params)
-    end
+    visit_children!(walk, node, 2:length(children), is_discarded, owner, params)
 end
 
-function visit_method_scope!(findings, discarded, file, children)
+function visit_method_scope!(walk::BranchWalk, node, children, is_discarded)
     signature = children[1]
     call = signature_call(signature)
     if isnothing(call)
-        visit_cleared!(findings, discarded, file, children)
+        visit_cleared!(walk, node, 1:length(children), is_discarded)
         return
     end
-    visit_method_body!(findings, discarded, file, children, call)
+    visit_method_body!(walk, node, children, is_discarded, call)
 end
 
-function visit_label!(::Val{:function_form}, findings, discarded, file, node, children, owner, params)
-    visit_method_scope!(findings, discarded, file, children)
-end
-
-function visit_label!(::Val{:assign}, findings, discarded, file, node, children, owner, params)
+function visit_assign!(walk::BranchWalk, node, children, is_discarded, owner, params)
     if is_method_form(node)
-        visit_method_scope!(findings, discarded, file, children)
+        visit_method_scope!(walk, node, children, is_discarded)
         return
     end
-    visit_children!(findings, discarded, file, children, owner, params)
+    visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
 end
 
-function visit_loop!(findings, discarded, file, specs, body, owner, params)
+# A loop's specs bind names that hide the method's parameters inside its body.
+function visit_loop!(walk::BranchWalk, node, spec_indices, body_index, is_discarded, owner, params)
+    children = child_nodes(node)
     targets = Symbol[]
-    for spec in specs
-        bound_names!(targets, spec)
+    for index in spec_indices
+        bound_names!(targets, children[index])
     end
-    for spec in specs
-        visit_type_branch!(findings, discarded, file, spec, owner, params)
-    end
+    visit_children!(walk, node, spec_indices, is_discarded, owner, params)
     kept = setdiff(params, targets)
-    visit_type_branch!(findings, discarded, file, body, owner, kept)
-end
-
-function visit_label!(::Val{:for_loop}, findings, discarded, file, node, children, owner, params)
-    specs = children[1:end-1]
-    body = last(children)
-    visit_loop!(findings, discarded, file, specs, body, owner, params)
-end
-
-function visit_label!(::Val{:generator}, findings, discarded, file, node, children, owner, params)
-    body = first(children)
-    specs = children[2:end]
-    visit_loop!(findings, discarded, file, specs, body, owner, params)
+    visit_child!(walk, node, body_index, is_discarded, owner, kept)
 end
 
 function branch_statements(branch)
@@ -230,7 +215,8 @@ function tested_parameter(subjects, params)
     nothing
 end
 
-function record_type_branch!(findings, file, children, owner, params)
+function record_type_branch!(walk::BranchWalk, children, owner, params)
+    file = walk.file
     test = children[1]
     branch = children[2]
     is_throw_guard(branch) && return
@@ -242,21 +228,5 @@ function record_type_branch!(findings, file, children, owner, params)
     detail = "a runtime type test on the method's own parameter picks the path"
     symbol = string(owner, ":", parameter)
     finding = Finding(file.mod, :type_branch, file.path, symbol, line, detail)
-    push!(findings, finding)
-end
-
-function visit_label!(::Val{:branch}, findings, discarded, file, node, children, owner, params)
-    record_type_branch!(findings, file, children, owner, params)
-    visit_children!(findings, discarded, file, children, owner, params)
-end
-
-function visit_label!(::Val{:short_circuit}, findings, discarded, file, node, children, owner, params)
-    if node in discarded
-        record_type_branch!(findings, file, children, owner, params)
-    end
-    visit_children!(findings, discarded, file, children, owner, params)
-end
-
-function visit_label!(::Val{:other}, findings, discarded, file, node, children, owner, params)
-    visit_children!(findings, discarded, file, children, owner, params)
+    push!(walk.findings, finding)
 end
