@@ -27,7 +27,6 @@ struct SourceIndex
     dir2mod::Dict{String,Symbol}            # src subdir -> module
     files::Vector{FileNode}                 # every module-owned source file
     refs::Vector{ModRef}                    # cross-module references, from the same parse
-    aliases::Dict{Symbol,Dict{Symbol,Symbol}}   # module -> each name its `as` clauses bind -> the project module it names
     external::Set{Symbol}                   # names referenced from entry dirs other than test/
     scripts::Vector{Pair{String,JS.SyntaxNode}}   # entry-dir files outside src/, by walked path: each code root
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
@@ -418,7 +417,6 @@ function source_index(build::IndexBuild)
         build.dir2mod,
         build.nodes,
         build.refs,
-        build.aliases,
         build.external,
         build.scripts,
         build.unparsed,

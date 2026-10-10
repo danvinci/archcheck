@@ -129,14 +129,20 @@ function renamed_parts(node)
     (; dots, path, bound)
 end
 
+# The key of the project module an import path names whole; nothing for a path to anything else.
+function whole_module(modules::ModuleNames, scope, dots, path)::Union{Nothing,Symbol}
+    isempty(path) && return nothing
+    dots == 0 && first(path) !== modules.root && return nothing
+    to, spanned = resolve_module(modules, scope, path, dots)
+    spanned == length(path) || return nothing
+    to
+end
+
 # Records `bound` as a name for the project module `path` names whole; a rename of anything else binds no module.
 function add_alias!(aliases, modules::ModuleNames, scope, dots, path, bound)
     isnothing(bound) && return
-    isempty(path) && return
-    dots == 0 && first(path) !== modules.root && return
-    to, spanned = resolve_module(modules, scope, path, dots)
+    to = whole_module(modules, scope, dots, path)
     isnothing(to) && return
-    spanned == length(path) || return
     aliases[bound] = to
 end
 
@@ -159,23 +165,28 @@ function clause_aliases!(aliases, modules::ModuleNames, scope, clause)
     end
 end
 
-# The module renames one module's code makes. Julia takes using and import lines only outside method bodies and
-# quoted code, so the walk leaves those out.
-function code_aliases!(aliases, modules::ModuleNames, scope, node)
+# Each using or import clause in one module's code, with its line's keyword kind. Julia takes using and import
+# lines only outside method bodies and quoted code, so the walk leaves those out.
+function each_clause(visit, node)
     kind = JS.kind(node)
     if kind == K"using" || kind == K"import"
         for clause in child_nodes(node)
-            clause_aliases!(aliases, modules, scope, clause)
+            visit(clause, kind)
         end
-        return aliases
+        return
     end
-    kind == K"quote" && return aliases
-    is_method_form(node) && return aliases
+    kind == K"quote" && return
+    is_method_form(node) && return
     children = child_nodes(node)
-    isnothing(children) && return aliases
+    isnothing(children) && return
     for child in children
-        code_aliases!(aliases, modules, scope, child)
+        each_clause(visit, child)
     end
+end
+
+# The module renames one module's code makes.
+function code_aliases!(aliases, modules::ModuleNames, scope, node)
+    each_clause((clause, _) -> clause_aliases!(aliases, modules, scope, clause), node)
     aliases
 end
 

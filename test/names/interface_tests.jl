@@ -49,12 +49,20 @@ using .Cc
     g() = 2
     macro shown_macro() end
     macro hidden_macro() end
+    module Util
+    aa_only() = 1
+    end
+    reads_own() = Util.aa_only()
     end
     """,
     "bb/Bb.jl" => """
     module Bb
     import ..PackagePath
     x() = PackagePath.Aa.f()
+    module Util
+    bb_only() = 2
+    end
+    reads_own() = Util.bb_only()
     end
     """,
     "cc/Cc.jl" => """
@@ -68,6 +76,7 @@ using .Cc
     "cc/use.jl" => """
     through_root() = P.Aa.g()
     through_module() = A.g()
+    binds_no_util() = Util.bb_only()
     """,
 ])
 
@@ -176,7 +185,6 @@ end
         ("Geo", "Geo.Curves.calls_later", "import", "Geo.Curves"),
         ("Geo.Curves", "Low._lowpriv", "import", "Low"),
         ("Geo.Cuts", "Geo.Curves._secret", "using", "Geo.Curves"),
-        ("Geo.Curves", "Geo.Cuts.cut_only", "qualified", "Geo.Cuts"),
         ("Hi", "Geo.Curves", "qualified", "Geo"),
         ("Hi", "Geo.Curves._secret", "qualified", "Geo.Curves"),
         ("Hi", "Geo.Cuts", "qualified", "Geo"),
@@ -250,5 +258,25 @@ end
         ("Aa.g", "qualified", use_path, 1),
         ("Aa.g", "qualified", use_path, 2),
         ("Aa.@hidden_macro", "using", wrapper_path, 4),
+    ])
+end
+
+@testset "a qualifier resolves from the module its code sits in, so two modules of one name stay apart" begin
+    scripts = mktempdir()
+    script = """
+        using PackagePath.Aa: Util
+        Util.aa_only()
+        Bb.x()
+        """
+    write(joinpath(scripts, "use.jl"), script)
+    ctx = case_context(PACKAGE_PATH; entry_dirs = [scripts])
+    found = ArchCheck.run(ReachesInternal(), ctx)
+    rows = Set((finding.mod, finding.symbol, finding.line)
+               for finding in found if finding.mod === :Entry || occursin("Util", finding.symbol))
+    @test rows == Set([
+        (:Aa, "Aa.Util.aa_only", 10),
+        (:Bb, "Bb.Util.bb_only", 7),
+        (:Entry, "Aa.Util", 1),
+        (:Entry, "Aa.Util.aa_only", 2),
     ])
 end
