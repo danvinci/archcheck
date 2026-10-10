@@ -91,10 +91,21 @@ function order_methods(owned, places, repo)
     ordered
 end
 
-function methods_in(fn::Function, project)
+function has_array_argument(method::Method)
+    params = Base.unwrap_unionall(method.sig).parameters
+    for index in 2:length(params)
+        bound = bound_type(params[index])
+        bound isa Type && bound <: AbstractArray && return true
+    end
+    false
+end
+
+# A pair is judged on a slot where both methods take an array, so a method with no array argument pairs with none.
+function array_methods(fn::Function, project)
     owned = Method[]
     for method in methods(fn)
         method.module in project || continue
+        has_array_argument(method) || continue
         push!(owned, method)
     end
     owned
@@ -140,7 +151,7 @@ function scan_module!(findings, mod, seen, project, places, repo, texts)
         value isa Function || continue
         value in seen && continue
         push!(seen, value)
-        owned = methods_in(value, project)
+        owned = array_methods(value, project)
         length(owned) < 2 && continue
         ordered = order_methods(owned, places, repo)
         append_pairs!(findings, ordered, repo, texts)
