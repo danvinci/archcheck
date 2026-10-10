@@ -27,7 +27,7 @@ struct SourceIndex
     dir2mod::Dict{String,Symbol}            # src subdir -> module
     files::Vector{FileNode}                 # every module-owned source file
     refs::Vector{ModRef}                    # cross-module references, from the same parse
-    external::Set{Symbol}                   # names referenced from entry dirs other than test/
+    external::Set{Symbol}                   # names referenced from entry dirs other than test/ and unloaded extensions
     scripts::Vector{Pair{String,JS.SyntaxNode}}   # entry-dir files outside src/, by walked path: each code root
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
     missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
@@ -64,7 +64,7 @@ struct IndexBuild
     nonliteral::Vector{Tuple{Symbol,String,Int}}              # include whose argument is an expression: owner, file, line
     placed::Set{Tuple{Symbol,String}}                         # module and absolute path placed there: the revisit guard
     visited::Set{String}                                      # absolute paths any walk placed or the index took
-    external::Set{Symbol}                                     # names referenced from entry dirs other than test/
+    external::Set{Symbol}                                     # names referenced from entry dirs other than test/ and unloaded extensions
     scripts::Vector{Pair{String,JS.SyntaxNode}}               # entry-dir files outside src/, by walked path: each code root
 end
 
@@ -410,6 +410,39 @@ function read_entry_dirs!(build::IndexBuild, entry_dirs)
     end
 end
 
+# The extension a file under `ext/` belongs to, as Julia names it: `ext/Name.jl`, or any file in `ext/Name/`.
+function extension_of(path, directory)
+    relative = relpath(path, directory)
+    parts = splitpath(relative)
+    head = first(parts)
+    stem = first(splitext(head))
+    Symbol(stem)
+end
+
+# An extension Julia has not loaded is code outside the loaded modules, read as an entry script outside test/ is:
+# its names join `external`, so a definition only it reads stays live. What needs its module waits for the load.
+function read_unloaded_extensions!(build::IndexBuild)
+    joined = joinpath(build.repo, EXTENSION_DIR)
+    directory = normpath(joined)
+    isdir(directory) || return
+    for (folder, _, names) in walkdir(directory), name in names
+        endswith(name, ".jl") || continue
+        found = joinpath(folder, name)
+        path = normpath(found)
+        path in build.visited && continue
+        tree = parsed_tree(build.parses, path)
+        if isnothing(tree)
+            owner = extension_of(path, directory)
+            rel = relpath(path, build.repo)
+            push!(build.unparsed, (owner, rel))
+            continue
+        end
+        for root in code_roots(tree)
+            all_symbols!(build.external, root)
+        end
+    end
+end
+
 function source_index(build::IndexBuild)
     SourceIndex(
         build.repo,
@@ -434,6 +467,7 @@ function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; e
     add_loose_files!(build)
     add_refs!(build)
     read_entry_dirs!(build, entry_dirs)
+    read_unloaded_extensions!(build)
     source_index(build)
 end
 

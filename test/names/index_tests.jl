@@ -132,7 +132,7 @@ end
 
 const BROKEN_ENTRY = load_package("BrokenEntry", """
 include("body.jl")
-""", ["body.jl" => "shipped() = 1\n"])
+""", ["body.jl" => "shipped() = 1\n", "../ext/BrokenEntryExt/broken.jl" => "shipped(\n"])
 const BROKEN_ENTRY_DIR = mktempdir()
 write(joinpath(BROKEN_ENTRY_DIR, "run.jl"), "shipped(\n")
 
@@ -295,11 +295,10 @@ end
     @test endswith(hole.file, "bad.jl")
 end
 
-@testset "a broken entry script is unparsed and the name it alone used is dead" begin
+@testset "a broken entry script or unloaded extension is unparsed and the name it alone used is dead" begin
     corpus = corpus_of(BROKEN_ENTRY; entry_dirs = [BROKEN_ENTRY_DIR])
-    hole = only(corpus)
-    @test hole.kind === :unparsed
-    @test hole.mod === :Entry
+    holes = Set((finding.kind, finding.mod, basename(finding.file)) for finding in corpus)
+    @test holes == Set([(:unparsed, :Entry, "run.jl"), (:unparsed, :BrokenEntryExt, "broken.jl")])
     ctx = case_context(BROKEN_ENTRY; entry_dirs = [BROKEN_ENTRY_DIR])
     dead = ArchCheck.run(DeadCode(), ctx)
     dead_names = Set(finding.symbol for finding in dead)

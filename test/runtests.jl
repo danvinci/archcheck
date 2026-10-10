@@ -57,10 +57,11 @@ end
 
 case_context(case; options...) = Context(case.pkg; options...)
 
-# Extensions on loaded triggers, one also named by a fallback include, one with an absent trigger; one extension's
-# definitions use its trigger's type. The module-rank and sink tests read it.
+# Extensions on loaded triggers, one also named by a fallback include, one with an absent trigger that alone reads
+# `_absent_only`; one extension's definitions use its trigger's type. The module-rank, sink and dead-code tests read it.
 const HOSTED = load_package("Hosted", """
 _inner() = 1
+_absent_only() = 2
 @static if false
     include("../ext/HostedTestExt.jl")
 end
@@ -74,7 +75,12 @@ end
     end
     """,
     "../ext/HostedTestExt.jl" => "module HostedTestExt; __precompile__(false)\nusing Hosted: _inner\nend\n",
-    "../ext/HostedAbsentExt.jl" => "module HostedAbsentExt\nusing Hosted: _inner\nend\n",
+    "../ext/HostedAbsentExt.jl" => """
+    module HostedAbsentExt
+    using Hosted: _inner
+    doubled() = 2 * Hosted._absent_only()
+    end
+    """,
 ], """
 [weakdeps]
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"

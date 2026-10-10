@@ -111,7 +111,7 @@ struct FileSinkable <: Check end
 struct Sinkable <: Check end
 """Runs in `CHECKS`. A function body ends in a bare tuple of three or more slots."""
 struct TupleReturns <: Check end
-"""Runs in `CHECKS`. A top-level function no root reaches through the names code reads, cycles included. Roots are the names entry scripts read, names read outside any function, `__init__`, methods on functions or types the package does not judge, and, with `public_is_entry` on by default, exported or public names; an application turns it off."""
+"""Runs in `CHECKS`. A top-level function no root reaches through the names code reads, cycles included. Roots are the names entry scripts and extensions Julia has not loaded read, names read outside any function, `__init__`, methods on functions or types the package does not judge, and, with `public_is_entry` on by default, exported or public names; an application turns it off."""
 struct DeadCode <: Check
     public_is_entry::Bool   # an exported or public name counts as an entry point
 end

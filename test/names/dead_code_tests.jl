@@ -246,13 +246,15 @@ end
     @test ev(dead["helper"], :named_by) == "owner"
 end
 
-@testset "a script entry keeps a definition and a directory named test does not" begin
+@testset "a script entry or an unloaded extension keeps a definition and a directory named test does not" begin
     lonely = dead_symbols(SCRIPT_ENTRY)
     @test "shipped" in lonely
     shipped = dead_symbols(SCRIPT_ENTRY; entry_dirs = [SCRIPT_ENTRY_DIR])
     @test !("shipped" in shipped)
     tested = dead_symbols(TEST_DIRECTORY; entry_dirs = [TEST_DIRECTORY_DIR])
     @test "tested" in tested
+    hosted = dead_symbols(HOSTED)
+    @test !("_absent_only" in hosted)
 end
 
 @testset "an exported or public name is an entry unless the package turns that off, a load-time export included" begin
