@@ -27,6 +27,7 @@ struct SourceIndex
     files::Vector{FileNode}                 # every module-owned source file
     refs::Vector{ModRef}                    # cross-module references, from the same parse
     external::Set{Symbol}                   # names referenced from entry dirs other than test/
+    scripts::Vector{Pair{String,JS.SyntaxNode}}   # entry-dir files outside src/, by walked path: each code root
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
     missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
     nonliteral::Vector{Tuple{Symbol,String,Int}}      # include whose argument is not a string literal: owner, file, line
@@ -51,8 +52,7 @@ struct IndexBuild
     ranks::Dict{Symbol,Vector{Int}}                           # module -> its load position in each enclosing module
     dir2mod::Dict{String,Symbol}                              # src subdir -> module, nested by dotted key
     openers::Dict{String,Tuple{Symbol,String}}                # a directory module's absolute entry file -> its key, directory
-    trees::Dict{String,JS.SyntaxNode}                         # absolute path -> its one parse
-    unparsable::Set{String}                                   # absolute paths whose parse failed
+    parses::Parses                                            # every file's one parse, shared with the layout
     placements::Vector{Placement}                             # loaded code in load order
     nodes::Vector{FileNode}                                   # code accepted into the index
     refs::Vector{ModRef}                                      # cross-module references from the same parse
@@ -62,6 +62,7 @@ struct IndexBuild
     placed::Set{Tuple{Symbol,String}}                         # module and absolute path placed there: the revisit guard
     visited::Set{String}                                      # absolute paths any walk placed or the index took
     external::Set{Symbol}                                     # names referenced from entry dirs other than test/
+    scripts::Vector{Pair{String,JS.SyntaxNode}}               # entry-dir files outside src/, by walked path: each code root
 end
 
 # One module's load walk: the module, its rank, the directories its nested directory modules own, and how many of
@@ -105,19 +106,17 @@ function nested_dirs(build::IndexBuild, moddir)
     inner
 end
 
-function start_index(src_root::AbstractString, dir2mod, root)
-    rooted = normpath(abspath(src_root))
-    repo = dirname(rooted)
-    dirs = nest_modules(rooted, dir2mod)
+function start_index(parses::Parses, src_root::AbstractString, dir2mod, root)
+    rooted = source_root(src_root)
+    dirs = nest_modules(parses, rooted, dir2mod)
     build = IndexBuild(
-        repo,
+        parses.repo,
         rooted,
         root,
         Dict{Symbol,Vector{Int}}(),
         dirs,
         Dict{String,Tuple{Symbol,String}}(),
-        Dict{String,JS.SyntaxNode}(),
-        Set{String}(),
+        parses,
         Placement[],
         FileNode[],
         ModRef[],
@@ -127,31 +126,17 @@ function start_index(src_root::AbstractString, dir2mod, root)
         Set{Tuple{Symbol,String}}(),
         Set{String}(),
         Set{Symbol}(),
+        Pair{String,JS.SyntaxNode}[],
     )
     for (dir, key) in dirs
         key === root && continue
         joined = joinpath(rooted, dir)
         moddir = normpath(joined)
-        entry = wrapper_of(moddir)
+        entry = wrapper_of(parses, moddir)
         isnothing(entry) && continue
         build.openers[normpath(entry)] = (key, moddir)
     end
     build
-end
-
-# A file's one parse, shared by every later reader; nothing when it does not parse.
-function parsed_tree(build::IndexBuild, path)
-    haskey(build.trees, path) && return build.trees[path]
-    path in build.unparsable && return nothing
-    rel = relpath(path, build.repo)
-    source = read(path, String)
-    tree = parse_file(source, rel)
-    if isnothing(tree)
-        push!(build.unparsable, path)
-        return nothing
-    end
-    build.trees[path] = tree
-    tree
 end
 
 function next_position!(unit::LoadUnit)
@@ -169,7 +154,7 @@ end
 # takes the positions after.
 function open_module!(build::IndexBuild, key::Symbol, rank::Vector{Int}, entry::String, nested)
     push!(build.visited, entry)
-    tree = parsed_tree(build, entry)
+    tree = parsed_tree(build.parses,entry)
     if isnothing(tree)
         rel = relpath(entry, build.repo)
         push!(build.unparsed, (key, rel))
@@ -218,7 +203,7 @@ function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
     push!(build.placed, key)
     push!(build.visited, target)
     position = next_position!(unit)
-    tree = parsed_tree(build, target)
+    tree = parsed_tree(build.parses,target)
     if isnothing(tree)
         rel = relpath(target, build.repo)
         push!(build.unparsed, (unit.owner, rel))
@@ -339,7 +324,7 @@ function add_loose_files!(build::IndexBuild)
         end
         push!(build.visited, full)
         owner = module_of(full, build.src_root, build.dir2mod)
-        tree = parsed_tree(build, full)
+        tree = parsed_tree(build.parses,full)
         if isnothing(tree)
             rel = relpath(full, build.repo)
             unowned = isnothing(owner) ? Symbol(first(splitext(name))) : owner
@@ -354,31 +339,43 @@ function add_loose_files!(build::IndexBuild)
     end
 end
 
-# Entry dirs stay unloaded. A parse failure here shrinks `external`, so a def used only from a script
-# looks like dead code.
-function read_entry_dir!(build::IndexBuild, dir)
-    for (folder, _, names) in walkdir(dir), name in names
-        endswith(name, ".jl") || continue
-        path = joinpath(folder, name)
-        rel = relpath(path, build.repo)
-        source = read(path, String)
-        tree = parse_file(source, rel)
-        if isnothing(tree)
-            push!(build.unparsed, (:Entry, rel))
-            continue
-        end
-        for root in code_roots(tree)
+# An entry-dir file joins `scripts` unless the index holds it as source. Outside test/ its names join `external`, and
+# a parse failure is reported: it shrinks `external`, so a def used only from a script looks like dead code.
+function read_entry_file!(build::IndexBuild, path, is_test, scripted)
+    joined = isabspath(path) ? path : joinpath(build.repo, path)
+    absolute = normpath(joined)
+    tree = parsed_tree(build.parses, absolute)
+    if isnothing(tree)
+        rel = relpath(absolute, build.repo)
+        is_test || push!(build.unparsed, (:Entry, rel))
+        return
+    end
+    roots = code_roots(tree)
+    if !is_test
+        for root in roots
             all_symbols!(build.external, root)
         end
     end
+    absolute in build.visited && return
+    absolute in scripted && return
+    push!(scripted, absolute)
+    for root in roots
+        push!(build.scripts, path => root)
+    end
 end
 
+# Entry dirs stay unloaded and each file parses once; a file two listed dirs hold is one script.
 function read_entry_dirs!(build::IndexBuild, entry_dirs)
+    scripted = Set{String}()
     for dir in entry_dirs
         isdir(dir) || continue
         base = basename(normpath(dir))
-        base == "test" && continue
-        read_entry_dir!(build, dir)
+        is_test = base == "test"
+        for (folder, _, names) in walkdir(dir), name in names
+            endswith(name, ".jl") || continue
+            path = joinpath(folder, name)
+            read_entry_file!(build, path, is_test, scripted)
+        end
     end
 end
 
@@ -390,14 +387,15 @@ function source_index(build::IndexBuild)
         build.nodes,
         build.refs,
         build.external,
+        build.scripts,
         build.unparsed,
         build.missing,
         build.nonliteral,
     )
 end
 
-function build_source_index(src_root::AbstractString, dir2mod; entry_dirs = String[], root::Symbol)
-    build = start_index(src_root, dir2mod, root)
+function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; entry_dirs = String[], root::Symbol)
+    build = start_index(parses, src_root, dir2mod, root)
     walk_package!(build)
     index_placements!(build)
     add_loose_files!(build)

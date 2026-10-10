@@ -1,11 +1,6 @@
 # Interface checks: does a module declare what it publishes, and does anything reach past that declaration.
 # A module that exports its whole namespace has no interface to hold, so nothing behind it can move.
 
-function resolve_scan_path(index::SourceIndex, path)
-    absolute = isabspath(path) ? path : joinpath(index.repo, path)
-    normpath(absolute)
-end
-
 function is_blanket_names_call(n)
     JS.kind(n) == K"call" || return false
     kids = child_nodes(n)
@@ -128,30 +123,6 @@ function collect_const_aliases!(aliases, n, known)
     end
 end
 
-# Each entry-dir script's path and code: its top level and each module block's body, since a walk stops at a block.
-# The index reads these only for names, so they are parsed here.
-function entry_trees(index::SourceIndex, entry_dirs)
-    trees = Pair{String,JS.SyntaxNode}[]
-    seen = Set(resolve_scan_path(index, f.path) for f in index.files)
-    for d in entry_dirs
-        isdir(d) || continue   # a missing entry dir contributes nothing, as in the index
-        for (root, _, files) in walkdir(d), f in files
-            endswith(f, ".jl") || continue
-            path = joinpath(root, f)
-            absolute = resolve_scan_path(index, path)
-            absolute in seen && continue
-            push!(seen, absolute)
-            source = read(absolute, String)
-            tree = parse_file(source, path)
-            isnothing(tree) && continue
-            for code in code_roots(tree)
-                push!(trees, path => code)
-            end
-        end
-    end
-    trees
-end
-
 function reaches_internal(mod_name, path, member, line)
     symbol = "$mod_name.$member"
     detail = "reference to a name its module does not declare public"
@@ -175,11 +146,11 @@ function imported_internals!(findings, path, tree, modules::ModuleNames, by_key)
     end
 end
 
-function check_reaches_internal(index::SourceIndex, mods, root::Symbol; entry_dirs)
+function check_reaches_internal(index::SourceIndex, mods, root::Symbol)
     known = loaded_modules(mods)
     tracked = Set(mods)
     findings = Finding[]
-    scripts = entry_trees(index, entry_dirs)
+    scripts = index.scripts
     by_key = Dict(module_key(M) => M for M in mods)
     keys_known = Set{Symbol}(keys(by_key))
     modules = ModuleNames(keys_known, root)

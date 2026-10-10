@@ -1,5 +1,13 @@
 # Package layout: spine order, nested modules, wrappers and file ranks.
 
+# A package's src/ as a normalized absolute path; the repository root is its parent.
+source_root(src::AbstractString) = normpath(abspath(src))
+function package_parses(src::AbstractString)
+    rooted = source_root(src)
+    repo = dirname(rooted)
+    Parses(repo)
+end
+
 # Whether `path` lies inside directory `dir`.
 function is_within(path, dir)
     relative = relpath(path, dir)
@@ -68,10 +76,9 @@ function entry_code(tree)
 end
 
 # The literal include specs an entry file's module code runs, in source order.
-function entry_includes(path::AbstractString)
+function entry_includes(parses::Parses, path::AbstractString)
     specs = String[]
-    source = read(path, String)
-    tree = parse_file(source, path)
+    tree = parsed_tree(parses, path)
     isnothing(tree) && return specs
     code = entry_code(tree)
     for (arg, _) in include_calls(code)
@@ -81,31 +88,45 @@ function entry_includes(path::AbstractString)
     specs
 end
 
-# The directory modules an entry file declares: an `include` of a file in a subdirectory followed by `using .Name`.
-# The module name comes from the `using` line; the filename may differ from it.
-function parse_spine_order(spine_path::AbstractString)
-    # Comments stripped and `;`-joined statements split, so same-line and two-line forms parse alike.
-    stmts = String[]
-    for line in eachline(spine_path)
-        code = first(split(line, '#'; limit = 2))
-        for part in split(code, ';')
-            statement = strip(part)
-            if !isempty(statement)
-                push!(stmts, statement)
+# The module a `using .Name` statement brings in; nothing for any other statement.
+function used_sibling(node)
+    JS.kind(node) == K"using" || return nothing
+    clauses = child_nodes(node)
+    isempty(clauses) && return nothing
+    path = clauses[1]
+    if JS.kind(path) == K":"
+        listed = child_nodes(path)
+        path = listed[1]
+    end
+    JS.kind(path) == K"importpath" || return nothing
+    parts = child_nodes(path)
+    length(parts) == 2 || return nothing
+    JS.kind(parts[1]) == K"." || return nothing
+    node_symbol(parts[2])
+end
+
+# The directory modules an entry file declares: an `include` of a file in a subdirectory, then `using .Name` as the
+# next statement in its block. The module name comes from the `using` statement; the filename may differ from it.
+function spine_modules(parses::Parses, path::AbstractString)
+    dir2mod = Dict{String,Symbol}()
+    tree = parsed_tree(parses, path)
+    isnothing(tree) && return dir2mod
+    for node in walk_nodes(entry_code(tree))
+        statements = child_nodes(node)
+        isnothing(statements) && continue
+        for index in 1:(length(statements) - 1)
+            included = statements[index]
+            is_include_call(included) || continue
+            argument = first(call_args(included))
+            spec = static_string(argument)
+            isnothing(spec) && continue
+            dir = dirname(spec)
+            isempty(dir) && continue
+            name = used_sibling(statements[index + 1])
+            if !isnothing(name)
+                dir2mod[dir] = name
             end
         end
-    end
-    dir2mod = Dict{String,Symbol}()
-    for (index, statement) in enumerate(stmts)
-        included = match(r"^include\(\"([^\"]+)\"\)$", statement)
-        isnothing(included) && continue
-        index == length(stmts) && continue
-        following = stmts[index + 1]
-        using_line = match(r"^using\s+\.([A-Za-z_][A-Za-z0-9_]*)\b", following)
-        isnothing(using_line) && continue
-        dir = dirname(included.captures[1])
-        isempty(dir) && continue
-        dir2mod[dir] = Symbol(using_line.captures[1])
     end
     dir2mod
 end
@@ -115,8 +136,8 @@ const SINGLE_MODULE_DIR = "."
 
 # The package's directory modules. A spine that declares none makes the package one module: the root, keyed by
 # its own name, owning src/.
-function package_layout(spine_path::AbstractString, root::Symbol)
-    dir2mod = parse_spine_order(spine_path)
+function package_layout(parses::Parses, spine_path::AbstractString, root::Symbol)
+    dir2mod = spine_modules(parses, spine_path)
     isempty(dir2mod) || return dir2mod
     Dict(SINGLE_MODULE_DIR => root)
 end
@@ -126,14 +147,14 @@ package_modules(root::Module, mods) = unique!([root; mods])
 package_modules(ctx) = package_modules(ctx.root, ctx.mods)
 
 # Each wrapper declares its nested modules by the package spine's rule. A nested module is keyed by its dotted path.
-function nest_modules(src_root, dir2mod)
+function nest_modules(parses::Parses, src_root, dir2mod)
     dirs = copy(dir2mod)
     pending = collect(dir2mod)
     while !isempty(pending)   # bounded: a directory enters `dirs`, and so the queue, once
         dir, mod = pop!(pending)
-        wrapper = wrapper_of(joinpath(src_root, dir))
+        wrapper = wrapper_of(parses, joinpath(src_root, dir))
         isnothing(wrapper) && continue
-        children = parse_spine_order(wrapper)
+        children = spine_modules(parses, wrapper)
         for (child_dir, child) in children
             joined = joinpath(dir, child_dir)
             nested_dir = normpath(joined)
@@ -154,14 +175,14 @@ end
 
 # The module dir's entry file: capitalized by convention, and the one candidate no sibling includes.
 # Nothing when the dir declares no entry or leaves it ambiguous, which blocks via unranked_file.
-function wrapper_of(module_dir::AbstractString)
+function wrapper_of(parses::Parses, module_dir::AbstractString)
     isdir(module_dir) || return nothing
     listed = readdir(module_dir; join = true)
     candidates = filter(is_capital_source, listed)
     length(candidates) == 1 && return only(candidates)
     included = Set{String}()
     for candidate in candidates
-        for path in entry_includes(candidate)
+        for path in entry_includes(parses, candidate)
             target = joinpath(module_dir, path)
             push!(included, normpath(target))
         end

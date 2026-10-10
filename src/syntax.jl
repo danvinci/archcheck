@@ -46,11 +46,36 @@ function empty_scan()
     FileScan(funcs, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms)
 end
 
-# The one parse. `nothing` on failure, so a caller accounts for it.
+# `nothing` on failure, so a caller accounts for it.
 function parse_file(src::AbstractString, filename)
     try
         JS.parseall(JS.SyntaxNode, src; filename = filename)
     catch
         nothing
     end
+end
+
+# Every file's one parse: the layout, the index and the entry dirs all read through here.
+struct Parses
+    repo::String                       # root a parse names its file by
+    trees::Dict{String,JS.SyntaxNode}  # normalized absolute path -> its parse
+    failed::Set{String}                # normalized absolute paths whose parse failed
+end
+
+Parses(repo::AbstractString) = Parses(repo, Dict{String,JS.SyntaxNode}(), Set{String}())
+
+# A file's parse, read and parsed on first request; nothing when it does not parse.
+function parsed_tree(parses::Parses, path::AbstractString)
+    key = normpath(path)
+    haskey(parses.trees, key) && return parses.trees[key]
+    key in parses.failed && return nothing
+    rel = relpath(key, parses.repo)
+    source = read(key, String)
+    tree = parse_file(source, rel)
+    if isnothing(tree)
+        push!(parses.failed, key)
+        return nothing
+    end
+    parses.trees[key] = tree
+    tree
 end

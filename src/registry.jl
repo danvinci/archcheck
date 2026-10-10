@@ -8,17 +8,16 @@ struct Context{D<:Tuple}
     mods::Vector{Module}                    # loaded modules at every depth, rank order; reflection checks only
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
-    entry_dirs::Vector{String}              # tested/scripted entry points; interface checks scan them too
     methods::Union{Nothing,MethodGraph}     # calls between methods from the declared entries; nothing when none is declared
     observed::Union{Nothing,Observation}    # what the workload did; nothing before it runs, or with no workload
     derived::D                              # the package's declared derived values, each a `Derived`
 end
 
-function Context(index::SourceIndex, root::Module, mods; entry_dirs = String[], methods = nothing, derived = ())
+function Context(index::SourceIndex, root::Module, mods; methods = nothing, derived = ())
     graph = build_module_graph(index)
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
-    Context(index, graph, root, mods, sites, callgraphs, entry_dirs, methods, nothing, derived)
+    Context(index, graph, root, mods, sites, callgraphs, methods, nothing, derived)
 end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
@@ -26,8 +25,9 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     pkg_name = string(nameof(pkg))
     spine = joinpath(src, pkg_name * ".jl")
     root = nameof(pkg)
-    dir2mod = package_layout(spine, root)
-    index = build_source_index(src, dir2mod; entry_dirs, root)
+    parses = package_parses(src)
+    dir2mod = package_layout(parses, spine, root)
+    index = build_source_index(parses, src, dir2mod; entry_dirs, root)
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
     mods = Module[]
     for key in ordered
@@ -36,13 +36,12 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     end
     project = package_modules(pkg, mods)
     methods = isempty(entries) ? nothing : method_graph(entries, project, value_names(index))
-    Context(index, pkg, mods; entry_dirs, methods, derived)
+    Context(index, pkg, mods; methods, derived)
 end
 
 # The same context once the workload has run.
 function Context(ctx::Context; observed::Observation)
-    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.entry_dirs, ctx.methods,
-            observed, ctx.derived)
+    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.methods, observed, ctx.derived)
 end
 
 """A rule over a package: a subtype declares the findings it may emit and produces them, and names its stage when it reads a workload. A package passes its own through the `checks` keyword."""
@@ -191,7 +190,7 @@ kinds(::BlanketExports) = (:blanket_export => :advisory,)
 run(::StaleExports, ctx) = check_stale_exports(package_modules(ctx); repo = ctx.index.repo)
 kinds(::StaleExports) = (:stale_export => :advisory,)
 
-run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods, nameof(ctx.root); entry_dirs = ctx.entry_dirs)
+run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods, nameof(ctx.root))
 kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
 
 run(::PrivateImports, ctx) = check_private_imports(ctx.index)
