@@ -34,24 +34,6 @@ function loaded_module(pkg::Module, key::Symbol)::Union{Nothing,Module}
     found
 end
 
-# The package's extensions Julia has loaded, each by name with the entry file it loaded. Julia names an extension
-# after its entry under `ext/`: `ext/Name.jl` or `ext/Name/Name.jl`.
-function loaded_extensions(pkg::Module, repo::AbstractString)
-    found = Pair{Symbol,String}[]
-    directory = joinpath(repo, EXTENSION_DIR)
-    isdir(directory) || return found
-    for entry in readdir(directory)
-        stem = first(splitext(entry))
-        name = Symbol(stem)
-        extension = Base.get_extension(pkg, name)
-        isnothing(extension) && continue
-        loaded = pathof(extension)::String
-        path = normpath(loaded)
-        push!(found, name => path)
-    end
-    unique!(found)
-end
-
 # The names module paths resolve against.
 struct ModuleNames
     known::Set{Symbol}          # every project module, by dotted key below the package

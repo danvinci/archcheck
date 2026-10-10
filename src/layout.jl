@@ -137,6 +137,24 @@ const SINGLE_MODULE_DIR = "."
 # The directory beside src/ that Julia's package loader reads extensions from.
 const EXTENSION_DIR = "ext"
 
+# The package's extensions Julia has loaded, each by name with the entry file it loaded. Julia names an extension
+# after its entry under `ext/`: `ext/Name.jl` or `ext/Name/Name.jl`.
+function loaded_extensions(pkg::Module, repo::AbstractString)
+    found = Pair{Symbol,String}[]
+    directory = joinpath(repo, EXTENSION_DIR)
+    isdir(directory) || return found
+    for entry in readdir(directory)
+        stem = first(splitext(entry))
+        name = Symbol(stem)
+        extension = Base.get_extension(pkg, name)
+        isnothing(extension) && continue
+        loaded = pathof(extension)::String
+        path = normpath(loaded)
+        push!(found, name => path)
+    end
+    unique!(found)
+end
+
 # The package's directory modules. A spine that declares none makes the package one module: the root, keyed by
 # its own name, owning src/.
 function package_layout(parses::Parses, spine_path::AbstractString, root::Symbol)
