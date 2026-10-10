@@ -384,21 +384,6 @@ function footprint_of(owners, project_keys)
     footprint
 end
 
-# The packages the project lists under [deps]: all the package's code outside its extensions can load.
-function project_dependencies(repo)
-    dependencies = Set{Base.UUID}()
-    project = Base.env_project_file(repo)
-    project isa String || return dependencies
-    parsed = Base.parsed_toml(project)
-    listed = get(parsed, "deps", nothing)
-    isnothing(listed) && return dependencies
-    for uuid in values(listed)
-        text = uuid::String
-        push!(dependencies, Base.UUID(text))
-    end
-    dependencies
-end
-
 # Whether the root can load the package a module belongs to: the language, the package itself, or a dependency.
 function root_loads(mod::Module, root::Module, dependencies)
     package = Base.moduleroot(mod)
