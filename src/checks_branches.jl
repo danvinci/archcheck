@@ -12,13 +12,13 @@ function check_type_branches(index::SourceIndex)
 end
 
 function visit_type_branch!(findings, discarded, file, node, owner, params)
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    mark_discarded!(discarded, node, kids)
+    children = child_nodes(node)
+    isnothing(children) && return
+    mark_discarded!(discarded, node, children)
     kind = JS.kind(node)
     label = branch_label(kind)
     marker = Val(label)
-    visit_label!(marker, findings, discarded, file, node, kids, owner, params)
+    visit_label!(marker, findings, discarded, file, node, children, owner, params)
 end
 
 # Labels group the node kinds that share one walk.
@@ -38,30 +38,30 @@ function branch_label(kind)
     :other
 end
 
-function mark_discarded!(discarded, node, kids)
+function mark_discarded!(discarded, node, children)
     parent_discarded = node in discarded
-    for index in eachindex(kids)
+    for index in eachindex(children)
         is_discarded = child_discarded(node, index, parent_discarded)
         is_discarded || continue
-        push!(discarded, kids[index])
+        push!(discarded, children[index])
     end
 end
 
-function visit_children!(findings, discarded, file, kids, owner, params)
-    for child in kids
+function visit_children!(findings, discarded, file, children, owner, params)
+    for child in children
         visit_type_branch!(findings, discarded, file, child, owner, params)
     end
 end
 
 # An anonymous function and a do-block bind their own parameters, hiding the method's.
-function visit_cleared!(findings, discarded, file, kids)
-    for part in kids
+function visit_cleared!(findings, discarded, file, children)
+    for part in children
         visit_type_branch!(findings, discarded, file, part, "", Symbol[])
     end
 end
 
-function visit_label!(::Val{:cleared}, findings, discarded, file, node, kids, owner, params)
-    visit_cleared!(findings, discarded, file, kids)
+function visit_label!(::Val{:cleared}, findings, discarded, file, node, children, owner, params)
+    visit_cleared!(findings, discarded, file, children)
 end
 
 function method_name(call)
@@ -108,34 +108,34 @@ function method_parameters(call)
     params
 end
 
-function visit_method_body!(findings, discarded, file, kids, call)
+function visit_method_body!(findings, discarded, file, children, call)
     owner = method_name(call)
     params = method_parameters(call)
-    for part in kids[2:end]
+    for part in children[2:end]
         visit_type_branch!(findings, discarded, file, part, owner, params)
     end
 end
 
-function visit_method_scope!(findings, discarded, file, kids)
-    signature = kids[1]
+function visit_method_scope!(findings, discarded, file, children)
+    signature = children[1]
     call = signature_call(signature)
     if isnothing(call)
-        visit_cleared!(findings, discarded, file, kids)
+        visit_cleared!(findings, discarded, file, children)
         return
     end
-    visit_method_body!(findings, discarded, file, kids, call)
+    visit_method_body!(findings, discarded, file, children, call)
 end
 
-function visit_label!(::Val{:function_form}, findings, discarded, file, node, kids, owner, params)
-    visit_method_scope!(findings, discarded, file, kids)
+function visit_label!(::Val{:function_form}, findings, discarded, file, node, children, owner, params)
+    visit_method_scope!(findings, discarded, file, children)
 end
 
-function visit_label!(::Val{:assign}, findings, discarded, file, node, kids, owner, params)
+function visit_label!(::Val{:assign}, findings, discarded, file, node, children, owner, params)
     if is_method_form(node)
-        visit_method_scope!(findings, discarded, file, kids)
+        visit_method_scope!(findings, discarded, file, children)
         return
     end
-    visit_children!(findings, discarded, file, kids, owner, params)
+    visit_children!(findings, discarded, file, children, owner, params)
 end
 
 function visit_loop!(findings, discarded, file, specs, body, owner, params)
@@ -150,15 +150,15 @@ function visit_loop!(findings, discarded, file, specs, body, owner, params)
     visit_type_branch!(findings, discarded, file, body, owner, kept)
 end
 
-function visit_label!(::Val{:for_loop}, findings, discarded, file, node, kids, owner, params)
-    specs = kids[1:end-1]
-    body = last(kids)
+function visit_label!(::Val{:for_loop}, findings, discarded, file, node, children, owner, params)
+    specs = children[1:end-1]
+    body = last(children)
     visit_loop!(findings, discarded, file, specs, body, owner, params)
 end
 
-function visit_label!(::Val{:generator}, findings, discarded, file, node, kids, owner, params)
-    body = first(kids)
-    specs = kids[2:end]
+function visit_label!(::Val{:generator}, findings, discarded, file, node, children, owner, params)
+    body = first(children)
+    specs = children[2:end]
     visit_loop!(findings, discarded, file, specs, body, owner, params)
 end
 
@@ -230,9 +230,9 @@ function tested_parameter(subjects, params)
     nothing
 end
 
-function record_type_branch!(findings, file, kids, owner, params)
-    test = kids[1]
-    branch = kids[2]
+function record_type_branch!(findings, file, children, owner, params)
+    test = children[1]
+    branch = children[2]
     is_throw_guard(branch) && return
     subjects = type_subjects(test)
     parameter = tested_parameter(subjects, params)
@@ -245,18 +245,18 @@ function record_type_branch!(findings, file, kids, owner, params)
     push!(findings, finding)
 end
 
-function visit_label!(::Val{:branch}, findings, discarded, file, node, kids, owner, params)
-    record_type_branch!(findings, file, kids, owner, params)
-    visit_children!(findings, discarded, file, kids, owner, params)
+function visit_label!(::Val{:branch}, findings, discarded, file, node, children, owner, params)
+    record_type_branch!(findings, file, children, owner, params)
+    visit_children!(findings, discarded, file, children, owner, params)
 end
 
-function visit_label!(::Val{:short_circuit}, findings, discarded, file, node, kids, owner, params)
+function visit_label!(::Val{:short_circuit}, findings, discarded, file, node, children, owner, params)
     if node in discarded
-        record_type_branch!(findings, file, kids, owner, params)
+        record_type_branch!(findings, file, children, owner, params)
     end
-    visit_children!(findings, discarded, file, kids, owner, params)
+    visit_children!(findings, discarded, file, children, owner, params)
 end
 
-function visit_label!(::Val{:other}, findings, discarded, file, node, kids, owner, params)
-    visit_children!(findings, discarded, file, kids, owner, params)
+function visit_label!(::Val{:other}, findings, discarded, file, node, children, owner, params)
+    visit_children!(findings, discarded, file, children, owner, params)
 end

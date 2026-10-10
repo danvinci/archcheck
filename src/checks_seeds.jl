@@ -3,8 +3,7 @@
 # `:(=)` parses as an equals head with no children: the operator used as a value.
 function assignment_pair(node)
     children = child_nodes(node)
-    isnothing(children) && return nothing
-    length(children) < 2 && return nothing
+    child_count(children) < 2 && return nothing
     children
 end
 

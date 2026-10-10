@@ -29,14 +29,12 @@ function tuple_tail_slots(body)
     tail = body
     if JS.kind(tail) == K"block"
         children = child_nodes(tail)
-        missing = isnothing(children) || isempty(children)
-        missing && return 0
+        child_count(children) == 0 && return 0
         tail = last(children)
     end
     if JS.kind(tail) == K"return"
         children = child_nodes(tail)
-        missing = isnothing(children) || isempty(children)
-        missing && return 0
+        child_count(children) == 0 && return 0
         tail = first(children)
     end
     JS.kind(tail) == K"tuple" || return 0

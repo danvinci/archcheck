@@ -293,9 +293,9 @@ function seeded_held(item, form)
     wrapper = item.wrapper
     isnothing(wrapper) && return held
     struct_name = nameof(wrapper)
-    kids = child_nodes(form)
-    (isnothing(kids) || isempty(kids)) && return held
-    call = signature_call(kids[1])
+    children = child_nodes(form)
+    child_count(children) == 0 && return held
+    call = signature_call(children[1])
     isnothing(call) && return held
     args = child_nodes(call)
     isnothing(args) && return held
@@ -317,9 +317,9 @@ end
 symbol_held(node, held) = node.val isa Symbol && node.val in held
 
 function callee_of(node)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
-    name_of_head(kids[1])
+    children = child_nodes(node)
+    child_count(children) == 0 && return nothing
+    name_of_head(children[1])
 end
 
 function keeps_held(walk, rhs, held)
@@ -367,17 +367,17 @@ function walk_node(walk, node, bound, held)
         return walk_local_method(walk, node, bound, held)
     end
     kind = JS.kind(node)
-    kids = child_nodes(node)
-    isnothing(kids) && return HeldStep(held, false)
-    kind == K"=" && return walk_assign(walk, node, kids, bound, held)
-    (kind == K"return" || kind == K"...") && return walk_leave(walk, node, kids, bound, held)
-    kind == K"dotcall" && return walk_broadcast(walk, node, kids, bound, held)
+    children = child_nodes(node)
+    isnothing(children) && return HeldStep(held, false)
+    kind == K"=" && return walk_assign(walk, node, children, bound, held)
+    (kind == K"return" || kind == K"...") && return walk_leave(walk, node, children, bound, held)
+    kind == K"dotcall" && return walk_broadcast(walk, node, children, bound, held)
     kind == K"call" && return walk_call(walk, node, bound, held)
     if kind == K"."
-        read = walk_field(walk, node, kids, held)
+        read = walk_field(walk, node, children, held)
         isnothing(read) || return read
     end
-    walk_scope(walk, node, kids, bound, held)
+    walk_scope(walk, node, children, bound, held)
 end
 
 # A local method holds its own locals and limits; a form recorded on its own site is walked from there.
@@ -388,11 +388,11 @@ function walk_local_method(walk, node, bound, held)
     HeldStep(held, false)
 end
 
-function walk_assign(walk, node, kids, bound, held)
-    length(kids) < 2 && return HeldStep(held, false)
-    lhs = kids[1]
-    rhs = kids[end]
-    rhs_bound = child_locals(node, length(kids), bound)
+function walk_assign(walk, node, children, bound, held)
+    length(children) < 2 && return HeldStep(held, false)
+    lhs = children[1]
+    rhs = children[end]
+    rhs_bound = child_locals(node, length(children), bound)
     stepped = walk_node(walk, rhs, rhs_bound, held)
     if JS.kind(lhs) == K"."
         symbol_held(rhs, held) && note_limit!(walk, node, "field")
@@ -405,9 +405,9 @@ function walk_assign(walk, node, kids, bound, held)
     HeldStep(next, stepped.bridged)
 end
 
-function walk_leave(walk, node, kids, bound, held)
-    isempty(kids) && return HeldStep(held, false)
-    inner = kids[1]
+function walk_leave(walk, node, children, bound, held)
+    isempty(children) && return HeldStep(held, false)
+    inner = children[1]
     if symbol_held(inner, held)
         leave = JS.kind(node) == K"return" ? "return" : "splat"
         note_limit!(walk, node, leave)
@@ -417,11 +417,11 @@ function walk_leave(walk, node, kids, bound, held)
     walk_node(walk, inner, inner_bound, held)
 end
 
-function walk_broadcast(walk, node, kids, bound, held)
+function walk_broadcast(walk, node, children, bound, held)
     bridged = false
     hit = false
-    for index in eachindex(kids)
-        child = kids[index]
+    for index in eachindex(children)
+        child = children[index]
         if symbol_held(child, held)
             hit = true
             continue
@@ -450,13 +450,13 @@ function walk_call(walk, node, bound, held)
     HeldStep(held, bridged)
 end
 
-function walk_field(walk, node, kids, held)
+function walk_field(walk, node, children, held)
     item = walk.item
     isnothing(item.wrapper) && return nothing
     walk.file.mod === item.home && return nothing
-    length(kids) < 2 && return nothing
-    symbol_held(kids[1], held) || return nothing
-    member = kids[2]
+    length(children) < 2 && return nothing
+    symbol_held(children[1], held) || return nothing
+    member = children[2]
     member.val isa Symbol || return nothing
     note_field!(walk, node, string(member.val))
     HeldStep(held, false)
@@ -464,12 +464,12 @@ end
 
 # A block passes each statement's held set to the next; a let passes its bindings into its body. A name a child
 # binds itself, or that its scope introduces, shadows the held local there.
-function walk_scope(walk, node, kids, bound, held)
+function walk_scope(walk, node, children, bound, held)
     kind = JS.kind(node)
     bridged = false
     current = held
-    last_index = length(kids)
-    for index in eachindex(kids)
+    last_index = length(children)
+    for index in eachindex(children)
         child_bound = child_locals(node, index, bound)
         names = child_bindings(node, index)
         if !(kind == K"let" && index == last_index)
@@ -477,7 +477,7 @@ function walk_scope(walk, node, kids, bound, held)
             union!(names, introduced)
         end
         child_held = setdiff(current, names)
-        stepped = walk_node(walk, kids[index], child_bound, child_held)
+        stepped = walk_node(walk, children[index], child_bound, child_held)
         bridged = bridged || stepped.bridged
         if kind == K"block" || (kind == K"let" && index < last_index)
             current = stepped.held

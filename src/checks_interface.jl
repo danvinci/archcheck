@@ -3,17 +3,17 @@
 
 function is_blanket_names_call(n)
     JS.kind(n) == K"call" || return false
-    kids = child_nodes(n)
-    (isnothing(kids) || isempty(kids)) && return false
-    kids[1].val === :names || return false
-    for c in kids
+    children = child_nodes(n)
+    child_count(children) == 0 && return false
+    children[1].val === :names || return false
+    for c in children
         JS.kind(c) == K"parameters" || continue
         params = child_nodes(c)
         isnothing(params) && continue
         for p in params
             JS.kind(p) == K"=" || continue
             pk = child_nodes(p)
-            (isnothing(pk) || length(pk) < 2) && continue
+            child_count(pk) < 2 && continue
             pk[1].val === :all && pk[2].val === true && return true
         end
     end
@@ -22,9 +22,9 @@ end
 
 function find_blanket_names(n)
     is_blanket_names_call(n) && return n
-    kids = child_nodes(n)
-    isnothing(kids) && return nothing
-    for c in kids
+    children = child_nodes(n)
+    isnothing(children) && return nothing
+    for c in children
         found = find_blanket_names(c)
         isnothing(found) || return found
     end
@@ -67,11 +67,11 @@ function resolve_loaded_module(n, known, aliases, bound)
         return get(known, n.val, nothing)
     end
     JS.kind(n) == K"." || return nothing
-    kids = child_nodes(n)
-    (isnothing(kids) || length(kids) != 2) && return nothing
-    parent_mod = resolve_loaded_module(kids[1], known, aliases, bound)
+    children = child_nodes(n)
+    child_count(children) != 2 && return nothing
+    parent_mod = resolve_loaded_module(children[1], known, aliases, bound)
     isnothing(parent_mod) && return nothing
-    member = kids[2].val
+    member = children[2].val
     member isa Symbol || return nothing
     isdefined(parent_mod, member) || return nothing
     child = getfield(parent_mod, member)
@@ -80,11 +80,11 @@ end
 
 function collect_const_alias!(aliases, n, known)
     JS.kind(n) == K"=" || return
-    kids = child_nodes(n)
-    (isnothing(kids) || length(kids) < 2) && return
-    lhs = kids[1]
+    children = child_nodes(n)
+    child_count(children) < 2 && return
+    lhs = children[1]
     lhs.val isa Symbol || return
-    M = resolve_loaded_module(kids[2], known, aliases, Set{Symbol}())
+    M = resolve_loaded_module(children[2], known, aliases, Set{Symbol}())
     isnothing(M) && return
     aliases[lhs.val] = M
 end
@@ -93,15 +93,15 @@ function collect_const_aliases!(aliases, n, known)
     k = JS.kind(n)
     k == K"quote" && return
     is_nested_scope(n) && return
-    kids = child_nodes(n)
-    if k == K"const" && !isnothing(kids)
-        for c in kids
+    children = child_nodes(n)
+    if k == K"const" && !isnothing(children)
+        for c in children
             collect_const_alias!(aliases, c, known)
         end
         return
     end
-    isnothing(kids) && return
-    for c in kids
+    isnothing(children) && return
+    for c in children
         collect_const_aliases!(aliases, c, known)
     end
 end

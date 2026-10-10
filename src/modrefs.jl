@@ -71,9 +71,9 @@ end
 function importpath_parts(path)
     dots = 0
     names = Symbol[]
-    kids = child_nodes(path)
-    isnothing(kids) && return dots, names
-    for child in kids
+    children = child_nodes(path)
+    isnothing(children) && return dots, names
+    for child in children
         child.val isa Symbol || continue
         if child.val === :. && isempty(names)
             dots += 1
@@ -92,10 +92,10 @@ function dotted_names(node)::Union{Nothing,Vector{Symbol}}
         return names
     end
     JS.kind(node) == K"." || return nothing
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) != 2) && return nothing
-    head = dotted_names(kids[1])
-    member = node_symbol(kids[2])
+    children = child_nodes(node)
+    child_count(children) != 2 && return nothing
+    head = dotted_names(children[1])
+    member = node_symbol(children[2])
     isnothing(head) && return nothing
     isnothing(member) && return nothing
     push!(head, member)
@@ -118,9 +118,9 @@ function clause_ref!(refs, from, scope, file, line, modules, clause, via)
     path_node = clause
     listed = Symbol[]
     if kind == K":"
-        kids = child_nodes(clause)
-        path_node = first(kids)
-        for item in kids[2:end]
+        children = child_nodes(clause)
+        path_node = first(children)
+        for item in children[2:end]
             source = clause_source(item)
             _, item_names = importpath_parts(source)
             append!(listed, item_names)
@@ -148,12 +148,12 @@ end
 
 # A signature's parts other than the method name: arguments, `where` bounds, return type.
 function walk_signature_rest!(refs, from, scope, file, modules, sig)
-    kids = child_nodes(sig)
-    isnothing(kids) && return
+    children = child_nodes(sig)
+    isnothing(children) && return
     if JS.kind(sig) != K"call"
-        walk_signature_rest!(refs, from, scope, file, modules, kids[1])
+        walk_signature_rest!(refs, from, scope, file, modules, children[1])
     end
-    for child in kids[2:end]
+    for child in children[2:end]
         walk_modrefs!(refs, from, scope, file, modules, child)
     end
 end
@@ -165,15 +165,15 @@ function extension_ref(from, scope, file, line, modules, node)
     isnothing(call) && return nothing
     callee = first(child_nodes(call))
     path = dotted_names(callee)
-    (isnothing(path) || length(path) < 2) && return nothing
+    child_count(path) < 2 && return nothing
     qualified_ref(from, scope, file, line, modules, path, :extends)
 end
 
-function walk_import!(refs, from, scope, file, modules, node, kids)
+function walk_import!(refs, from, scope, file, modules, node, children)
     kind = JS.kind(node)
     via = Symbol(string(kind))
     line = JS.source_location(node)[1]
-    for clause in kids
+    for clause in children
         clause_ref!(refs, from, scope, file, line, modules, clause, via)
     end
 end
@@ -188,12 +188,12 @@ function walk_dotted_ref!(refs, from, scope, file, line, modules, node)
 end
 
 # Records an extension and walks the rest of the method. False when the name stays in this module.
-function walk_extension!(refs, from, scope, file, line, modules, node, kids)
+function walk_extension!(refs, from, scope, file, line, modules, node, children)
     extension = extension_ref(from, scope, file, line, modules, node)
     isnothing(extension) && return false
     push!(refs, extension)
-    walk_signature_rest!(refs, from, scope, file, modules, kids[1])
-    for child in kids[2:end]
+    walk_signature_rest!(refs, from, scope, file, modules, children[1])
+    for child in children[2:end]
         walk_modrefs!(refs, from, scope, file, modules, child)
     end
     true
@@ -201,21 +201,21 @@ end
 
 # `scope` is `from` split into its dotted segments, the frame every name in the file resolves in.
 function walk_modrefs!(refs, from, scope, file, modules, node)
-    kids = child_nodes(node)
-    isnothing(kids) && return
+    children = child_nodes(node)
+    isnothing(children) && return
     kind = JS.kind(node)
     line = JS.source_location(node)[1]
     if kind == K"using" || kind == K"import"
-        walk_import!(refs, from, scope, file, modules, node, kids)
+        walk_import!(refs, from, scope, file, modules, node, children)
         return
     end
     if kind == K"."
         walk_dotted_ref!(refs, from, scope, file, line, modules, node) && return
     end
     if is_method_form(node)
-        walk_extension!(refs, from, scope, file, line, modules, node, kids) && return
+        walk_extension!(refs, from, scope, file, line, modules, node, children) && return
     end
-    for child in kids
+    for child in children
         walk_modrefs!(refs, from, scope, file, modules, child)
     end
 end

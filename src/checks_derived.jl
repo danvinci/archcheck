@@ -68,28 +68,26 @@ end
 function bare_name(node)
     value = node.val
     value isa Symbol && return value
-    kids = child_nodes(node)
-    isnothing(kids) && return nothing
-    isempty(kids) && return nothing
+    children = child_nodes(node)
+    child_count(children) == 0 && return nothing
     kind = JS.kind(node)
     if kind == K"."
-        member = last(kids)
+        member = last(children)
         member_name = member.val
         member_name isa Symbol && return member_name
         return bare_name(member)
     end
     if kind == K"curly" || kind == K"<:" || kind == K"where"
-        head = first(kids)
+        head = first(children)
         return bare_name(head)
     end
     nothing
 end
 
 function annotated_return(form)
-    kids = child_nodes(form)
-    isnothing(kids) && return nothing
-    isempty(kids) && return nothing
-    signature = kids[1]
+    children = child_nodes(form)
+    child_count(children) == 0 && return nothing
+    signature = children[1]
     JS.kind(signature) == K"::" || return nothing
     parts = child_nodes(signature)
     isnothing(parts) && return nothing
@@ -174,15 +172,13 @@ function producer_memoized(placed_forms)
     for placed in placed_forms
         for node in walk_nodes(placed.file.tree)
             JS.kind(node) == K"macrocall" || continue
-            kids = child_nodes(node)
-            isnothing(kids) && continue
-            length(kids) == 2 || continue
-            head = kids[1]
+            children = child_nodes(node)
+            child_count(children) == 2 || continue
+            head = children[1]
             parts = child_nodes(head)
-            isnothing(parts) && continue
-            isempty(parts) && continue
+            child_count(parts) == 0 && continue
             parts[1].val === :memoize || continue
-            argument = kids[2]
+            argument = children[2]
             for form in forms
                 argument === form && return true
             end
@@ -210,15 +206,13 @@ is_mutable_key(::Any) = false
 
 function note_dict!(problems, node, mod)
     isnothing(mod) && return
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    isempty(kids) && return
-    head = kids[1]
+    children = child_nodes(node)
+    child_count(children) == 0 && return
+    head = children[1]
     JS.kind(head) == K"curly" || return
     type_name(head) === :Dict || return
     params = child_nodes(head)
-    isnothing(params) && return
-    length(params) < 2 && return
+    child_count(params) < 2 && return
     key_node = params[2]
     applied = written_type(mod, key_node)
     isnothing(applied) && return
@@ -239,10 +233,9 @@ function note_identity_cache!(problems, placed_forms, pkg)
         for node in walk_nodes(placed.form)
             kind = JS.kind(node)
             kind == K"call" || kind == K"dotcall" || continue
-            kids = child_nodes(node)
-            isnothing(kids) && continue
-            isempty(kids) && continue
-            naming = name_of_head(kids[1])
+            children = child_nodes(node)
+            child_count(children) == 0 && continue
+            naming = name_of_head(children[1])
             isnothing(naming) && continue
             callee = naming.callee
             if callee in IDENTITY_CALLS
@@ -261,19 +254,18 @@ function collect_read_names!(names, args, root)
             push!(names, value)
         end
         JS.kind(node) == K"." || continue
-        kids = child_nodes(node)
-        isnothing(kids) && continue
-        length(kids) == 2 || continue
-        member = kids[2].val
+        children = child_nodes(node)
+        child_count(children) == 2 || continue
+        member = children[2].val
         member isa Symbol || continue
         push!(names, member)
     end
 end
 
 function signature_names(form)
-    kids = child_nodes(form)
-    isnothing(kids) && return Symbol[]
-    sig_argnames(kids[1])
+    children = child_nodes(form)
+    isnothing(children) && return Symbol[]
+    sig_argnames(children[1])
 end
 
 function omitted_names(producer_forms, key_forms)
@@ -293,8 +285,8 @@ function omitted_names(producer_forms, key_forms)
         isnothing(body) && continue
         collect_read_names!(taken, nothing, body)
     end
-    missing = setdiff(reads, taken)
-    sort!(collect(missing))
+    unread = setdiff(reads, taken)
+    sort!(collect(unread))
 end
 
 # An isbits address still compares by identity. A content key is an isbits value other than an address.
@@ -320,8 +312,8 @@ function extend_key!(problems, omitted, owned, index, pkg, key::Function)
     key_forms = function_forms(index, key)
     note_identity_cache!(problems, key_forms, pkg)
     key_returns_bits(key) || push!(problems, "not_isbits")
-    missing = omitted_names(owned, key_forms)
-    append!(omitted, missing)
+    unkeyed = omitted_names(owned, key_forms)
+    append!(omitted, unkeyed)
 end
 
 function emit_cache!(found, producer_name, problem, anchor, evidence)
@@ -356,14 +348,12 @@ end
 function writes_field(root, cache)
     for node in walk_nodes(root)
         JS.kind(node) == K"=" || continue
-        kids = child_nodes(node)
-        isnothing(kids) && continue
-        length(kids) < 2 && continue
-        lhs = kids[1]
+        children = child_nodes(node)
+        child_count(children) < 2 && continue
+        lhs = children[1]
         JS.kind(lhs) == K"." || continue
         parts = child_nodes(lhs)
-        isnothing(parts) && continue
-        length(parts) == 2 || continue
+        child_count(parts) == 2 || continue
         parts[2].val === cache && return true
     end
     false

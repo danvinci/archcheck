@@ -423,7 +423,7 @@ build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, 
 # or the bare name. Every other identifier in the call is a value it passes.
 function callee_node(call)
     children = child_nodes(call)
-    (isnothing(children) || isempty(children)) && return nothing
+    child_count(children) == 0 && return nothing
     if is_operator_call(call)
         JS.is_prefix_op_call(call) && return first(children)
         index = findfirst(operator_token, children)

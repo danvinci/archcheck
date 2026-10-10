@@ -11,9 +11,9 @@ end
 # Annotations from the signature, on a fresh type dict. The signature's default values stay unread.
 function method_types(mod, node, outer::Scope)
     types = copy(outer.types)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return types
-    sig = first(kids)
+    children = child_nodes(node)
+    child_count(children) == 0 && return types
+    sig = first(children)
     typevars = Symbol[]
     where_vars!(typevars, sig)
     for name in typevars
@@ -44,11 +44,11 @@ end
 
 # The first child is a signature or an iterator clause. Field reads start at the next child.
 function walk_tail!(state, scope, node)
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    for index in 2:length(kids)
+    children = child_nodes(node)
+    isnothing(children) && return
+    for index in 2:length(children)
         inner = child_scope(scope, node, index)
-        walk_field_reads!(state, inner, kids[index])
+        walk_field_reads!(state, inner, children[index])
     end
 end
 
@@ -59,83 +59,83 @@ function walk_method!(state, scope, node)
 end
 
 function walk_closure!(state, scope, node)
-    kids = child_nodes(node)
+    children = child_nodes(node)
     types = copy(scope.types)
     params = Symbol[]
-    _argname!(params, first(kids))
+    _argname!(params, first(children))
     for name in params
         delete!(types, name)
     end
     locals = child_locals(node, 2, scope.locals)
     inner = Scope(types, locals)
-    walk_field_reads!(state, inner, kids[2])
+    walk_field_reads!(state, inner, children[2])
 end
 
 # Iterator specs bind before the body. A target's type is dropped once the body has been walked.
 function walk_iterated!(state, scope, node, spec_range, body_index)
-    kids = child_nodes(node)
+    children = child_nodes(node)
     targets = Symbol[]
     for index in spec_range
         spec_scope = child_scope(scope, node, index)
-        bind_iteration!(state, spec_scope, targets, kids[index])
+        bind_iteration!(state, spec_scope, targets, children[index])
     end
     body_scope = child_scope(scope, node, body_index)
-    walk_field_reads!(state, body_scope, kids[body_index])
+    walk_field_reads!(state, body_scope, children[body_index])
     for target in targets
         delete!(scope.types, target)
     end
 end
 
 function walk_for!(state, scope, node)
-    kids = child_nodes(node)
-    last_index = length(kids)
+    children = child_nodes(node)
+    last_index = length(children)
     spec_range = 1:(last_index - 1)
     walk_iterated!(state, scope, node, spec_range, last_index)
 end
 
 function walk_generator!(state, scope, node)
-    kids = child_nodes(node)
-    spec_range = 2:length(kids)
+    children = child_nodes(node)
+    spec_range = 2:length(children)
     walk_iterated!(state, scope, node, spec_range, 1)
 end
 
 function walk_assignment!(state, scope, node)
-    kids = child_nodes(node)
+    children = child_nodes(node)
     rhs = child_scope(scope, node, 2)
-    walk_field_reads!(state, rhs, kids[2])
-    source = value_source(state, rhs, kids[2])
-    bind_target!(state, scope, kids[1], source)
+    walk_field_reads!(state, rhs, children[2])
+    source = value_source(state, rhs, children[2])
+    bind_target!(state, scope, children[1], source)
 end
 
 # One iterator's collection is read in the names already bound. The target is typed after that read.
 function bind_iteration!(state, scope, targets, node)
-    kids = child_nodes(node)
-    isnothing(kids) && return
+    children = child_nodes(node)
+    isnothing(children) && return
     kind = JS.kind(node)
-    if (kind == K"in" || kind == K"=") && length(kids) == 2
+    if (kind == K"in" || kind == K"=") && length(children) == 2
         collection_scope = child_scope(scope, node, 2)
-        collection = kids[2]
+        collection = children[2]
         walk_field_reads!(state, collection_scope, collection)
         source = value_source(state, collection_scope, collection)
         element = nothing
         if !isnothing(source)
             element = Deferred(element_type, (source,))
         end
-        target = kids[1]
+        target = children[1]
         bind_target!(state, scope, target, element)
         _argname!(targets, target)
         return
     end
     if kind == K"iteration"
-        for index in eachindex(kids)
+        for index in eachindex(children)
             inner = child_scope(scope, node, index)
-            bind_iteration!(state, inner, targets, kids[index])
+            bind_iteration!(state, inner, targets, children[index])
         end
         return
     end
     if kind == K"filter"
         inner = child_scope(scope, node, 1)
-        bind_iteration!(state, inner, targets, first(kids))
+        bind_iteration!(state, inner, targets, first(children))
         walk_tail!(state, scope, node)
         return
     end
@@ -181,9 +181,9 @@ function bind_target!(state, scope, target, source)
 end
 
 function record_read!(state, scope, node)
-    kids = child_nodes(node)
-    receiver = first(kids)
-    member = last(kids)
+    children = child_nodes(node)
+    receiver = first(children)
+    member = last(children)
     typed = receiver_type(state, scope, receiver)
     isnothing(typed) && return
     line = source_line(node)
@@ -198,37 +198,37 @@ function walk_field!(state, scope, node)
 end
 
 function walk_children!(state, scope, node)
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    for index in eachindex(kids)
+    children = child_nodes(node)
+    isnothing(children) && return
+    for index in eachindex(children)
         inner = child_scope(scope, node, index)
-        walk_field_reads!(state, inner, kids[index])
+        walk_field_reads!(state, inner, children[index])
     end
 end
 
 function walk_field_reads!(state, scope, node)
-    kids = child_nodes(node)
-    isnothing(kids) && return
+    children = child_nodes(node)
+    isnothing(children) && return
     kind = JS.kind(node)
     kind == K"quote" && return
     is_method_form(node) && return walk_method!(state, scope, node)
-    if (kind == K"->" || kind == K"do") && length(kids) >= 2
+    if (kind == K"->" || kind == K"do") && length(children) >= 2
         return walk_closure!(state, scope, node)
     end
-    if kind == K"for" && length(kids) >= 2
+    if kind == K"for" && length(children) >= 2
         return walk_for!(state, scope, node)
     end
-    if kind == K"generator" && length(kids) >= 2
+    if kind == K"generator" && length(children) >= 2
         return walk_generator!(state, scope, node)
     end
-    if kind == K"=" && length(kids) == 2 && !is_sig(kids[1])
+    if kind == K"=" && length(children) == 2 && !is_sig(children[1])
         return walk_assignment!(state, scope, node)
     end
     if holds_values(kind)
         value = child -> walk_field_reads!(state, scope, child)
         return walk_value_children!(value, node)
     end
-    if kind == K"." && length(kids) == 2 && kids[2].val isa Symbol
+    if kind == K"." && length(children) == 2 && children[2].val isa Symbol
         return walk_field!(state, scope, node)
     end
     walk_children!(state, scope, node)

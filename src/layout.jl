@@ -16,9 +16,9 @@ end
 
 function is_include_call(node)
     JS.kind(node) == K"call" || return false
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) < 2) && return false
-    kids[1].val === :include
+    children = child_nodes(node)
+    child_count(children) < 2 && return false
+    children[1].val === :include
 end
 
 # A code root's include calls, in source order: the argument node and its line.
@@ -42,9 +42,9 @@ end
 
 function collect_load_events!(events, node)
     JS.kind(node) == K"quote" && return
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    for child in kids
+    children = child_nodes(node)
+    isnothing(children) && return
+    for child in children
         if is_module_block(child) || is_include_call(child)
             push!(events, child)
         end
@@ -55,10 +55,10 @@ end
 # A string literal's text; nothing when any piece is an interpolation.
 function static_string(node)
     JS.kind(node) == K"string" || return nothing
-    kids = child_nodes(node)
-    isnothing(kids) && return nothing
+    children = child_nodes(node)
+    isnothing(children) && return nothing
     parts = String[]
-    for child in kids
+    for child in children
         JS.kind(child) == K"String" || return nothing
         value = child.val
         value isa String || return nothing

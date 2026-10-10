@@ -164,8 +164,7 @@ end
 function written_type(mod::Module, node)
     if JS.kind(node) == K"curly"
         parts = child_nodes(node)
-        isnothing(parts) && return nothing
-        isempty(parts) && return nothing
+        child_count(parts) == 0 && return nothing
         head_node = first(parts)
         head = written_type(mod, head_node)
         head isa Type || return nothing
@@ -193,8 +192,7 @@ function opens_on_typevar(node, typevars)
     end
     JS.kind(node) == K"curly" || return false
     parts = child_nodes(node)
-    missing = isnothing(parts) || isempty(parts)
-    missing && return false
+    child_count(parts) == 0 && return false
     opens_on_typevar(first(parts), typevars)
 end
 
@@ -209,16 +207,16 @@ end
 function bind_annotated!(types, mod, arg, typevars)
     kind = JS.kind(arg)
     if kind == K"="
-        kids = child_nodes(arg)
-        target = first(kids)
+        children = child_nodes(arg)
+        target = first(children)
         return bind_annotated!(types, mod, target, typevars)
     end
     kind == K"::" || return
-    kids = child_nodes(arg)
-    length(kids) == 2 || return
-    name = kids[1].val
+    children = child_nodes(arg)
+    length(children) == 2 || return
+    name = children[1].val
     name isa Symbol || return
-    node = kids[2]
+    node = children[2]
     opens_on_typevar(node, typevars) && return
     declared = written_type(mod, node)
     isnothing(declared) && return
@@ -250,10 +248,10 @@ function receiver_type(state, scope, node)
     kind == K"call" && return call_type(state, scope, node)
     kind == K"ref" && return inferred_result(state, scope, Base.getindex, child_nodes(node))
     kind == K"." || return nothing
-    kids = child_nodes(node)
-    (isnothing(kids) || length(kids) != 2) && return nothing
-    base = receiver_type(state, scope, kids[1])
-    field = kids[2].val
+    children = child_nodes(node)
+    child_count(children) != 2 && return nothing
+    base = receiver_type(state, scope, children[1])
+    field = children[2].val
     (isnothing(base) || !(field isa Symbol)) && return nothing
     declared_field_type(base, field)
 end
@@ -345,16 +343,16 @@ end
 
 # A call through a global function no local binding shadows, typed by inference.
 function call_type(state, scope, node)
-    kids = child_nodes(node)
-    head = first(kids)
-    operands = kids[2:end]
+    children = child_nodes(node)
+    head = first(children)
+    operands = children[2:end]
     if JS.is_infix_op_call(node)
-        head = kids[2]
-        operands = kids[3:end]
-        pushfirst!(operands, kids[1])
+        head = children[2]
+        operands = children[3:end]
+        pushfirst!(operands, children[1])
     elseif JS.is_postfix_op_call(node)
-        head = last(kids)
-        operands = kids[1:end-1]
+        head = last(children)
+        operands = children[1:end-1]
     end
     path = dotted_names(head)
     isnothing(path) && return nothing

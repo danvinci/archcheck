@@ -61,8 +61,8 @@ function call_child_place(node, index)
         return :value
     end
     if JS.is_postfix_op_call(node)
-        kids = child_nodes(node)
-        if !isnothing(kids) && index == length(kids)
+        children = child_nodes(node)
+        if !isnothing(children) && index == length(children)
             return :head
         end
         return :value
@@ -110,9 +110,9 @@ function scoped_bound(node, index, bound, child)
     Set{Symbol}()
 end
 
-function absorb_children!(state, node, kids, bound)
-    for index in eachindex(kids)
-        child = kids[index]
+function absorb_children!(state, node, children, bound)
+    for index in eachindex(children)
+        child = children[index]
         place = name_place(node, index)
         absorb!(state, place)
         inner = scoped_bound(node, index, bound, child)
@@ -124,12 +124,12 @@ function absorb_tree!(state, node, bound, place)
     state.nodes += 1
     kind = JS.kind(node)
     absorb!(state, kind)
-    kids = child_nodes(node)
-    if isnothing(kids) || isempty(kids)
+    children = child_nodes(node)
+    if isnothing(children) || isempty(children)
         emit_leaf!(state, node, bound, place)
         return
     end
-    absorb_children!(state, node, kids, bound)
+    absorb_children!(state, node, children, bound)
 end
 
 function digest_of(node, bound)
@@ -139,10 +139,10 @@ function digest_of(node, bound)
 end
 
 function count_nodes!(counts, node)
-    kids = child_nodes(node)
+    children = child_nodes(node)
     total = 1
-    if !isnothing(kids)
-        for child in kids
+    if !isnothing(children)
+        for child in children
             child_total = count_nodes!(counts, child)
             total += child_total
         end
@@ -165,10 +165,10 @@ function walk_sites!(grouped, counts, node, method, path, min_nodes, bound)
     end
     digest = digest_of(node, bound)
     push_site!(grouped, digest, method, node, path)
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    for index in eachindex(kids)
-        child = kids[index]
+    children = child_nodes(node)
+    isnothing(children) && return
+    for index in eachindex(children)
+        child = children[index]
         is_method_form(child) && continue
         inner = child_locals(node, index, bound)
         child_path = vcat(path, index)

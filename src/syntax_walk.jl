@@ -3,13 +3,11 @@
 function is_sync_macro(node::JS.SyntaxNode)
     JS.kind(node) == K"macrocall" || return false
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return false
+    child_count(children) == 0 && return false
     head = children[1]
     JS.kind(head) == K"macro_name" || return false
     parts = child_nodes(head)
-    parts_missing = isnothing(parts) || isempty(parts)
-    parts_missing && return false
+    child_count(parts) == 0 && return false
     parts[1].val === :sync
 end
 
@@ -185,8 +183,7 @@ end
 function record_nested_form!(scan, node, scope)
     isnothing(scope.site) && return
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
+    child_count(children) == 0 && return
     name = sig_name(children[1])
     isnothing(name) && return
     line = source_line(node)
@@ -198,8 +195,7 @@ end
 function scope_method!(scan, node, scope, on_qualified)
     record_nested_form!(scan, node, scope)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
+    child_count(children) == 0 && return
     length(children) < 2 && return
     signature = children[1]
     body = children[2]
@@ -215,8 +211,7 @@ end
 
 function scope_closure!(scan, node, scope, on_qualified)
     children = child_nodes(node)
-    short = isnothing(children) || length(children) < 2
-    short && return
+    child_count(children) < 2 && return
     if !isnothing(on_qualified)
         walk_assign_lhs!(scan, children[1], scope, on_qualified)
     end
@@ -227,8 +222,7 @@ end
 
 function scope_loop!(scan, node, scope, on_qualified)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
+    child_count(children) == 0 && return
     last_index = length(children)
     kind = JS.kind(node)
     for index in eachindex(children)
@@ -248,15 +242,13 @@ end
 
 function scope_comprehension!(scan, node, scope, on_qualified)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
+    child_count(children) == 0 && return
     walk_scoped!(scan, children[1], scope, on_qualified)
 end
 
 function scope_generator!(scan, node, scope, on_qualified)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
+    child_count(children) == 0 && return
     interior = scope.loop_depth + 1
     for index in 2:length(children)
         depth = scope.loop_depth
@@ -284,8 +276,7 @@ end
 
 function scope_assign!(scan, node, scope, on_qualified)
     children = child_nodes(node)
-    plain = isnothing(children) || length(children) < 2
-    if plain || is_sig(children[1])
+    if child_count(children) < 2 || is_sig(children[1])
         scope_plain!(scan, node, scope, on_qualified)
         return
     end

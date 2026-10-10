@@ -8,8 +8,7 @@ function is_sig(node)
     is_wrapper = kind == K"where" || kind == K"::"
     is_wrapper || return false
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return false
+    child_count(children) == 0 && return false
     is_sig(children[1])
 end
 
@@ -18,7 +17,7 @@ function signature_call(signature)
     node = signature
     while JS.kind(node) == K"where" || JS.kind(node) == K"::"
         children = child_nodes(node)
-        (isnothing(children) || isempty(children)) && return nothing
+        child_count(children) == 0 && return nothing
         node = first(children)
     end
     JS.kind(node) == K"call" || return nothing
@@ -30,7 +29,7 @@ function call_parts(signature)
     call = signature_call(signature)
     isnothing(call) && return nothing
     children = child_nodes(call)
-    (isnothing(children) || isempty(children)) && return nothing
+    child_count(children) == 0 && return nothing
     (head = children[1], arguments = children[2:end])
 end
 
@@ -41,8 +40,7 @@ function is_inner_constructor(node)
     kind == K"function" && return true
     kind == K"=" || return false
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return false
+    child_count(children) == 0 && return false
     signature = children[1]
     is_sig(signature) || return false
     named = sig_name(signature)
@@ -54,8 +52,7 @@ function type_name(node)::Union{Nothing,Symbol}
     named = node_symbol(node)
     isnothing(named) || return named
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return nothing
+    child_count(children) == 0 && return nothing
     kind = JS.kind(node)
     kind == K"<:" || kind == K"curly" || return nothing
     type_name(children[1])
@@ -89,7 +86,7 @@ function callable_receiver(signature)
     head = parts.head
     JS.kind(head) == K"::" || return nothing
     head_children = child_nodes(head)
-    (isnothing(head_children) || isempty(head_children)) && return nothing
+    child_count(head_children) == 0 && return nothing
     type_name(last(head_children))
 end
 
@@ -133,8 +130,7 @@ end
 # The name bound by the first child of a bound, a default, or a splat.
 function named_head!(names, node)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
+    child_count(children) == 0 && return
     _argname!(names, children[1])
 end
 
@@ -152,8 +148,7 @@ function _argname!(names, node)
     end
     if kind == K"::"
         children = child_nodes(node)
-        short = isnothing(children) || length(children) < 2
-        short && return
+        child_count(children) < 2 && return
         _argname!(names, children[1])
         return
     end
@@ -211,7 +206,6 @@ function is_method_form(node)
     kind == K"function" && return true
     kind == K"=" || return false
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return false
+    child_count(children) == 0 && return false
     is_sig(children[1])
 end

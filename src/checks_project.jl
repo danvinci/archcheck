@@ -79,8 +79,7 @@ function is_sentinel_literal(node, sentinels)
     end
     JS.kind(node) == K"call" || return false
     children = child_nodes(node)
-    isnothing(children) && return false
-    length(children) == 2 || return false
+    child_count(children) == 2 || return false
     op = children[1]
     op.val === :- || return false
     is_sentinel_literal(children[2], sentinels)
@@ -112,8 +111,7 @@ end
 function last_body_expr(node)
     JS.kind(node) == K"block" || return node
     children = child_nodes(node)
-    isnothing(children) && return nothing
-    isempty(children) && return nothing
+    child_count(children) == 0 && return nothing
     tail = last(children)
     last_body_expr(tail)
 end
@@ -140,8 +138,7 @@ end
 
 function defined_name(node)
     children = child_nodes(node)
-    isnothing(children) && return nothing
-    isempty(children) && return nothing
+    child_count(children) == 0 && return nothing
     named = sig_name(children[1])
     isnothing(named) || return named
     callable_receiver(children[1])
@@ -151,8 +148,7 @@ function is_dict_head(node)
     node.val === :Dict && return true
     JS.kind(node) == K"." || return false
     children = child_nodes(node)
-    isnothing(children) && return false
-    length(children) == 2 || return false
+    child_count(children) == 2 || return false
     children[2].val === :Dict
 end
 
@@ -186,8 +182,7 @@ end
 function is_string_payload(node, modules)
     JS.kind(node) == K"curly" || return false
     children = child_nodes(node)
-    isnothing(children) && return false
-    length(children) == 3 || return false
+    child_count(children) == 3 || return false
     is_dict_head(children[1]) || return false
     children[2].val === :String || return false
     concreteness = value_concreteness(modules, children[3])

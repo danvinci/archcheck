@@ -26,8 +26,7 @@ function collect_scope_assigns!(bound, node)
     kind = JS.kind(node)
     children = child_nodes(node)
     if kind == K"="
-        missing = isnothing(children) || isempty(children)
-        missing && return
+        child_count(children) == 0 && return
         _argname!(bound, children[1])
         if length(children) >= 2
             collect_scope_assigns!(bound, children[2])
@@ -168,16 +167,14 @@ function is_let_bindings(node)
     isnothing(parent) && return false
     JS.kind(parent) == K"let" || return false
     children = child_nodes(parent)
-    missing = isnothing(children) || isempty(children)
-    missing && return false
+    child_count(children) == 0 && return false
     children[1] === node
 end
 
 function bind_catch_name!(bound, node)
     JS.kind(node) == K"catch" || return
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return
+    child_count(children) == 0 && return
     JS.kind(children[1]) == K"block" && return
     _argname!(bound, children[1])
 end
@@ -345,10 +342,10 @@ struct MethodBody
 end
 
 function child_index(parent, node)
-    kids = child_nodes(parent)
-    isnothing(kids) && return nothing
-    for index in eachindex(kids)
-        kids[index] === node && return index
+    children = child_nodes(parent)
+    isnothing(children) && return nothing
+    for index in eachindex(children)
+        children[index] === node && return index
     end
     nothing
 end
@@ -413,8 +410,8 @@ function method_bodies(root, path::String, mod::Symbol)
         in_method_body(node, root) || continue
         body = method_body(node)
         isnothing(body) && continue
-        kids = child_nodes(node)
-        signature = kids[1]
+        children = child_nodes(node)
+        signature = children[1]
         name = method_name_of(signature)
         isnothing(name) && continue
         enclosing = bound_of(node, root, root_bound, memo)

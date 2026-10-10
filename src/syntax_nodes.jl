@@ -10,6 +10,10 @@ function child_nodes(node)
     JS.children(node)
 end
 
+# How many children a walk sees: a leaf or a module block has none.
+child_count(::Nothing) = 0
+child_count(children::Vector) = length(children)
+
 # A module block's name and its body: the one way into the code a walk stops at.
 function module_name(block)::Union{Nothing,Symbol}
     parts = JS.children(block)
@@ -141,7 +145,7 @@ end
 # The qualifier of a dotted name. False when the node is a dot of some other shape.
 function walk_dot_base!(walk, node)
     children = child_nodes(node)
-    (isnothing(children) || length(children) != 2) && return false
+    child_count(children) != 2 && return false
     walk(children[1])
     true
 end
@@ -156,8 +160,7 @@ function is_module_path(node, bound)
     kind == K"macrocall" && return true
     kind == K"." || return false
     children = child_nodes(node)
-    isnothing(children) && return false
-    length(children) == 2 || return false
+    child_count(children) == 2 || return false
     is_module_path(children[1], bound)
 end
 
@@ -205,15 +208,14 @@ const INFIX_OPS = Set((:(<), :(>), :(<=), :(>=), :(==), :(!=), :+, :-, :*, :/))
 function infix_op(node)
     JS.kind(node) == K"call" || return nothing
     children = child_nodes(node)
-    (isnothing(children) || length(children) != 3) && return nothing
+    child_count(children) != 3 && return nothing
     children[2].val in INFIX_OPS ? children[2].val : nothing
 end
 
 # The body of a `function` form or a short-form definition: its second child.
 function method_body(node)
     children = child_nodes(node)
-    isnothing(children) && return nothing
-    length(children) < 2 && return nothing
+    child_count(children) < 2 && return nothing
     children[2]
 end
 

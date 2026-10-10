@@ -46,9 +46,9 @@ end
 
 function is_loop_call(node)
     JS.kind(node) == K"call" || return false
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return false
-    naming = name_of_head(kids[1])
+    children = child_nodes(node)
+    child_count(children) == 0 && return false
+    naming = name_of_head(children[1])
     isnothing(naming) && return false
     isempty(naming.qualifier) || return false
     naming.callee in LOOP_CALLS

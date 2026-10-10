@@ -199,8 +199,7 @@ end
 
 function visit_children!(walk, node, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return WalkFollow(false, exits)
+    child_count(children) == 0 && return WalkFollow(false, exits)
     visit_sequence!(walk, children, NodeStep(), inside, exits, is_dead)
 end
 
@@ -266,8 +265,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:arms}, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || length(children) < 2
-    missing && return WalkFollow(false, exits)
+    child_count(children) < 2 && return WalkFollow(false, exits)
     condition = visit_node!(walk, children[1], inside, exits, is_dead)
     later = children[2:end]
     halted = halt_follow(is_dead, condition, exits)
@@ -280,8 +278,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:short}, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || length(children) < 2
-    missing && return WalkFollow(false, exits)
+    child_count(children) < 2 && return WalkFollow(false, exits)
     left = visit_node!(walk, children[1], inside, exits, is_dead)
     continue_after!(walk, children[2], inside, exits, is_dead, left)
 end
@@ -315,8 +312,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:loop}, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return WalkFollow(false, exits)
+    child_count(children) == 0 && return WalkFollow(false, exits)
     last_index = length(children)
     if last_index == 1
         return visit_node!(walk, children[1], inside, exits, is_dead)
@@ -351,8 +347,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:generator}, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return WalkFollow(false, exits)
+    child_count(children) == 0 && return WalkFollow(false, exits)
     last_index = length(children)
     for index in 2:last_index
         visit_gen_spec!(walk, children[index], inside, exits, is_dead)
@@ -364,8 +359,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:comprehension}, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return WalkFollow(false, exits)
+    child_count(children) == 0 && return WalkFollow(false, exits)
     visit_node!(walk, children[1], inside, exits, is_dead)
 end
 
@@ -396,8 +390,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:closure}, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || length(children) < 2
-    missing && return WalkFollow(false, exits)
+    child_count(children) < 2 && return WalkFollow(false, exits)
     visit_node!(walk, children[2], inside, exits, is_dead)
     WalkFollow(false, exits)
 end
@@ -436,8 +429,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:assign}, inside, exits, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || length(children) < 2
-    missing && return WalkFollow(false, exits)
+    child_count(children) < 2 && return WalkFollow(false, exits)
     visit_lhs!(walk, children[1], inside, exits, is_dead)
     followed = visit_node!(walk, children[2], inside, exits, is_dead)
     mark = fresh_mark(walk)
@@ -465,8 +457,7 @@ visit_kind!(walk, node, ::WalkOf{:child}, inside, exits, is_dead) =
 function visit_default_value!(walk, arg, inside, exits, is_dead)
     JS.kind(arg) == K"=" || return
     children = child_nodes(arg)
-    missing = isnothing(children) || length(children) < 2
-    missing && return
+    child_count(children) < 2 && return
     visit_node!(walk, children[2], inside, exits, is_dead)
     nothing
 end
@@ -495,8 +486,7 @@ end
 
 function visit_nested!(walk, node, is_dead)
     children = child_nodes(node)
-    missing = isnothing(children) || length(children) < 2
-    missing && return
+    child_count(children) < 2 && return
     inside = Vector{Tuple{Int,Int}}()
     exits = Vector{Tuple{Int,Int}}()
     visit_defaults!(walk, children[1], inside, exits, is_dead)
@@ -512,8 +502,7 @@ end
 function walked_calls(form)
     walk = CallWalk()
     children = child_nodes(form)
-    missing = isnothing(children) || length(children) < 2
-    missing && return walk.found
+    child_count(children) < 2 && return walk.found
     inside = Vector{Tuple{Int,Int}}()
     exits = Vector{Tuple{Int,Int}}()
     visit_defaults!(walk, children[1], inside, exits, false)

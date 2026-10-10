@@ -11,8 +11,7 @@ function is_operator_call(node)
     JS.is_prefix_op_call(node) && return true
     JS.is_prefix_call(node) && return false
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return false
+    child_count(children) == 0 && return false
     operator_token(last(children))
 end
 
@@ -56,8 +55,7 @@ function keyword_name(node)
     names_a_child = names_a_child || kind == K"<:" || kind == K">:"
     names_a_child || return nothing
     children = child_nodes(node)
-    missing = isnothing(children) || isempty(children)
-    missing && return nothing
+    child_count(children) == 0 && return nothing
     keyword_name(children[1])
 end
 
@@ -169,8 +167,7 @@ function called_name(call)
         return WrittenCallee(callee, "")
     end
     children = child_nodes(call)
-    missing = isnothing(children) || isempty(children)
-    missing && return nothing
+    child_count(children) == 0 && return nothing
     name_of_head(children[1])
 end
 

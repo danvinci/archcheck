@@ -21,8 +21,7 @@ kinds(::KeptBuilders) = (:kept_builder => :advisory,)
 function unwrap_return(node)
     JS.kind(node) == K"return" || return node
     children = child_nodes(node)
-    isnothing(children) && return node
-    length(children) == 1 || return node
+    child_count(children) == 1 || return node
     children[1]
 end
 
@@ -36,9 +35,9 @@ end
 
 function is_get_call(node)
     JS.kind(node) == K"call" || return false
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return false
-    naming = name_of_head(kids[1])
+    children = child_nodes(node)
+    child_count(children) == 0 && return false
+    naming = name_of_head(children[1])
     isnothing(naming) && return false
     isempty(naming.qualifier) || return false
     naming.callee === :get!
@@ -73,9 +72,9 @@ end
 function is_builder_call(node, builder, bare)
     isnothing(node) && return false
     JS.kind(node) == K"call" || return false
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return false
-    names_builder(kids[1], builder, bare)
+    children = child_nodes(node)
+    child_count(children) == 0 && return false
+    names_builder(children[1], builder, bare)
 end
 
 function path_is_exempt(path, dirs)

@@ -67,11 +67,11 @@ function walk_unread!(findings, file, site, node, known, bound)
     elseif is_sync_macro(node)
         emit_node!(findings, file, site, :sync, node)
     end
-    kids = child_nodes(node)
-    isnothing(kids) && return
-    for index in eachindex(kids)
+    children = child_nodes(node)
+    isnothing(children) && return
+    for index in eachindex(children)
         child_bound = child_locals(node, index, bound)
-        walk_unread!(findings, file, site, kids[index], known, child_bound)
+        walk_unread!(findings, file, site, children[index], known, child_bound)
     end
 end
 

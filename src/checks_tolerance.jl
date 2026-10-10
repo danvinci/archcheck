@@ -16,20 +16,20 @@ struct SearchHit
 end
 
 function operator_of(node)
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
+    children = child_nodes(node)
+    child_count(children) == 0 && return nothing
     kind = JS.kind(node)
     if kind == K"comparison"
-        return kids[2].val
+        return children[2].val
     end
     if JS.is_infix_op_call(node)
-        return kids[2].val
+        return children[2].val
     end
     if JS.is_postfix_op_call(node)
-        return last(kids).val
+        return last(children).val
     end
     if kind == K"call" || kind == K"dotcall"
-        return kids[1].val
+        return children[1].val
     end
     nothing
 end
@@ -59,9 +59,9 @@ function call_head_symbol(node)
     if JS.is_postfix_op_call(node)
         return nothing
     end
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
-    head = kids[1].val
+    children = child_nodes(node)
+    child_count(children) == 0 && return nothing
+    head = children[1].val
     head isa Symbol || return nothing
     head
 end
@@ -112,9 +112,9 @@ function defined_locally(method)
     form = method.body.parent
     isnothing(form) && return false
     is_method_form(form) || return false
-    kids = child_nodes(form)
-    (isnothing(kids) || isempty(kids)) && return false
-    named = sig_name(kids[1])
+    children = child_nodes(form)
+    child_count(children) == 0 && return false
+    named = sig_name(children[1])
     !isnothing(named)
 end
 
@@ -210,8 +210,8 @@ function search_tolerances(node, bound, tolerances, reached)
     names
 end
 
-function do_block(kids)
-    for child in kids
+function do_block(children)
+    for child in children
         if JS.kind(child) == K"do"
             return child
         end
@@ -221,15 +221,15 @@ end
 
 function search_parts(node)
     JS.kind(node) == K"call" || return nothing
-    kids = child_nodes(node)
-    (isnothing(kids) || isempty(kids)) && return nothing
-    head = kids[1].val
+    children = child_nodes(node)
+    child_count(children) == 0 && return nothing
+    head = children[1].val
     head isa Symbol || return nothing
     head in SEARCH_HEADS || return nothing
-    block = do_block(kids)
+    block = do_block(children)
     isnothing(block) || return SearchHit(head, block)
-    length(kids) < 2 && return nothing
-    SearchHit(head, kids[2])
+    length(children) < 2 && return nothing
+    SearchHit(head, children[2])
 end
 
 function inside_nested_method(node, root)
