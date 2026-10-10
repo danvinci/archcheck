@@ -8,6 +8,7 @@ struct Context{D<:Tuple}
     mods::Vector{Module}                    # loaded modules at every depth, rank order; reflection checks only
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
+    defined::Vector{Method}                 # every live method the package's modules define, in source order
     methods::Union{Nothing,MethodGraph}     # calls between methods from the declared entries; nothing when none is declared
     observed::Union{Nothing,Observation}    # what the workload did; nothing before it runs, or with no workload
     derived::D                              # the package's declared derived values, each a `Derived`
@@ -17,7 +18,9 @@ function Context(index::SourceIndex, root::Module, mods; methods = nothing, deri
     graph = build_module_graph(index)
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
-    Context(index, graph, root, mods, sites, callgraphs, methods, nothing, derived)
+    modules = package_modules(root, mods)
+    defined = project_methods(modules)
+    Context(index, graph, root, mods, sites, callgraphs, defined, methods, nothing, derived)
 end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
@@ -39,9 +42,12 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     Context(index, pkg, mods; methods, derived)
 end
 
-# The same context once the workload has run.
+# The same context once the workload has run. Restored probes defined methods, so the method list is read again.
 function Context(ctx::Context; observed::Observation)
-    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.methods, observed, ctx.derived)
+    modules = package_modules(ctx)
+    defined = project_methods(modules)
+    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, defined, ctx.methods, observed,
+            ctx.derived)
 end
 
 """A rule over a package: a subtype declares the findings it may emit and produces them, and names its stage when it reads a workload. A package passes its own through the `checks` keyword."""
@@ -175,7 +181,7 @@ kinds(::ContractsPurity) = (:contracts_logic => :error,)
 run(check::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank; strict = check.strict)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
 
-run(check::ModulePiracy, ctx) = check_module_piracy(package_modules(ctx), ctx.root; repo = ctx.index.repo, strict = check.strict)
+run(check::ModulePiracy, ctx) = check_module_piracy(ctx.defined, ctx.root; repo = ctx.index.repo, strict = check.strict)
 kinds(::ModulePiracy) = (:module_piracy => :error,)
 
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
@@ -218,7 +224,7 @@ kinds(::DeclaredNames) = (:undeclared_name => :advisory,)
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
 kinds(::DeclaredModules) = (:undeclared_module => :advisory,)
 
-run(::DeclaredExtensions, ctx) = check_declared_extensions(package_modules(ctx); repo = ctx.index.repo)
+run(::DeclaredExtensions, ctx) = check_declared_extensions(ctx.defined, package_modules(ctx); repo = ctx.index.repo)
 kinds(::DeclaredExtensions) = (:private_extension => :error,)
 
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
@@ -239,7 +245,8 @@ kinds(::FileSinkable) = (:file_sinkable => :advisory,)
 # sinkable and extract-candidate are one analysis at two granularities, so one check emits both.
 function run(::Sinkable, ctx)
     body_calls = Dict(m => cg.refs for (m, cg) in ctx.callgraphs)
-    sink = check_sinkable(ctx.mods, ctx.graph.rank, body_calls, ctx.sites; repo = ctx.index.repo)
+    grouped = methods_by_function(ctx.defined)
+    sink = check_sinkable(ctx.mods, ctx.graph.rank, body_calls, ctx.sites, grouped; repo = ctx.index.repo)
     vcat(sink, check_extract_candidates(sink))
 end
 kinds(::Sinkable) = (:sinkable => :advisory, :extract_candidate => :advisory)

@@ -226,11 +226,11 @@ end
 
 # private-extension: a method one project module adds to a function another owns, unless the owner declares the
 # function public and documents it. Extending an undeclared function reaches into its owner's implementation.
-function check_declared_extensions(mods; repo)
+function check_declared_extensions(defined, mods; repo)
     project = Set(mods)
     reported = Set{Tuple{Module,Module,Symbol}}()   # (owner, home, function): one finding for all of a home's methods
     findings = Finding[]
-    for method in project_methods(mods)
+    for method in defined
         function_type, _ = split_signature(method.sig)
         function_type isa DataType && function_type <: Function && isdefined(function_type, :instance) || continue
         extended = function_type.instance

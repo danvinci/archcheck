@@ -24,8 +24,7 @@ function run(check::UnreachedMethods, ctx)
     landed = landed_methods(graph)
     sites = compiled_any_sites(modules)
     findings = Finding[]
-    defined = project_methods(modules)
-    for method in defined
+    for method in ctx.defined
         is_public_entry(check, method) && continue
         is_unreached(method, reached, landed, sites) || continue
         finding = unreached_finding(method, repo, graph)

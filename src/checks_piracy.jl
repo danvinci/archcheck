@@ -1,16 +1,6 @@
 # A method whose function and every argument type sit outside its owner: the package, or the defining module.
 # An owner's subtree is every module whose full name starts with the owner's own.
 
-# Every method a checked module defines, on any function, in source order.
-function project_methods(mods)
-    project = Set(mods)
-    defined = Method[]
-    Base.visit(Core.methodtable) do method
-        method.module in project && push!(defined, method)
-    end
-    sort!(defined, by = method -> (string(method.file), method.line))
-end
-
 # A value parameter stands for its type. A Symbol parameter belongs to nobody, so it counts as owned.
 is_foreign(@nospecialize(x), owns) = is_foreign(typeof(x), owns)
 is_foreign(::Symbol, owns) = false
@@ -71,10 +61,10 @@ end
 
 # module-piracy: the function is foreign to the owner, and every argument type to the owner's subtree. The owner
 # is the package, or with `strict` the defining module. A keyword method is judged by the function it wraps.
-function check_module_piracy(mods, root::Module; repo, strict::Bool)
+function check_module_piracy(defined, root::Module; repo, strict::Bool)
     findings = Finding[]
     package_scope = fullname(root)
-    for method in project_methods(mods)
+    for method in defined
         home = method.module
         scope = strict ? fullname(home) : package_scope
         function_type, arguments = split_signature(method.sig)

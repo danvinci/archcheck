@@ -421,11 +421,10 @@ end
 
 function run(::OverlappingCalls, ctx)
     isnothing(ctx.methods) && throw(ArgumentError("OverlappingCalls needs entries"))
-    defined = project_methods(package_modules(ctx))
     ordered = ordered_callees(ctx.methods)
     seen = Set{Tuple{String,Symbol,Int}}()
     findings = Finding[]
-    for method in defined
+    for method in ctx.defined
         located = method_form(ctx.index, method)
         isnothing(located) && continue
         module_agrees(method, located.file.mod) || continue

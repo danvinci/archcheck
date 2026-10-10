@@ -7,7 +7,7 @@ kinds(::StorageOverloads) = (:storage_overload => :error,)
 
 function run(::StorageOverloads, ctx)
     modules = package_modules(ctx)
-    check_storage_overloads(modules, ctx.index)
+    check_storage_overloads(ctx.defined, modules, ctx.index)
 end
 
 # A signature slot may name a type variable. The pair is judged on its upper bound.
@@ -100,15 +100,11 @@ function has_array_argument(method::Method)
     false
 end
 
-# A pair is judged on a slot where both methods take an array, so a method with no array argument pairs with none.
-function array_methods(fn::Function, project)
-    owned = Method[]
-    for method in methods(fn)
-        method.module in project || continue
-        has_array_argument(method) || continue
-        push!(owned, method)
-    end
-    owned
+# A function one of the package's modules defines under a written name; a keyword body or closure is generated.
+function is_owned_function(value::Function, project)
+    parentmodule(value) in project || return false
+    name = string(nameof(value))
+    !startswith(name, "#")
 end
 
 function push_pair!(findings, earlier::Method, later::Method, labels, repo)
@@ -138,35 +134,26 @@ function append_pairs!(findings, ordered, repo, texts)
     end
 end
 
-# eval and include are bindings every module carries. Their methods sit outside the package.
-function scan_module!(findings, mod, seen, project, places, repo, texts)
-    for name in names(mod; all = true, imported = false)
-        text = string(name)
-        startswith(text, "#") && continue
-        name in (:eval, :include) && continue
-        isdefined(mod, name) || continue
-        owner = Base.binding_module(mod, name)
-        owner === mod || continue
-        value = getfield(mod, name)
-        value isa Function || continue
-        value in seen && continue
-        push!(seen, value)
-        owned = array_methods(value, project)
-        length(owned) < 2 && continue
-        ordered = order_methods(owned, places, repo)
-        append_pairs!(findings, ordered, repo, texts)
-    end
-end
-
-function check_storage_overloads(modules, index)
+# Functions in the order their first method appears. A pair is judged on a slot where both methods take an array,
+# so a method with no array argument pairs with none.
+function check_storage_overloads(defined, modules, index)
     findings = Finding[]
-    seen = IdSet{Function}()
     project = Set{Module}(modules)
     places = load_places(index)
     repo = index.repo
     texts = IdDict{Any,String}()
-    for mod in modules
-        scan_module!(findings, mod, seen, project, places, repo, texts)
+    grouped = methods_by_function(defined)
+    judged = IdSet{Function}()
+    for method in defined
+        value = method_function(method)
+        isnothing(value) && continue
+        value in judged && continue
+        push!(judged, value)
+        is_owned_function(value, project) || continue
+        owned = filter(has_array_argument, grouped[value])
+        length(owned) < 2 && continue
+        ordered = order_methods(owned, places, repo)
+        append_pairs!(findings, ordered, repo, texts)
     end
     findings
 end

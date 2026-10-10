@@ -215,15 +215,11 @@ function names_called_at_home(calls_by_def)
     called
 end
 
-function methods_owned_by(mod, name)
+function methods_owned_by(mod, name, grouped)
     value = getproperty(mod, name)
     value isa Function || return Method[]
-    owned = Method[]
-    for method in methods(value)
-        method.module === mod || continue
-        push!(owned, method)
-    end
-    owned
+    defined = get(grouped, value, Method[])
+    filter(method -> method.module === mod, defined)
 end
 
 function add_signature_modules!(footprint, owned, project_keys)
@@ -296,10 +292,11 @@ function sink_finding(key, name, owned, footprint, rank, sites, repo)
     Finding(key, :sinkable, file, symbol, line, detail, evidence)
 end
 
-function append_sink_findings!(findings, mod, key, own_rank, rank, calls_by_def, called_at_home, project_keys, sites, repo)
+function append_sink_findings!(findings, mod, key, own_rank, rank, calls_by_def, called_at_home, project_keys, sites,
+                               grouped, repo)
     for name in owned_defs(mod)
         name in called_at_home && continue
-        owned = methods_owned_by(mod, name)
+        owned = methods_owned_by(mod, name, grouped)
         isempty(owned) && continue
         called_names = get(calls_by_def, name, ())
         footprint = footprint_of(mod, owned, called_names, project_keys)
@@ -311,7 +308,7 @@ function append_sink_findings!(findings, mod, key, own_rank, rank, calls_by_def,
     findings
 end
 
-function check_sinkable(mods, rank, body_calls, sites; repo)
+function check_sinkable(mods, rank, body_calls, sites, grouped; repo)
     project_keys = Dict(mod => module_key(mod) for mod in mods)
     findings = Finding[]
     empty_calls = Dict{Symbol,Set{Symbol}}()
@@ -321,7 +318,8 @@ function check_sinkable(mods, rank, body_calls, sites; repo)
         own_rank = rank[key]
         calls_by_def = get(body_calls, key, empty_calls)
         called_at_home = names_called_at_home(calls_by_def)
-        append_sink_findings!(findings, mod, key, own_rank, rank, calls_by_def, called_at_home, project_keys, sites, repo)
+        append_sink_findings!(findings, mod, key, own_rank, rank, calls_by_def, called_at_home, project_keys, sites,
+                              grouped, repo)
     end
     findings
 end
