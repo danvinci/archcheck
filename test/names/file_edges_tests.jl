@@ -79,22 +79,6 @@ include("b.jl")
     "b.jl" => "items() = 1\nhelper() = 1\n",
 ])
 
-const LATER_SUPERTYPE = load_package("LaterSupertype", """
-include("a.jl")
-include("b.jl")
-""", [
-    "a.jl" => "if false\nstruct S <: Shape\nend\nend\n",
-    "b.jl" => "abstract type Shape end\n",
-])
-
-const LATER_FIELD = load_package("LaterField", """
-include("a.jl")
-include("b.jl")
-""", [
-    "a.jl" => "if false\nstruct S\n    x::T\nend\nend\n",
-    "b.jl" => "struct T end\nmake() = S()\n",
-])
-
 const WRAPPER_CALL = load_package("WrapperCall", """
 wrapper_fn() = 1
 include("early.jl")
@@ -103,6 +87,53 @@ include("late.jl")
     "early.jl" => "climb() = wrapper_fn() + late_fn()\n",
     "late.jl" => "late_fn() = 1\n",
 ])
+
+# Each method below reads a name the load binds at one place: before the method's file is done, or after it.
+const LATE_READS = load_package("LateReads", """
+early_entry() = late_name()
+include("decl.jl")
+include("host.jl")
+include("child/Child.jl")
+using .Child
+include("late.jl")
+after_entry() = late_name()
+function load_extra()
+    include("extra.jl")
+end
+tail_name() = 1
+""", [
+    "decl.jl" => "function shape_of end\n",
+    "host.jl" => """
+    include("part.jl")
+    measure(x) = shape_of(x) + part_size(x)
+    grab(xs) = Base.first(xs)
+    own() = LateReads.late_name()
+    swap(x) = setindex(x, 1, 1)
+    display_of(io, x) = show(io, x)
+    call_child() = Child.go()
+    @static if VERSION < v"1.0"
+        stale() = late_name()
+    end
+    """,
+    "part.jl" => "part_size(x) = 1\n",
+    "child/Child.jl" => "module Child\ngo() = 1\nend\n",
+    "late.jl" => """
+    import Base: setindex, show
+    late_name() = 1
+    first(x::Int) = x
+    shape_of(x::Int) = x
+    tail_reader() = tail_name()
+    """,
+])
+
+@testset "a method reads a name late exactly when the load binds it after the method's file is done" begin
+    found = file_backedges(LATE_READS)
+    rows = edge_rows(found)
+    @test rows == [("LateReads.jl", "late.jl", "early_entry"), ("host.jl", "Child.jl", "call_child"),
+                   ("host.jl", "late.jl", "own swap")]
+    names_read = Set(ev(finding, :names) for finding in found)
+    @test "late_name setindex" in names_read
+end
 
 @testset "a method on another module's function or type keeps its calls' edges and gives the name no file" begin
     found = file_backedges(QUALIFIED_INDEX)
@@ -131,15 +162,6 @@ end
     dead_names = Set(finding.symbol for finding in dead)
     @test "items" in dead_names
     @test !("helper" in dead_names)
-end
-
-@testset "a supertype or field type in a later file is a file back edge on the struct" begin
-    supertype_edges = file_backedges(LATER_SUPERTYPE)
-    supertype_rows = edge_rows(supertype_edges)
-    @test supertype_rows == [("a.jl", "b.jl", "S")]
-    field_edges = file_backedges(LATER_FIELD)
-    field_rows = edge_rows(field_edges)
-    @test field_rows == [("a.jl", "b.jl", "S")]
 end
 
 @testset "a call into an unranked wrapper function is not a file back edge" begin

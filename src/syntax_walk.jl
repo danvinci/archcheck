@@ -154,6 +154,12 @@ function scope_children!(scan, node, scope, on_qualified)
     end
 end
 
+# A member read through a qualifier that can name a module: a file scan files the member as a reference of its def.
+function note_member!(scan::FileScan, scope, qualifier, member)
+    is_module_path(qualifier, scope.bound) || return
+    push!(scan.refs[scope.target], member)
+end
+
 function scope_plain!(scan, node, scope, on_qualified)
     note_free_name!(scan, node, scope)
     scope_children!(scan, node, scope, on_qualified)
@@ -168,9 +174,7 @@ function scope_dot!(scan, node, scope, on_qualified)
     children = child_nodes(node)
     member = children[2].val
     member isa Symbol || return
-    if is_module_path(children[1], scope.bound)
-        push!(scan.refs[scope.target], member)
-    end
+    note_member!(scan, scope, children[1], member)
     isnothing(on_qualified) && return
     line = source_line(node)
     on_qualified(children[1], member, line, scope.bound)

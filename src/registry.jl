@@ -103,7 +103,7 @@ struct ModulePiracy <: Check
     strict::Bool   # ownership is the defining module's rather than the package's
 end
 ModulePiracy(; strict::Bool = false) = ModulePiracy(strict)
-"""Runs in `CHECKS`. A file calls into a file the wrapper includes later."""
+"""Runs in `CHECKS`. A method reads a name the package's load binds only after the method's file is done: in a file it includes later, an import placed later, or a module it opens later."""
 struct FileBackEdges <: Check end
 """Runs in `CHECKS`. Every function a definition calls lives in one lower-ranked file. The module's types and the package's exported or public names are vocabulary and place nothing."""
 struct FileSinkable <: Check end
@@ -224,7 +224,7 @@ kinds(::ForeignFields) = (:foreign_field => :advisory,)
 run(::TypeBranches, ctx) = check_type_branches(ctx.index)
 kinds(::TypeBranches) = (:type_branch => :advisory,)
 
-run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
+run(::FileBackEdges, ctx) = check_file_backedges(ctx.index, ctx.mods, ctx.root)
 kinds(::FileBackEdges) = (:file_backedge => :advisory,)
 
 function run(::FileSinkable, ctx)
