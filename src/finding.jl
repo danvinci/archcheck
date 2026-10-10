@@ -1,3 +1,5 @@
+import JSON
+
 # Severities, worst first. An error blocks the gate; an advisory reports.
 const SEVERITIES = (:error, :advisory)
 

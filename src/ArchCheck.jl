@@ -1,8 +1,6 @@
 # Architecture self-check: one reference graph over a package's src/, read at module and file zoom.
 module ArchCheck
 
-using JSON
-
 include("finding.jl")
 include("syntax_nodes.jl")
 include("syntax_sig.jl")
@@ -37,6 +35,7 @@ include("checks_fields.jl")
 include("checks_interface.jl")
 include("checks_branches.jl")
 include("registry.jl")
+include("checks_imports.jl")
 include("checks_project.jl")
 include("call_paths.jl")
 include("checks_calls.jl")
@@ -58,7 +57,7 @@ export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
 export Check, Context
 export Corpus, ModuleBackEdges, ModuleCycles, ContractsPurity, OwnerUniqueness, ModulePiracy
 export FileBackEdges, FileSinkable, Sinkable, TupleReturns, DeadCode, BlanketExports, StaleExports
-export ReachesInternal, DeclaredModules, DeclaredExtensions
+export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders

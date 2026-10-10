@@ -4,6 +4,8 @@ module Shape
 
 import ..Low
 import ..Low: _secret
+# implicit_import: `shuffle` below comes in through this bare using alone
+using Random
 
 include("sink_target.jl")
 include("rank.jl")
@@ -24,6 +26,7 @@ export never_defined
 
 # blanket_export: the wrapper asks for every name
 listed = names(Shape; all = true)
+shuffled = shuffle(listed)
 
 # missing_include: the path is not a file on disk
 function note_missing(run::Bool)

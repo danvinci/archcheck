@@ -14,6 +14,7 @@ const CHECKS = (
     BlanketExports(),
     StaleExports(),
     ReachesInternal(),
+    ImportedNames(),
     DeclaredModules(),
     ForeignFields(),
     BoxedCaptures(),

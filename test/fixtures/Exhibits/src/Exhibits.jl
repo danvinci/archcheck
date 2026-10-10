@@ -10,6 +10,7 @@ export not_here
 # Julia runs `__init__` on load with no reference to it, so it stays quiet
 __init__() = nothing
 
+# stale_import: each using list below binds a name the root leaves unread
 include("low/Low.jl")
 using .Low: Brick
 include("shape/Shape.jl")
