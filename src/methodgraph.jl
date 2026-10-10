@@ -227,7 +227,7 @@ call_branches!(found, info::Core.Compiler.ConstCallInfo) = call_branches!(found,
 call_branches!(found, info::Core.Compiler.ApplyCallInfo) = call_branches!(found, info.call)
 call_branches!(found, info::Core.Compiler.UnionSplitInfo) = append!(found, info.split)
 call_branches!(found, info::Core.Compiler.MethodMatchInfo) = push!(found, info)
-call_branches!(found, @nospecialize(info)) = found
+call_branches!(found, @nospecialize(_info)) = found
 
 function call_branches!(found, info::Core.Compiler.UnionSplitApplyCallInfo)
     for inner in info.infos
@@ -238,7 +238,7 @@ end
 
 call_route(::Core.Compiler.ApplyCallInfo) = :apply
 call_route(::Core.Compiler.UnionSplitApplyCallInfo) = :apply
-call_route(@nospecialize(info)) = :call
+call_route(@nospecialize(_info)) = :call
 
 # A statement's effect flags are the call's effects at the argument types inference holds there
 # (`flags_for_effects`, Compiler/src/optimize.jl).
@@ -542,7 +542,7 @@ function built_members(code, sptypes, arg::Core.SSAValue)
     members
 end
 
-built_members(code, sptypes, @nospecialize(::Any)) = nothing
+built_members(_code, _sptypes, @nospecialize(::Any)) = nothing
 
 # The function a call calls: a keyword call holds it in its third slot.
 function called_function(call)

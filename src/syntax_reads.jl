@@ -2,7 +2,7 @@
 # binds it, and each member read through a qualifier with the loaded module that qualifier names.
 
 # Code no loaded module holds binds no module by name.
-bound_module(::Nothing, name::Symbol) = nothing
+bound_module(::Nothing, _name::Symbol) = nothing
 
 is_type_form(kind) = kind == K"struct" || kind == K"abstract" || kind == K"primitive"
 

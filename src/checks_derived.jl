@@ -305,7 +305,7 @@ function form_place(placed)
     (placed.file.path, line)
 end
 
-function extend_key!(problems, omitted, owned, index, pkg, ::Nothing) end
+function extend_key!(_problems, _omitted, _owned, _index, _pkg, ::Nothing) end
 
 function extend_key!(problems, omitted, owned, index, pkg, key::Function)
     key_forms = function_forms(index, key)
@@ -358,7 +358,7 @@ function writes_field(root, cache)
     false
 end
 
-function append_uncached!(found, declared, index, ::Nothing) end
+function append_uncached!(_found, _declared, _index, ::Nothing) end
 
 function append_uncached!(found, declared, index, cache::Symbol)
     forms = index_forms(index)

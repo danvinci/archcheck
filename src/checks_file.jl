@@ -163,7 +163,7 @@ function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, repo, v
     kept
 end
 
-check_file_sinkable(cg::CallGraph, sites, ::Nothing, repo, vocabulary) = check_file_sinkable(cg, sites, vocabulary)
+check_file_sinkable(cg::CallGraph, sites, ::Nothing, _repo, vocabulary) = check_file_sinkable(cg, sites, vocabulary)
 
 # extract-candidate: the density view of sinkable - a file holding several such defs.
 const EXTRACT_DEFS_MIN = 3

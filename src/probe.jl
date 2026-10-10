@@ -55,7 +55,7 @@ end
 # A type's default constructors have no source form, and its inner constructors call `new`, which only its struct
 # body defines; its outer constructors are probed.
 is_unprobed_constructor(::Type, located) = isnothing(located) || is_in_struct(located.form)
-is_unprobed_constructor(::Any, located) = false
+is_unprobed_constructor(::Any, _located) = false
 
 function note_skip!(skipped, method, reason::String)
     label = string(method)
@@ -330,7 +330,7 @@ function probed_function(ctx, path::Symbol)
 end
 
 probed_function(ctx, path::Expr) = probed_function(ctx, Symbol(string(path)))
-probed_function(ctx, target) = target
+probed_function(_ctx, target) = target
 
 function probed_functions(ctx, targets)
     resolved = Any[]

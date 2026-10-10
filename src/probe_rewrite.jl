@@ -35,7 +35,7 @@ function keep_name!(names, found::Symbol)
     true
 end
 
-keep_name!(names, ::Any) = false
+keep_name!(_names, ::Any) = false
 
 parameter_symbol(name::Symbol) = name
 parameter_symbol(::Any) = nothing
@@ -79,7 +79,7 @@ function collect_keyword!(names, forms, node::Symbol)
     keep_keyword!(names, forms, node)
 end
 
-collect_keyword!(names, forms, ::Any) = nothing
+collect_keyword!(_names, _forms, ::Any) = nothing
 
 function collect_keyword!(names, forms, node::Expr)
     if node.head === :parameters || node.head === :tuple
@@ -97,7 +97,7 @@ function collect_positional!(names, forms, node::Symbol)
     keep_positional!(names, forms, node, false)
 end
 
-collect_positional!(names, forms, ::Any) = nothing
+collect_positional!(_names, _forms, ::Any) = nothing
 
 function collect_positional!(names, forms, node::Expr)
     if node.head === :...
@@ -135,12 +135,12 @@ end
 # way lowering unpacks it; the name is fixed by the slot, so a second naming of the same signature agrees.
 destructured_name(slot::Int) = Symbol("#destructured#", slot)
 
-function named_argument(name::Symbol, slot::Int, unpacking)
+function named_argument(name::Symbol, _slot::Int, _unpacking)
     is_unreadable(name) || return name
     gensym(:argument)
 end
 
-named_argument(argument::Any, slot::Int, unpacking) = argument
+named_argument(argument::Any, _slot::Int, _unpacking) = argument
 
 function named_argument(argument::Expr, slot::Int, unpacking)
     head = argument.head
@@ -169,7 +169,7 @@ end
 
 # A callable written `(::Foo)(x)` is an argument too; a function name is none.
 named_callable(head::Expr, unpacking) = head.head === :(::) ? named_argument(head, 1, unpacking) : head
-named_callable(head::Any, unpacking) = head
+named_callable(head::Any, _unpacking) = head
 
 function named_call(call::Expr, unpacking)
     callable = named_callable(call.args[1], unpacking)
@@ -184,7 +184,7 @@ end
 
 """`signature` with every argument named, and the statements that unpack its destructured arguments pushed to
 `unpacking`."""
-named_signature(node::Any, unpacking) = node
+named_signature(node::Any, _unpacking) = node
 
 function named_signature(node::Expr, unpacking)
     if node.head === :where || node.head === :(::)
@@ -406,13 +406,13 @@ function rewrite_sync(node, site)
     Expr(:let, binding, block)
 end
 
-rewrite_waits(node, site) = node
+rewrite_waits(node, _site) = node
 
 function rewrite_waits(node::Expr, site)
     rewrite_head(Val(node.head), node, site)
 end
 
-rewrite_head(::Val{:quote}, node::Expr, site) = node
+rewrite_head(::Val{:quote}, node::Expr, _site) = node
 
 function rewrite_head(::Val{:macrocall}, node::Expr, site)
     is_sync_macro(node) && return rewrite_sync(node, site)

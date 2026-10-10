@@ -15,7 +15,7 @@ struct PriorRun end
 (::PriorRun)() = nothing
 
 # Whether probes armed around the workload's call can record what it runs.
-records_calls(workload) = true
+records_calls(_workload) = true
 records_calls(::PriorRun) = false
 
 function record_specializations!(existing, method::Method, modules)
@@ -136,7 +136,7 @@ end
 
 method_in_table(value::Function, method::Method) = method in methods(value)
 method_in_table(value::Type, method::Method) = method in methods(value)
-method_in_table(value, ::Method) = false
+method_in_table(_value, ::Method) = false
 
 function argument_types(method::Method)
     params = signature_types(method.sig)

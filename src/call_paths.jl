@@ -494,7 +494,7 @@ function visit_nested!(walk, node, is_dead)
     nothing
 end
 
-function visit_kind!(walk, node, ::WalkOf{:nested}, inside, exits, is_dead)
+function visit_kind!(walk, node, ::WalkOf{:nested}, _inside, exits, is_dead)
     visit_nested!(walk, node, is_dead)
     WalkFollow(false, exits)
 end

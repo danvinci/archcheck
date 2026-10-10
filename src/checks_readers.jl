@@ -71,7 +71,7 @@ function producer_shape(producer)
     (wrapper = nothing, numeric = numeric)
 end
 
-struct_body(@nospecialize(body)) = false
+struct_body(@nospecialize(_body)) = false
 
 function struct_body(body::DataType)
     isconcretetype(body) || return false
@@ -79,7 +79,7 @@ function struct_body(body::DataType)
     !(body <: Number)
 end
 
-number_body(@nospecialize(body)) = false
+number_body(@nospecialize(_body)) = false
 number_body(body::DataType) = body <: Number
 
 function derived_item(derived, wrapper)
@@ -130,7 +130,7 @@ function scan_expr!(item, code, expr::Expr, seen, method, repo)
     end
 end
 
-scan_expr!(item, code, @nospecialize(expr), seen, method, repo) = nothing
+scan_expr!(_item, _code, @nospecialize(_expr), _seen, _method, _repo) = nothing
 
 # `kwcall` names its callee in argument 3; `throw_methoderror` names it in argument 2 and its arguments follow.
 function read_args!(item, code, args, seen, method, repo)
@@ -192,20 +192,20 @@ function carries_type(@nospecialize(type::Type), wrapper)
 end
 
 listed_type(types::Vector, index) = index in eachindex(types) ? types[index] : Any
-listed_type(@nospecialize(types), index) = Any
+listed_type(@nospecialize(_types), _index) = Any
 slot_type(code, index) = isdefined(code, :slottypes) ? listed_type(code.slottypes, index) : Any
 value_type_of(code, value::Core.SSAValue) = listed_type(code.ssavaluetypes, value.id)
 value_type_of(code, value::Core.SlotNumber) = slot_type(code, value.id)
-value_type_of(code, value::QuoteNode) = typeof(value.value)
-value_type_of(code, @nospecialize(value)) = typeof(value)
+value_type_of(_code, value::QuoteNode) = typeof(value.value)
+value_type_of(_code, @nospecialize(value)) = typeof(value)
 
 function resolve_callee(code, head::Core.SSAValue)
     kind = listed_type(code.ssavaluetypes, head.id)
     kind isa Core.Const ? kind.val : nothing
 end
 
-resolve_callee(code, head::GlobalRef) = isdefined(head.mod, head.name) ? getfield(head.mod, head.name) : nothing
-resolve_callee(code, @nospecialize(head)) = nothing
+resolve_callee(_code, head::GlobalRef) = isdefined(head.mod, head.name) ? getfield(head.mod, head.name) : nothing
+resolve_callee(_code, @nospecialize(_head)) = nothing
 
 callee_name(value::Function) = string(nameof(value))
 callee_name(@nospecialize(value)) = string(value)
@@ -248,7 +248,7 @@ function resolve_path(mod::Module, segments)
     resolve_path(next, rest)
 end
 
-resolve_path(@nospecialize(value), segments) = nothing
+resolve_path(@nospecialize(_value), _segments) = nothing
 
 function file_home(root, key)
     segments = key_segments(key)

@@ -3,7 +3,7 @@
 
 # A value parameter stands for its type. A Symbol parameter belongs to nobody, so it counts as owned.
 is_foreign(@nospecialize(x), owns) = is_foreign(typeof(x), owns)
-is_foreign(::Symbol, owns) = false
+is_foreign(::Symbol, _owns) = false
 is_foreign(@nospecialize(typevar::TypeVar), owns) = is_foreign(typevar.ub, owns)
 is_foreign(@nospecialize(vararg::Core.TypeofVararg), owns) = is_foreign(vararg.T, owns)
 

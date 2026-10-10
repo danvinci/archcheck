@@ -31,11 +31,11 @@ end
 # since its `hash` may call the probed code or rest on methods the type leaves undefined.
 const HASHED_LEAVES = Union{Base.BitInteger,Base.IEEEFloat,BigInt,BigFloat,Symbol,String,Char,Nothing,Bool}
 
-function hash_content(value::HASHED_LEAVES, seed::UInt, memo, depth::Int)
+function hash_content(value::HASHED_LEAVES, seed::UInt, _memo, _depth::Int)
     hash(value, seed)
 end
 
-function hash_content(value::Union{Module,Function,Type,Task,Channel,Base.AbstractLock,Ptr,IO}, seed::UInt, memo, depth::Int)
+function hash_content(value::Union{Module,Function,Type,Task,Channel,Base.AbstractLock,Ptr,IO}, seed::UInt, _memo, _depth::Int)
     identity = objectid(value)
     hash(identity, seed)
 end
