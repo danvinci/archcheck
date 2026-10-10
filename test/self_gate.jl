@@ -179,7 +179,7 @@ function internal_sites()
                :meta, :Binding, :datatype_haspadding, :loaded_modules, :env_project_file, :parsed_toml, :PkgId,
                :sync_varname, :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module)
     boundary = "src/julia_internals.jl"
-    operations = (:project_dependencies, :argument_names, :loaded_package, :recorded_docs, :each_loaded_method,
+    operations = (:project_dependencies, :argument_names, :loaded_package, :loaded_roots, :recorded_docs, :each_loaded_method,
                   :sync_binding, :drop_method!, :declares_keywords, :package_uuid, :body_function, :has_padding,
                   :module_site, :recorded_path)
     allowed = Tuple{String,Symbol}[]
@@ -197,7 +197,6 @@ function internal_sites()
         ("src/workload.jl", :compiled_methods),
         ("src/workload.jl", :keyword_body),
         ("src/checks_load_order.jl", :resolves_through_using),
-        ("src/checks_interface.jl", :top_modules),
         ("src/checks_imports.jl", :imported_module),
     )
     append!(allowed, pending)

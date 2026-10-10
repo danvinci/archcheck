@@ -119,6 +119,9 @@ function package_uuid(package::Module)
     id.uuid
 end
 
+# Every package root module this Julia has loaded, from `Base.loaded_modules`.
+loaded_roots() = collect(Module, values(Base.loaded_modules))
+
 # The root module of the loaded package of this name, from `Base.loaded_modules`; nothing when none is loaded.
 function loaded_package(name::String)
     for (id, mod) in Base.loaded_modules

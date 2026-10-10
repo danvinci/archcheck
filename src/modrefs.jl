@@ -359,7 +359,7 @@ end
 function top_modules()
     by_name = Dict{Symbol,Module}()
     shared = Set{Symbol}()
-    for loaded in values(Base.loaded_modules)
+    for loaded in loaded_roots()
         name = nameof(loaded)
         held = get(by_name, name, loaded)
         held === loaded || push!(shared, name)
