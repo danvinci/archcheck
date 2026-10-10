@@ -170,8 +170,17 @@ function inference_sites()
     CallerWhitelist(callees, allowed)
 end
 
+# The internals ArchCheck reads on purpose: Base's reflection, loading and parser, Core's lowered code and method
+# types, the compiler's inference, recorded docstrings, and the exhibit modules whose planted internals the gate names.
+const READ_INTERNALS = (Base, Core, Base.Compiler, Base.Docs, Exhibits, Exhibits.Low, Exhibits.Shape,
+                        Exhibits.Contracts)
+
 function static_checks()
-    active = collect(Check, ArchCheck.CHECKS)
+    active = Check[]
+    for check in ArchCheck.CHECKS
+        check isa ReachesInternal || push!(active, check)
+    end
+    push!(active, ReachesInternal(allowed = READ_INTERNALS))
     push!(active, parse_sites())
     push!(active, inference_sites())
     waits = UnreadWaits(allowed = (:probe_wait, :wait_synced))

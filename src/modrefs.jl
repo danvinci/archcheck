@@ -34,6 +34,32 @@ function loaded_module(pkg::Module, key::Symbol)::Union{Nothing,Module}
     found
 end
 
+# The module `name` binds in a loaded module, as Julia resolves it there: its own definitions, what it imports,
+# and its `as` and `const` aliases.
+function bound_module(home::Module, name::Symbol)
+    isdefined(home, name) || return nothing
+    named = getfield(home, name)
+    named isa Module ? named : nothing
+end
+
+# The loaded module a qualifier names, read where the code sits: a name `names` binds, else a member module of
+# the module its own qualifier names. A name the code binds locally names no module.
+function resolve_loaded_module(qualifier, names, bound)
+    name = node_symbol(qualifier)
+    if !isnothing(name)
+        name in bound && return nothing
+        return bound_module(names, name)
+    end
+    JS.kind(qualifier) == K"." || return nothing
+    path_parts = child_nodes(qualifier)
+    child_count(path_parts) != 2 && return nothing
+    enclosing = resolve_loaded_module(path_parts[1], names, bound)
+    isnothing(enclosing) && return nothing
+    member = node_symbol(path_parts[2])
+    isnothing(member) && return nothing
+    bound_module(enclosing, member)
+end
+
 # The names module paths resolve against.
 struct ModuleNames
     known::Set{Symbol}          # every project module, by dotted key below the package
@@ -96,13 +122,6 @@ function resolve_qualifier(modules::ModuleNames, from, scope, path)
     deeper, spanned + 1
 end
 
-# One name of an import path: an identifier, or a macro's name with its `@` as Julia binds it.
-function importpath_name(child)::Union{Nothing,Symbol}
-    JS.kind(child) == K"macro_name" || return node_symbol(child)
-    inner = first(child_nodes(child))
-    Symbol("@", inner.val)
-end
-
 # Leading-dot count and names of an import path: `..A.B` -> (2, [:A, :B]).
 function importpath_parts(path)
     dots = 0
@@ -110,7 +129,7 @@ function importpath_parts(path)
     children = child_nodes(path)
     isnothing(children) && return dots, names
     for child in children
-        name = importpath_name(child)
+        name = named_symbol(child)
         isnothing(name) && continue
         if name === :. && isempty(names)
             dots += 1

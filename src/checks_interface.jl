@@ -47,29 +47,75 @@ function check_blanket_exports(index::SourceIndex)
     findings
 end
 
-# The loaded modules a reference resolves against.
+# The loaded modules a reference resolves against, and the outside ones whose internals the package reads on purpose.
 struct ReachModules
     by_key::Dict{Symbol,Module}   # each package module by its dotted key
-    tracked::Set{Module}          # the package's own modules, the only ones a reach is judged in
+    tracked::Set{Module}          # the package's own modules, which a finding names by key
     package::Module               # the package root, which an entry script knows by its name
+    allowed::Set{Module}          # outside modules whose internal names the package reads on purpose
+    top::Dict{Symbol,Module}      # each loaded top-level module by name, where a path with no leading dot opens
 end
 
-function ReachModules(modules, package::Module)
+# Every top-level module this Julia has loaded, by name. A name two loaded packages share names neither.
+function top_modules()
+    by_name = Dict{Symbol,Module}()
+    shared = Set{Symbol}()
+    for loaded in values(Base.loaded_modules)
+        name = nameof(loaded)
+        held = get(by_name, name, loaded)
+        held === loaded || push!(shared, name)
+        by_name[name] = loaded
+    end
+    for name in shared
+        delete!(by_name, name)
+    end
+    by_name
+end
+
+function ReachModules(modules, package::Module, allowed)
     by_key = Dict{Symbol,Module}()
     for loaded in modules
         key = module_key(loaded)
         by_key[key] = loaded
     end
     tracked = Set{Module}(modules)
-    ReachModules(by_key, tracked, package)
+    opened = Set{Module}(allowed)
+    top = top_modules()
+    ReachModules(by_key, tracked, package, opened, top)
 end
 
-# The module `name` binds in a loaded module, as Julia resolves it there: its own definitions, what it imports,
-# and its `as` and `const` aliases.
-function bound_module(home::Module, name::Symbol)
-    isdefined(home, name) || return nothing
-    named = getfield(home, name)
-    named isa Module ? named : nothing
+# Where an import path opens, and the names after its opening. With no leading dot it opens at the loaded top-level
+# module its first name names; with dots, at the module its first name binds in `home` or a parent per further dot.
+function path_opening(modules::ReachModules, home, dots, path)
+    rest = path[2:end]
+    if dots == 0
+        opened = get(modules.top, first(path), nothing)
+        return opened, rest
+    end
+    isnothing(home) && return nothing, rest
+    enclosing = home
+    for _ in 2:dots
+        enclosing = parentmodule(enclosing)
+    end
+    opened = bound_module(enclosing, first(path))
+    isnothing(opened) && return enclosing, path   # a name such as `..f`, read through the enclosing module
+    opened, rest
+end
+
+# What an import path reads from `home`: each name after its opening, through the module before it, and the module
+# the path names whole, if it does; nothing when the path opens at no loaded module.
+function path_target(modules::ReachModules, home, dots, path)
+    isempty(path) && return nothing
+    current, rest = path_opening(modules, home, dots, path)
+    isnothing(current) && return nothing
+    reads = Tuple{Module,Symbol}[]
+    for name in rest
+        push!(reads, (current, name))
+        member = bound_module(current, name)
+        isnothing(member) && return (; reads, named = nothing)
+        current = member
+    end
+    (; reads, named = current)
 end
 
 # The modules an entry script binds by name. A script runs where the package is loaded, so it knows the package by
@@ -77,6 +123,7 @@ end
 struct ScriptNames
     bound::Dict{Symbol,Module}   # name -> the loaded module it binds
     used::Vector{Module}         # modules a `using` line brings in whole, whose exported modules the script sees
+    home::Union{Nothing,Module}  # the loaded module a script's module block stands for; nothing at a file's top level
 end
 
 function bound_module(script::ScriptNames, name::Symbol)
@@ -88,24 +135,6 @@ function bound_module(script::ScriptNames, name::Symbol)
         isnothing(exported) || return exported
     end
     nothing
-end
-
-# The loaded module a qualifier names, read where the code sits: a name `names` binds, else a member module of
-# the module its own qualifier names. A name the code binds locally names no module.
-function resolve_loaded_module(qualifier, names, bound)
-    name = node_symbol(qualifier)
-    if !isnothing(name)
-        name in bound && return nothing
-        return bound_module(names, name)
-    end
-    JS.kind(qualifier) == K"." || return nothing
-    path_parts = child_nodes(qualifier)
-    child_count(path_parts) != 2 && return nothing
-    enclosing = resolve_loaded_module(path_parts[1], names, bound)
-    isnothing(enclosing) && return nothing
-    member = node_symbol(path_parts[2])
-    isnothing(member) && return nothing
-    bound_module(enclosing, member)
 end
 
 function collect_const_alias!(script::ScriptNames, assignment)
@@ -138,21 +167,41 @@ function collect_const_aliases!(script::ScriptNames, node)
     end
 end
 
-# The loaded module an import path names whole; nothing for a path to anything outside the package.
-function clause_module(names::ModuleNames, package::Module, path_node)
+# The loaded module an entry script's import path names whole; nothing for a path to a name inside a module.
+function script_path_module(modules::ReachModules, path_node)
     dots, path = importpath_parts(path_node)
-    no_scope = Symbol[]
-    key = whole_module(names, no_scope, dots, path)
-    isnothing(key) && return nothing
-    loaded_module(package, key)
+    target = path_target(modules, nothing, dots, path)
+    isnothing(target) && return nothing
+    target.named
 end
 
-# The modules one plain clause binds: a whole-module path binds its last name, and `using` it brings its exports;
-# a listed name binds when it names a module. A renamed clause binds through the index's renames instead.
-function plain_clause!(script::ScriptNames, names::ModuleNames, package::Module, clause, line_kind)
+# A listed name of a `:` clause and the name it binds in the script: itself, or the name after its `as`.
+function listed_binding(item)
+    if JS.kind(item) == K"as"
+        renamed = renamed_parts(item)
+        return renamed.path, renamed.bound
+    end
+    _, path = importpath_parts(item)
+    bound = length(path) == 1 ? only(path) : nothing
+    path, bound
+end
+
+# The modules one clause binds in a script: a path naming a module whole binds its last name, or the name after
+# `as`, and `using` it brings its exports; a listed name binds when it names a module.
+function script_clause!(script::ScriptNames, modules::ReachModules, clause, line_kind)
     kind = JS.kind(clause)
+    if kind == K"as"
+        renamed = renamed_parts(clause)
+        target = path_target(modules, nothing, renamed.dots, renamed.path)
+        isnothing(target) && return
+        named = target.named
+        isnothing(named) && return
+        isnothing(renamed.bound) && return
+        script.bound[renamed.bound] = named
+        return
+    end
     if kind == K"importpath"
-        loaded = clause_module(names, package, clause)
+        loaded = script_path_module(modules, clause)
         isnothing(loaded) && return
         _, path = importpath_parts(clause)
         script.bound[last(path)] = loaded
@@ -163,41 +212,38 @@ function plain_clause!(script::ScriptNames, names::ModuleNames, package::Module,
     end
     kind == K":" || return
     children = child_nodes(clause)
-    base = clause_module(names, package, first(children))
+    base = script_path_module(modules, first(children))
     isnothing(base) && return
     for item in children[2:end]
-        JS.kind(item) == K"importpath" || continue
-        _, listed = importpath_parts(item)
-        length(listed) == 1 || continue
-        name = only(listed)
-        member = bound_module(base, name)
+        path, bound = listed_binding(item)
+        length(path) == 1 || continue
+        isnothing(bound) && continue
+        member = bound_module(base, only(path))
         if !isnothing(member)
-            script.bound[name] = member
+            script.bound[bound] = member
         end
     end
 end
 
-function script_names(tree, names::ModuleNames, package::Module)
-    script = ScriptNames(Dict{Symbol,Module}(), Module[])
-    script.bound[nameof(package)] = package
-    no_scope = Symbol[]
-    renames = code_aliases!(Dict{Symbol,Symbol}(), names, no_scope, tree)
-    renamed = loaded_aliases(renames, package)
-    merge!(script.bound, renamed)
-    each_clause((clause, line_kind) -> plain_clause!(script, names, package, clause, line_kind), tree)
-    collect_const_aliases!(script, tree)
-    script
+# The loaded top-level module a script's module block names, as a fixture package's spine read as a script does.
+function script_home(modules::ReachModules, tree)
+    block = tree.parent
+    isnothing(block) && return nothing
+    is_module_block(block) || return nothing
+    name = module_name(block)
+    isnothing(name) && return nothing
+    get(modules.top, name, nothing)
 end
 
-# The loaded module behind each name an `as` clause binds; a rename of a module this Julia did not load drops out.
-function loaded_aliases(renames, package::Module)
-    aliases = Dict{Symbol,Module}()
-    for (name, key) in renames
-        renamed = loaded_module(package, key)
-        isnothing(renamed) && continue
-        aliases[name] = renamed
-    end
-    aliases
+# The modules a script binds by name: Core and Base, as every module does, the package, and its own clauses.
+function script_names(tree, modules::ReachModules, home)
+    package = modules.package
+    bound = Dict{Symbol,Module}(:Core => Core, :Base => Base)
+    bound[nameof(package)] = package
+    script = ScriptNames(bound, Module[], home)
+    each_clause((clause, line_kind) -> script_clause!(script, modules, clause, line_kind), tree)
+    collect_const_aliases!(script, tree)
+    script
 end
 
 # A module's name as a finding states it: its dotted key in the package, its full path outside it.
@@ -207,37 +253,79 @@ function module_label(named::Module, modules::ReachModules)
     join(path, ".")
 end
 
-# Code in `from` reading `name` through `through`; nothing when `through` holds no such name or declares it.
-function reach_finding(modules::ReachModules, through::Module, name::Symbol, from::Symbol, file, line, via::Symbol)
-    isdefined(through, name) || return nothing
-    Base.ispublic(through, name) && return nothing
-    defining = Base.binding_module(through, name)
-    owner = module_label(defining, modules)
-    symbol = "$(module_key(through)).$name"
-    detail = "reads a name through a module that neither exports it nor declares it public"
-    evidence = [:via => string(via), :owner => owner]
-    Finding(from, :reaches_internal, file, symbol, line, detail, evidence)
-end
-
-# Each name a using or import clause binds from one of the package's modules.
-function clause_reaches!(findings, refs, modules::ReachModules)
-    for ref in refs
-        is_clause = ref.via === :using || ref.via === :import
-        is_clause || continue
-        through = get(modules.by_key, ref.to, nothing)
-        isnothing(through) && continue
-        for name in ref.names
-            found = reach_finding(modules, through, name, ref.from, ref.file, ref.line, ref.via)
-            isnothing(found) || push!(findings, found)
-        end
-    end
-end
-
 # One piece of code references are read in: a source file's module code, or an entry script.
 struct ReachUnit
     path::String          # repo-relative path, or an entry script's walked path
     tree::JS.SyntaxNode   # the code
     from::Symbol          # key of the module the code belongs to; :Entry for an entry script
+end
+
+# The module the code of a unit sits in, which reads its own names freely; an entry script sits in none.
+code_home(names::Module) = names
+code_home(script::ScriptNames) = script.home
+
+# The unit's code reading `name` through `through`; nothing when `through` is the code's own module or one the
+# package reads on purpose, holds no such name, or declares it.
+function reach_finding(modules::ReachModules, unit::ReachUnit, home, through::Module, name::Symbol, line, via::Symbol)
+    through === home && return nothing
+    through in modules.allowed && return nothing
+    isdefined(through, name) || return nothing
+    Base.ispublic(through, name) && return nothing
+    defining = Base.binding_module(through, name)
+    owner = module_label(defining, modules)
+    reached = module_label(through, modules)
+    symbol = "$reached.$name"
+    detail = "reads a name through a module that neither exports it nor declares it public"
+    evidence = [:via => string(via), :owner => owner]
+    Finding(unit.from, :reaches_internal, unit.path, symbol, line, detail, evidence)
+end
+
+# Each name one clause reads, with the module it reads it through: its path's names after the opening, and each
+# name a `:` list binds from the module that path names whole.
+function clause_reads(modules::ReachModules, home, clause)
+    kind = JS.kind(clause)
+    if kind == K"as"
+        source = first(child_nodes(clause))
+        return clause_reads(modules, home, source)
+    end
+    if kind == K"importpath"
+        dots, path = importpath_parts(clause)
+        target = path_target(modules, home, dots, path)
+        isnothing(target) && return nothing
+        return target.reads
+    end
+    kind == K":" || return nothing
+    children = child_nodes(clause)
+    dots, path = importpath_parts(first(children))
+    base = path_target(modules, home, dots, path)
+    isnothing(base) && return nothing
+    named = base.named
+    isnothing(named) && return nothing
+    reads = copy(base.reads)
+    for item in children[2:end]
+        source = clause_source(item)
+        _, item_names = importpath_parts(source)
+        for name in item_names
+            push!(reads, (named, name))
+        end
+    end
+    reads
+end
+
+function clause_reach!(findings, modules::ReachModules, unit::ReachUnit, home, clause, line_kind)
+    reads = clause_reads(modules, home, clause)
+    isnothing(reads) && return
+    via = Symbol(string(line_kind))
+    line = source_line(clause.parent)
+    for (through, name) in reads
+        found = reach_finding(modules, unit, home, through, name, line, via)
+        isnothing(found) || push!(findings, found)
+    end
+end
+
+# Each name a using or import clause of the unit binds through a module.
+function clause_reaches!(findings, unit::ReachUnit, modules::ReachModules, home)
+    each_clause((clause, line_kind) -> clause_reach!(findings, modules, unit, home, clause, line_kind), unit.tree)
 end
 
 # Whether `node` sits in a module block inside `root`: that block's code is a unit of its own.
@@ -253,7 +341,7 @@ end
 # The scoped walk's callback over one unit: each step of a qualified path, judged where the walk meets it.
 struct QualifiedReader{N}
     findings::Vector{Finding}   # where each reach is recorded
-    modules::ReachModules       # the package's modules, the only ones a reach is judged in
+    modules::ReachModules       # the modules a reference resolves against
     names::N                    # what a bare name binds where the code sits: its loaded module, or a script's names
     unit::ReachUnit             # the code walked
 end
@@ -263,11 +351,8 @@ function (reader::QualifiedReader)(qualifier, member, line, bound)
     in_inner_module(qualifier, unit.tree) && return
     through = resolve_loaded_module(qualifier, reader.names, bound)
     isnothing(through) && return
-    modules = reader.modules
-    through in modules.tracked || return
-    home = get(modules.by_key, unit.from, nothing)
-    through === home && return
-    found = reach_finding(modules, through, member, unit.from, unit.path, line, :qualified)
+    home = code_home(reader.names)
+    found = reach_finding(reader.modules, unit, home, through, member, line, :qualified)
     isnothing(found) || push!(reader.findings, found)
 end
 
@@ -280,27 +365,23 @@ function qualified_reaches!(findings, unit::ReachUnit, modules::ReachModules, na
     walk_scoped!(scan, unit.tree, scope, reader)
 end
 
-# reaches-internal: a name read through a package module that neither exports nor declares it: each qualified step,
-# each name a clause binds, in source and entry scripts alike. A module reading its own names is no reach.
-function check_reaches_internal(index::SourceIndex, mods, package::Module)
-    modules = ReachModules(mods, package)
+# reaches-internal: a name read through any module that neither exports nor declares it, by a qualified step or a
+# clause, in source and entry scripts alike. A module reading its own names is no reach.
+function check_reaches_internal(index::SourceIndex, mods, package::Module; allowed = ())
+    modules = ReachModules(mods, package, allowed)
     findings = Finding[]
-    clause_reaches!(findings, index.refs, modules)
     for file in index.files
         home = get(modules.by_key, file.mod, nothing)
         isnothing(home) && continue
         unit = ReachUnit(file.path, file.tree, file.mod)
+        clause_reaches!(findings, unit, modules, home)
         qualified_reaches!(findings, unit, modules, home)
     end
-    keys_known = Set{Symbol}(keys(modules.by_key))
-    package_name = nameof(package)
-    module_names = ModuleNames(keys_known, package_name)
     for (path, tree) in index.scripts
-        script_refs = ModRef[]
-        walk_modrefs!(script_refs, :Entry, Symbol[], path, module_names, tree)
-        clause_reaches!(findings, script_refs, modules)
-        names = script_names(tree, module_names, package)
         unit = ReachUnit(path, tree, :Entry)
+        home = script_home(modules, tree)
+        clause_reaches!(findings, unit, modules, home)
+        names = script_names(tree, modules, home)
         qualified_reaches!(findings, unit, modules, names)
     end
     unique(found -> (found.file, found.line, found.symbol), findings)

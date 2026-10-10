@@ -13,8 +13,10 @@ function precompile_checks()
         ScanSeeds(("src",)),
         DeclaredExtensions(),
         UnreachedMethods(),
+        ReachesInternal(allowed = (Base, Core, Base.Compiler, Base.Docs)),
     )
-    (CHECKS..., configured...)
+    defaults = filter(check -> !(check isa ReachesInternal), CHECKS)
+    (defaults..., configured...)
 end
 
 if ccall(:jl_generating_output, Cint, ()) == 1

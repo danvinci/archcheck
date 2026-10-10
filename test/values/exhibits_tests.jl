@@ -33,6 +33,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("nonliteral_include", "src/shape/Shape.jl", ""),
     ("overlapping_call", "src/shape/plants.jl", "ask_twice"),
     ("private_extension", "src/shape/plants.jl", "Low.extend_me"),
+    ("reaches_internal", "src/low/Low.jl", "Core.eval"),
     ("reaches_internal", "src/shape/Shape.jl", "Low._secret"),
     ("reaches_internal", "src/shape/plants.jl", "Low.extend_me"),
     ("reaches_internal", "src/shape/workload.jl", "Low.extend_me"),

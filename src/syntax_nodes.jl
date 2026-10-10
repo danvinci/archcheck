@@ -47,6 +47,16 @@ function node_symbol(node)::Union{Nothing,Symbol}
     value
 end
 
+# The name an identifier or a macro's name binds, the macro's with its `@` as Julia binds it.
+function named_symbol(node)::Union{Nothing,Symbol}
+    JS.kind(node) == K"macro_name" || return node_symbol(node)
+    parts = child_nodes(node)
+    child_count(parts) == 1 || return nothing
+    inner = node_symbol(only(parts))
+    isnothing(inner) && return nothing
+    Symbol("@", inner)
+end
+
 # A node whose children are values: a call's arguments, a parameter list, a tuple's members.
 function holds_values(kind)
     kind == K"call" || kind == K"parameters" || kind == K"tuple"

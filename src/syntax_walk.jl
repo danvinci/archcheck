@@ -172,8 +172,8 @@ function scope_dot!(scan, node, scope, on_qualified)
         return
     end
     children = child_nodes(node)
-    member = children[2].val
-    member isa Symbol || return
+    member = named_symbol(children[2])
+    isnothing(member) && return
     note_member!(scan, scope, children[1], member)
     isnothing(on_qualified) && return
     line = source_line(node)

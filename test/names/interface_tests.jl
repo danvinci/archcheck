@@ -63,7 +63,19 @@ using .Cc
     bb_only() = 2
     end
     reads_own() = Util.bb_only()
+    include("foreign.jl")
     end
+    """,
+    "bb/foreign.jl" => """
+    using Base: unwrap_unionall, tail
+    import Base.isType
+    import Core.Compiler
+    import Base.Docs as D
+    using Random: CloseOpen01
+    hidden(t) = Base.unwrap_unionall(t)
+    docs(m) = D.meta(m)
+    widened(x) = Core.Compiler.widenconst(x)
+    inlined() = Base.@_inline_meta
     """,
     "cc/Cc.jl" => """
     module Cc
@@ -78,7 +90,10 @@ using .Cc
     through_module() = A.g()
     binds_no_util() = Util.bb_only()
     """,
-])
+], """
+[deps]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+""")
 
 function reached_from(script; repeat_dir = false)
     scripts = mktempdir()
@@ -137,8 +152,14 @@ end
         import InternalNames as Renamed
         Renamed.hidden()
         Renamed.named()
+        Base.unwrap_unionall(Int)
+        using Base: isType
+        module InternalNames
+        InternalNames.hidden()
+        end
         """
     expected = [
+        ("Base.isType", 21), ("Base.unwrap_unionall", 20),
         ("InternalNames.hidden", 2), ("InternalNames.hidden", 4), ("InternalNames.hidden", 7),
         ("InternalNames.hidden", 12), ("InternalNames.hidden", 18),
     ]
@@ -191,6 +212,7 @@ end
         ("Hi", "Geo.Cuts.Ring", "qualified", "Geo.Cuts"),
         ("Hi", "Low._lowpriv", "qualified", "Low"),
         ("Hi", "Geo.gauge", "qualified", "Low"),
+        ("Hi", "Nested.root_measure", "import", "Nested"),
     ])
 end
 
@@ -261,6 +283,28 @@ end
     ])
 end
 
+@testset "a reference reaches an outside module's internal name, unless the check allows that module" begin
+    ctx = case_context(PACKAGE_PATH)
+    foreign_path = joinpath("src", "bb", "foreign.jl")
+    found = ArchCheck.run(ReachesInternal(), ctx)
+    rows = Set((finding.symbol, ev(finding, :via), ev(finding, :owner), finding.line)
+               for finding in found if finding.file == foreign_path)
+    @test rows == Set([
+        ("Base.unwrap_unionall", "using", "Base", 1),
+        ("Base.isType", "import", "Base", 2),
+        ("Core.Compiler", "import", "Core", 3),
+        ("Random.CloseOpen01", "using", "Random", 5),
+        ("Base.unwrap_unionall", "qualified", "Base", 6),
+        ("Base.Docs.meta", "qualified", "Base.Docs", 7),
+        ("Core.Compiler", "qualified", "Core", 8),
+        ("Base.Compiler.widenconst", "qualified", "Base.Compiler", 8),
+        ("Base.@_inline_meta", "qualified", "Base", 9),
+    ])
+    allowed = ArchCheck.run(ReachesInternal(allowed = (Base, Random)), ctx)
+    kept = Set(finding.symbol for finding in allowed if finding.file == foreign_path)
+    @test kept == Set(["Base.Docs.meta", "Core.Compiler", "Base.Compiler.widenconst"])
+end
+
 @testset "a qualifier resolves from the module its code sits in, so two modules of one name stay apart" begin
     scripts = mktempdir()
     script = """
@@ -276,6 +320,7 @@ end
     @test rows == Set([
         (:Aa, "Aa.Util.aa_only", 10),
         (:Bb, "Bb.Util.bb_only", 7),
+        (:Entry, "PackagePath.Aa", 1),
         (:Entry, "Aa.Util", 1),
         (:Entry, "Aa.Util.aa_only", 2),
     ])
