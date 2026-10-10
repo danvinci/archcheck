@@ -1,5 +1,71 @@
 # Signatures: the name a method defines, the names and types it binds.
 
+"""The locals one scope binds, each with the identifier that declares the binding the name resolves to there."""
+struct Bindings
+    declared::Dict{Symbol,JS.SyntaxNode}   # name -> its declaring identifier
+end
+
+Bindings() = Bindings(Dict{Symbol,JS.SyntaxNode}())
+
+Base.in(name::Symbol, bound::Bindings) = haskey(bound.declared, name)
+Base.copy(bound::Bindings) = Bindings(copy(bound.declared))
+Base.empty(::Bindings) = Bindings()
+
+# A binder declares a new binding, which shadows one the scope around it holds.
+function Base.union!(bound::Bindings, extra::Bindings)
+    merge!(bound.declared, extra.declared)
+    bound
+end
+
+function Base.setdiff!(bound::Bindings, names::Vector{Symbol})
+    for name in names
+        delete!(bound.declared, name)
+    end
+    bound
+end
+
+# A plain name set keeps the name; a scope's bindings keep the identifier that declares it.
+declare!(names, node) = push!(names, node.val)
+
+function declare!(bound::Bindings, node)
+    bound.declared[node.val] = node
+    bound
+end
+
+"""The names one scope's own statements bind: assignments, each at its first assignment, and `local` lines."""
+struct Assigned{S}
+    assigned::S   # names assignments bind
+    declared::S   # names a `local` line declares
+end
+
+function assignments(bound)
+    assigned = empty(bound)
+    declared = empty(bound)
+    Assigned(assigned, declared)
+end
+
+function declare!(found::Assigned{Bindings}, node)
+    get!(found.assigned.declared, node.val, node)
+    found
+end
+
+declare!(found::Assigned, node) = declare!(found.assigned, node)
+
+# An assignment reuses a binding an enclosing local scope holds; a `local` line makes a new one.
+function adopt!(bound, found::Assigned)
+    union!(bound, found.declared)
+    adopt_assigned!(bound, found.assigned)
+end
+
+adopt_assigned!(bound, assigned) = union!(bound, assigned)
+
+function adopt_assigned!(bound::Bindings, assigned::Bindings)
+    for (name, node) in assigned.declared
+        get!(bound.declared, name, node)
+    end
+    bound
+end
+
 # A call, a `where` wrapping a call, or a return type on a call (`f(x)::T`).
 # `x::T` is a typed binding.
 function is_sig(node)
@@ -146,10 +212,37 @@ function named_head!(names, node)
     _argname!(names, children[1])
 end
 
+# The name a macro call calls, bare or qualified, with its `@`.
+function macro_call_name(call)
+    head = first(child_nodes(call))
+    if JS.kind(head) == K"."
+        head = last(child_nodes(head))
+    end
+    named_symbol(head)
+end
+
+# `@nospecialize(x)` or `@specialize(x)`: compiler hints that leave `x` the argument it names.
+function is_argument_hint(node)
+    JS.kind(node) == K"macrocall" || return false
+    name = macro_call_name(node)
+    name === Symbol("@nospecialize") || name === Symbol("@specialize")
+end
+
+# A scope's bindings see through a hint to the argument it names. A plain name set keeps the hinted name out, as the
+# checks reading one were built on.
+hinted_argname!(_names, _node) = nothing
+
+function hinted_argname!(names::Union{Bindings,Assigned{Bindings}}, node)
+    children = child_nodes(node)
+    child_count(children) == 2 || return
+    _argname!(names, children[2])
+end
+
 # The parameter names a signature binds. Inside the body these shadow any module name,
 # so a body mentioning one is reading its own local.
 function _argname!(names, node)
     kind = JS.kind(node)
+    is_argument_hint(node) && return hinted_argname!(names, node)
     if kind == K"parameters" || kind == K"tuple" || kind == K"braces"
         children = child_nodes(node)
         isnothing(children) && return
@@ -168,8 +261,31 @@ function _argname!(names, node)
         named_head!(names, node)
         return
     end
-    node.val isa Symbol && push!(names, node.val)
+    node.val isa Symbol && declare!(names, node)
     nothing
+end
+
+# The identifier a type name sits in, unwrapping `<:` and `{}` to the bare identifier.
+function type_name_node(node)
+    isnothing(node_symbol(node)) || return node
+    children = child_nodes(node)
+    child_count(children) == 0 && return nothing
+    kind = JS.kind(node)
+    kind == K"<:" || kind == K"curly" || return nothing
+    type_name_node(children[1])
+end
+
+# Declares the name a signature defines at its identifier: a bare head, or the type a curly head names.
+function declare_sig_name!(names, signature)
+    parts = call_parts(signature)
+    isnothing(parts) && return
+    head = parts.head
+    if JS.kind(head) == K"curly"
+        head = type_name_node(head)
+    end
+    isnothing(head) && return
+    isnothing(node_symbol(head)) && return
+    declare!(names, head)
 end
 
 # Type variables on `where` clauses, including nested and bounded (`T<:Integer`) forms.
@@ -205,13 +321,14 @@ function call_argnames!(names, parts)
 end
 
 # The names a signature binds: `where` variables, a callable's receiver, and every argument.
-function sig_argnames(signature)
-    names = Symbol[]
+function sig_argnames!(names, signature)
     where_vars!(names, signature)
     parts = call_parts(signature)
     isnothing(parts) && return names
     call_argnames!(names, parts)
 end
+
+sig_argnames(signature) = sig_argnames!(Symbol[], signature)
 
 function is_method_form(node)
     kind = JS.kind(node)

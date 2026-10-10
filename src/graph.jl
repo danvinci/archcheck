@@ -323,6 +323,7 @@ function file_refs!(build::IndexBuild, home, scan::FileScan)
     for read in scan.reads
         read.in_signature && continue
         read.in_export && continue
+        is_local_read(read) && continue
         if is_member(read)
             reads_package_name(build, home, read) || continue
         end
@@ -464,6 +465,7 @@ end
 # Every name outside code reads, a member's included, keeps a definition it names alive.
 function add_external!(build::IndexBuild, code::EntryCode)
     for read in code.scan.reads
+        is_local_read(read) && continue
         push!(build.external, read.name)
     end
 end

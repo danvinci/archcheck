@@ -152,6 +152,7 @@ function judge_read!(edges, judge::LateJudge, position::Int, readers, read::Name
     isnothing(form) && return edges
     read.in_signature && return edges
     read.is_quoted && return edges
+    is_local_read(read) && return edges
     file =judge.walk.index.files[position]
     reader = loaded_reader!(readers, form, file.tree)
     isnothing(reader) && return edges

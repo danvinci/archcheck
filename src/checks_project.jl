@@ -191,6 +191,7 @@ function written_names(scan::FileScan)
     written = Dict{Symbol,Set{Symbol}}()
     for read in scan.reads
         read.in_signature && continue
+        is_local_read(read) && continue
         isnothing(read.def) && continue
         names = get!(Set{Symbol}, written, read.def)
         push!(names, read.name)

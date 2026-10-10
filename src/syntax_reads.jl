@@ -104,11 +104,25 @@ end
 function note_free_name!(walk::CodeWalk, node, scope, in_export = false)
     name = read_name(node)
     isnothing(name) && return
-    name in scope.bound && return
+    binding = get(scope.bound.declared, name, nothing)
+    if !isnothing(binding)
+        note_local_read!(walk, node, name, binding, scope)
+        return
+    end
     is_declared_name(node, name) && return
     line = source_line(node)
     is_quoted = is_lone_quote(node)
-    read = NameRead(name, nothing, nothing, scope.target, scope.method, line, scope.in_signature, in_export, is_quoted)
+    read = NameRead(name, nothing, nothing, nothing, scope.target, scope.method, line, scope.in_signature, in_export,
+                    is_quoted)
+    push!(walk.scan.reads, read)
+end
+
+# A local read names the binding it resolves to; the declaring identifier itself reads none. A quoted symbol counts,
+# since code built from it may read the local.
+function note_local_read!(walk::CodeWalk, node, name, binding, scope)
+    binding === node && return
+    line = source_line(node)
+    read = NameRead(name, binding, nothing, nothing, scope.target, scope.method, line, scope.in_signature, false, false)
     push!(walk.scan.reads, read)
 end
 
@@ -141,6 +155,7 @@ function note_member!(walk::CodeWalk, scope, dot, qualifier, member)
         end
     end
     line = source_line(dot)
-    read = NameRead(member, qualifier, through, scope.target, scope.method, line, scope.in_signature, false, false)
+    read = NameRead(member, nothing, qualifier, through, scope.target, scope.method, line, scope.in_signature, false,
+                    false)
     push!(walk.scan.reads, read)
 end

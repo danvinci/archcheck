@@ -13,6 +13,7 @@ function module_reads(files)
     names = Set{Symbol}()
     for file in files, read in file.scan.reads
         is_member(read) && continue
+        is_local_read(read) && continue
         read.is_quoted && continue
         push!(names, read.name)
     end

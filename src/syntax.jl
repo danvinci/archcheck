@@ -18,10 +18,21 @@ struct CallSite
     is_used::Bool        # the call's value is read
 end
 
+"""One local binding the scoped walk opens: an argument, an assigned or declared local, or a `where` parameter."""
+struct LocalBinding
+    name::Symbol                           # the bound name
+    node::JS.SyntaxNode                    # its declaring identifier, which every read of it names
+    line::Int                              # source line of the declaration
+    kind::Symbol                           # :argument, :local, :function for a local method's name, or :parameter
+    def::Union{Nothing,Symbol}             # refs key of the definition holding it; nothing outside any
+    method::Union{Nothing,JS.SyntaxNode}   # outermost method, macro or closure form holding it
+end
+
 """One name code reads, as the index's scoped walk meets it: a bare name, or a member read through a qualifier that
 can name a module. A name the code declares (an argument, a local, a field, a type parameter) is no read."""
 struct NameRead
     name::Symbol                              # the name as Julia binds it, a macro's with its `@`
+    binding::Union{Nothing,JS.SyntaxNode}     # declaring identifier of the local the name resolves to; nothing for a free name
     qualifier::Union{Nothing,JS.SyntaxNode}   # the code a member is read through; nothing for a bare name
     through::Union{Nothing,Module}            # the loaded module the qualifier names, resolved once at index build
     def::Union{Nothing,Symbol}                # refs key of the definition holding the read; nothing outside any
@@ -33,6 +44,7 @@ struct NameRead
 end
 
 is_member(read::NameRead) = !isnothing(read.qualifier)
+is_local_read(read::NameRead) = !isnothing(read.binding)
 
 # One file's top-level defs and every name its code reads; `refs` and `modrefs` file the reads by definition.
 struct FileScan
@@ -48,6 +60,7 @@ struct FileScan
     callsites::Dict{MethodSite,Vector{CallSite}}                 # each method -> the calls its body writes, source order
     forms::Dict{MethodSite,JS.SyntaxNode}                        # each method -> its definition form, nested methods included
     reads::Vector{NameRead}                                      # every name the code reads, in walk order
+    bindings::Vector{LocalBinding}                                    # every local binding the code opens, in walk order
 end
 
 function empty_scan()
@@ -63,7 +76,9 @@ function empty_scan()
     callsites = Dict{MethodSite,Vector{CallSite}}()
     forms = Dict{MethodSite,JS.SyntaxNode}()
     reads = NameRead[]
-    FileScan(funcs, constructors, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms, reads)
+    bindings = LocalBinding[]
+    FileScan(funcs, constructors, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms, reads,
+             bindings)
 end
 
 # `nothing` on failure, so a caller accounts for it.

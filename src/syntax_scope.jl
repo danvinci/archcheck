@@ -17,11 +17,7 @@ end
 # `@eval`, bare or qualified: its code runs at the module's global scope.
 function is_eval_macro(node)
     JS.kind(node) == K"macrocall" || return false
-    head = first(child_nodes(node))
-    if JS.kind(head) == K"."
-        head = last(child_nodes(head))
-    end
-    named_symbol(head) === Symbol("@eval")
+    macro_call_name(node) === Symbol("@eval")
 end
 
 # Assignments and nested method names in this scope. A nested scope keeps its own names, and code `@eval` runs
@@ -30,8 +26,7 @@ function collect_scope_assigns!(bound, node)
     is_eval_macro(node) && return
     if is_method_form(node)
         children = child_nodes(node)
-        name = sig_name(children[1])
-        isnothing(name) || push!(bound, name)
+        declare_sig_name!(bound, children[1])
         return
     end
     is_nested_scope(node) && return
@@ -47,8 +42,9 @@ function collect_scope_assigns!(bound, node)
     end
     if kind == K"local"
         isnothing(children) && return
+        declared = local_names(bound)
         for child in children
-            _argname!(bound, child)
+            _argname!(declared, child)
         end
         return
     end
@@ -102,10 +98,16 @@ function collect_scope_globals!(names, node)
     end
 end
 
+# A `local` line declares into its own set where the scope's statements keep one apart.
+local_names(found::Assigned) = found.declared
+local_names(bound) = bound
+
 function nested_bound(outer, extra, body)
     bound = copy(outer)
     union!(bound, extra)
-    collect_scope_assigns!(bound, body)
+    found = assignments(outer)
+    collect_scope_assigns!(found, body)
+    adopt!(bound, found)
     globals = Symbol[]
     collect_scope_globals!(globals, body)
     setdiff!(bound, globals)
@@ -114,7 +116,7 @@ end
 
 # Names local in `body`, plus the signature's names, minus names the body declares global.
 function body_locals(signature, body, outer)
-    names = sig_argnames(signature)
+    names = sig_argnames!(empty(outer), signature)
     nested_bound(outer, names, body)
 end
 
@@ -197,7 +199,7 @@ function method_child(node, index, outer)
     past_end && return copy(outer)
     if index == 1
         bound = copy(outer)
-        names = sig_argnames(children[1])
+        names = sig_argnames!(empty(outer), children[1])
         union!(bound, names)
         return bound
     end
@@ -207,7 +209,8 @@ end
 function for_child(children, index, outer)
     last_index = length(children)
     if index == last_index
-        extra = bound_before(Set{Symbol}(), children, last_index, iteration_names!, 1)
+        empty_bound = empty(outer)
+        extra = bound_before(empty_bound, children, last_index, iteration_names!, 1)
         return nested_bound(outer, extra, children[index])
     end
     bound_before(outer, children, index, iteration_names!, 1)
@@ -215,14 +218,15 @@ end
 
 function while_child(children, index, outer)
     if index == length(children)
-        return nested_bound(outer, Symbol[], children[index])
+        none = empty(outer)
+        return nested_bound(outer, none, children[index])
     end
     copy(outer)
 end
 
 function generator_child(children, index, outer)
     if index == 1
-        extra = Set{Symbol}()
+        extra = empty(outer)
         for spec in children[2:end]
             iteration_names!(extra, spec)
         end
@@ -245,7 +249,7 @@ function lambda_child(children, index, outer)
         _argname!(bound, children[1])
         return bound
     end
-    names = Symbol[]
+    names = empty(outer)
     _argname!(names, children[1])
     nested_bound(outer, names, children[index])
 end
@@ -257,7 +261,8 @@ function let_child(children, index, outer)
     seeded = copy(outer)
     binding_names!(seeded, children[1])
     if index == length(children)
-        return nested_bound(seeded, Symbol[], children[index])
+        none = empty(outer)
+        return nested_bound(seeded, none, children[index])
     end
     seeded
 end
@@ -266,7 +271,8 @@ function try_child(children, index, outer)
     clause = children[index]
     seeded = copy(outer)
     bind_catch_name!(seeded, clause)
-    nested_bound(seeded, Symbol[], clause)
+    none = empty(outer)
+    nested_bound(seeded, none, clause)
 end
 
 # The left side binds a name. Later children read the names around the node.

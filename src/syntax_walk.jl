@@ -42,7 +42,7 @@ end
 # Which def the refs belong to, which method the calls belong to, and which method form holds the node.
 struct ScanScope
     target::Union{Nothing,Symbol}           # refs key for the body being walked; nothing outside any def
-    bound::Set{Symbol}                      # names bound in this scope
+    bound::Bindings                         # names bound in this scope, each at its declaring identifier
     depth::Int                              # function-def nesting
     loop_depth::Int                         # repeating for, while and generator scopes around the node
     site::Union{Nothing,MethodSite}         # method the calls belong to; nothing on a name-resolution walk
@@ -53,7 +53,54 @@ end
 
 # A scope at the top of a walk: no locals, no loop, no method around it.
 function opening_scope(target, depth, site)
-    ScanScope(target, Set{Symbol}(), depth, 0, site, false, nothing, false)
+    ScanScope(target, Bindings(), depth, 0, site, false, nothing, false)
+end
+
+# A form whose first child declares arguments: a method, a macro, or a closure.
+function is_argument_form(node)
+    is_method_form(node) && return true
+    kind = JS.kind(node)
+    kind == K"macro" || kind == K"->" || kind == K"do"
+end
+
+# The identifier a signature names its method by, as a local method binds it.
+function is_method_name(signature, node)
+    found = Bindings()
+    declare_sig_name!(found, signature)
+    any(declared -> declared === node, values(found.declared))
+end
+
+# Where a declaring identifier sits: a `where` variable, the name of a local method, an argument of the nearest
+# method, macro or closure, or a local of its body.
+function binding_kind(node)
+    child = node
+    current = node.parent
+    while !isnothing(current)
+        children = child_nodes(current)
+        is_first = child_count(children) > 0 && children[1] === child
+        JS.kind(current) == K"where" && !is_first && return :parameter
+        if is_argument_form(current)
+            is_first && is_method_name(children[1], node) && return :function
+            return is_first ? :argument : :local
+        end
+        child = current
+        current = current.parent
+    end
+    :local
+end
+
+# Files each binding `inner` holds that `outer` does not, once: the scope entering it opens it.
+function open_bindings!(walk, outer::Bindings, inner::Bindings, scope)
+    filed = walk.filed
+    for (name, node) in inner.declared
+        get(outer.declared, name, nothing) === node && continue
+        node in filed && continue
+        push!(filed, node)
+        line = source_line(node)
+        kind = binding_kind(node)
+        binding = LocalBinding(name, node, line, kind, scope.target, scope.method)
+        push!(walk.scan.bindings, binding)
+    end
 end
 
 # The scope inside a method form: the outermost form stays the method every read inside it belongs to.
@@ -62,14 +109,15 @@ function retarget(scope::ScanScope, target, bound, form)
     ScanScope(target, bound, scope.depth + 1, scope.loop_depth, scope.site, false, method, scope.in_signature)
 end
 
-function entered_scope(scope, node, index, depth, fn_depth)
+function entered_scope(walk, scope, node, index, depth, fn_depth)
     bound = child_locals(node, index, scope.bound)
+    open_bindings!(walk, scope.bound, bound, scope)
     discarded = child_discarded(node, index, scope.discarded)
     ScanScope(scope.target, bound, fn_depth, depth, scope.site, discarded, scope.method, scope.in_signature)
 end
 
-function entered_scope(scope, node, index)
-    entered_scope(scope, node, index, scope.loop_depth, scope.depth)
+function entered_scope(walk, scope, node, index)
+    entered_scope(walk, scope, node, index, scope.loop_depth, scope.depth)
 end
 
 function read_scope(scope, bound)
@@ -86,13 +134,13 @@ function walk_iteration!(scan, node, scope)
     kind = JS.kind(node)
     if kind == K"in" || kind == K"="
         for index in 2:lastindex(children)
-            child_scope = entered_scope(scope, node, index)
+            child_scope = entered_scope(scan, scope, node, index)
             walk_scoped!(scan, children[index], child_scope)
         end
         return
     end
     for index in eachindex(children)
-        child_scope = entered_scope(scope, node, index)
+        child_scope = entered_scope(scan, scope, node, index)
         walk_iteration!(scan, children[index], child_scope)
     end
 end
@@ -105,7 +153,7 @@ function collect_lhs!(found, node)
     kind = JS.kind(node)
     if kind == K"::"
         isempty(children) || push!(found, last(children))
-    elseif kind == K"." || kind == K"ref" || kind == K"call" || kind == K"dotcall"
+    elseif kind == K"." || kind == K"ref" || kind == K"call" || kind == K"dotcall" || kind == K"$"
         push!(found, node)
     elseif kind == K"=" || kind == K"..."
         isempty(children) || collect_lhs!(found, children[1])
@@ -143,7 +191,7 @@ function walk_gen_spec!(scan, node, scope, interior_depth)
         if !clause
             depth = interior_depth
         end
-        child_scope = entered_scope(scope, node, index, depth, scope.depth)
+        child_scope = entered_scope(scan, scope, node, index, depth, scope.depth)
         if clause
             walk_iteration!(scan, child, child_scope)
         else
@@ -157,6 +205,7 @@ struct CodeWalk{N}
     scan::FileScan                        # the defs, calls and reads the walk records
     names::N                              # what a bare name binds where the code sits: a loaded module, a script's names, or nothing
     named::IdDict{JS.SyntaxNode,Module}   # each dotted qualifier already met -> the loaded module it names
+    filed::IdSet{JS.SyntaxNode}           # declaring identifiers whose binding the scan already holds
 end
 
 # The walk's two read recorders, defined beside the module lookup they resolve qualifiers with.
@@ -173,7 +222,7 @@ function scope_children!(scan, node, scope)
     children = child_nodes(node)
     isnothing(children) && return
     for index in eachindex(children)
-        child_scope = entered_scope(scope, node, index)
+        child_scope = entered_scope(scan, scope, node, index)
         walk_scoped!(scan, children[index], child_scope)
     end
 end
@@ -190,6 +239,11 @@ function scope_dot!(scan, node, scope)
         return
     end
     children = child_nodes(node)
+    # A spliced member, `a.$name`, reads the name it splices.
+    if JS.kind(children[2]) == K"$"
+        walk_scoped!(scan, children[2], scope)
+        return
+    end
     member = named_symbol(children[2])
     isnothing(member) && return
     note_member!(scan, scope, node, children[1], member)
@@ -265,7 +319,7 @@ function nested_method_scope(walk::CodeWalk, scope, signature, form)
     receiver = callable_receiver(signature)
     isnothing(receiver) && return retarget(scope, scope.target, scope.bound, form)
     open_target!(walk, receiver)
-    retarget(scope, receiver, Set{Symbol}(), form)
+    retarget(scope, receiver, Bindings(), form)
 end
 
 # A method outside any other opens a site under its owner, where its calls and forms are filed.
@@ -283,7 +337,7 @@ function method_scope(walk::CodeWalk, scope, node, children)
     walk.scan.forms[site] = node
     open_target!(walk, owner)
     receiver = callable_receiver(signature)
-    bound = isnothing(receiver) ? scope.bound : Set{Symbol}()
+    bound = isnothing(receiver) ? scope.bound : Bindings()
     method = isnothing(scope.method) ? node : scope.method
     ScanScope(owner, bound, scope.depth + 1, 0, site, false, method, scope.in_signature)
 end
@@ -354,6 +408,7 @@ function scope_macro!(scan, node, scope)
         walk_assign_lhs!(scan, argument, noted)
     end
     bound = body_locals(signature, children[2], inner.bound)
+    open_bindings!(scan, inner.bound, bound, inner)
     body_scope = read_scope(inner, bound)
     walk_scoped!(scan, children[2], body_scope)
 end
@@ -365,6 +420,7 @@ function scope_closure!(scan, node, scope)
     noted = signature_scope(closed, scope.bound)
     walk_assign_lhs!(scan, children[1], noted)
     body_bound = child_locals(node, 2, scope.bound)
+    open_bindings!(scan, scope.bound, body_bound, closed)
     body = read_scope(closed, body_bound)
     walk_scoped!(scan, children[2], body)
 end
@@ -379,8 +435,8 @@ function scope_loop!(scan, node, scope)
         if index == last_index
             depth = scope.loop_depth + 1
         end
-        child_scope = entered_scope(scope, node, index, depth, scope.depth)
-        header = kind == K"for" && index != last_index
+        child_scope = entered_scope(scan, scope, node, index, depth, scope.depth)
+        header =kind == K"for" && index != last_index
         if header
             walk_iteration!(scan, children[index], child_scope)
         else
@@ -404,10 +460,10 @@ function scope_generator!(scan, node, scope)
         if index > 2
             depth = interior
         end
-        child_scope = entered_scope(scope, node, index, depth, scope.depth)
+        child_scope = entered_scope(scan, scope, node, index, depth, scope.depth)
         walk_gen_spec!(scan, children[index], child_scope, interior)
     end
-    element_scope = entered_scope(scope, node, 1, interior, scope.depth)
+    element_scope = entered_scope(scan, scope, node, 1, interior, scope.depth)
     walk_scoped!(scan, children[1], element_scope)
 end
 
@@ -555,7 +611,8 @@ end
 function scan_tree(code, names)
     scan = empty_scan()
     named = IdDict{JS.SyntaxNode,Module}()
-    walk = CodeWalk(scan, names, named)
+    filed = IdSet{JS.SyntaxNode}()
+    walk = CodeWalk(scan, names, named, filed)
     scope = opening_scope(nothing, 0, nothing)
     walk_scoped!(walk, code, scope)
     scan
@@ -566,6 +623,7 @@ function absorb_method!(scan, signature, body, scope)
     opened = read_scope(scope, scope.bound)
     absorb_defaults!(scan, signature, opened)
     bound = body_locals(signature, body, scope.bound)
+    open_bindings!(scan, scope.bound, bound, scope)
     body_scope = read_scope(scope, bound)
     walk_scoped!(scan, body, body_scope)
 end
