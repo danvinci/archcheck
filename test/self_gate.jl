@@ -165,43 +165,44 @@ function inference_sites()
     callees = (:typeinf, :typeinf_frame, :code_typed, :code_typed_by_type, :return_types, :report_opt)
     allowed = (
         ("src/methodgraph.jl", :inference_frame),
-        ("src/checks_readers.jl", :producer_shape),
-        ("src/checks_derived.jl", :key_returns_bits),
+        ("src/julia_internals.jl", :inferred_return_types),
         ("src/checks_opt.jl", :analyze_entries),
     )
     CallerWhitelist(callees, allowed)
 end
 
-# Julia internals with no public form in 1.13.1, each read only by an operation of the boundary file that states
-# its contract. The method graph, the workload and three name checks read some still; their lanes move them there.
+# Julia internals with no public form in 1.13.1, each read only in the boundary file, whose every operation states
+# its contract. The method graph still reads some; its lane moves them there.
 function internal_sites()
     callees = (:visit, :kwarg_decl, :bodyfunction, :delete_method, :method_argnames, :fixup_stdlib_path, :moduleloc,
                :meta, :Binding, :datatype_haspadding, :loaded_modules, :env_project_file, :parsed_toml, :PkgId,
                :sync_varname, :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module,
-               :decode_effects)
-    boundary = "src/julia_internals.jl"
-    operations = (:project_dependencies, :argument_names, :loaded_package, :top_modules, :recorded_docs, :each_loaded_method,
-                  :sync_binding, :drop_method!, :declares_keywords, :package_uuid, :body_function, :has_padding,
-                  :module_site, :recorded_path, :compiled_consistency)
-    allowed = Tuple{String,Symbol}[]
-    for operation in operations
-        push!(allowed, (boundary, operation))
-    end
+               :unwrap_unionall, :rewrap_unionall, :has_free_typevars, :uniontypes, :isType, :NativeInterpreter,
+               :InferenceParams, :infer_return_type, :return_types, :generating_output, :specializations,
+               :method_instance, :hasgenerator, :isvarargtype, :get_world_counter, :decode_effects)
     pending = (
         ("src/methodgraph.jl", :known_matches),
+        ("src/methodgraph.jl", :method_for),
+        ("src/methodgraph.jl", :connect_compiled!),
         ("src/methodgraph.jl", :instance_at),
-        ("src/methodgraph.jl", :held_matches),
+        ("src/methodgraph.jl", :call_fact),
         ("src/methodgraph.jl", :passed_methods),
+        ("src/methodgraph.jl", :record_passed!),
+        ("src/methodgraph.jl", :written_from_body),
+        ("src/methodgraph.jl", :walk_methods),
+        ("src/methodgraph.jl", :package_matches),
+        ("src/methodgraph.jl", :entry_instance),
+        ("src/methodgraph.jl", :callee_slot_name),
+        ("src/methodgraph.jl", :matches_generated),
+        ("src/methodgraph.jl", :spread_members),
+        ("src/methodgraph.jl", :held_matches),
+        ("src/methodgraph.jl", :is_held),
         ("src/methodgraph.jl", :statement_site),
         ("src/methodgraph.jl", :is_inlined_package_call),
-        ("src/workload.jl", :existing_specializations),
-        ("src/workload.jl", :compiled_methods),
-        ("src/workload.jl", :keyword_body),
-        ("src/checks_load_order.jl", :resolves_through_using),
-        ("src/checks_imports.jl", :imported_module),
+        ("src/methodgraph.jl", :callee_prefix),
     )
-    append!(allowed, pending)
-    CallerWhitelist(callees, allowed)
+    boundary = ("src/julia_internals.jl",)
+    CallerWhitelist(callees, pending, boundary)
 end
 
 # The internals ArchCheck reads on purpose: Base's reflection, loading and parser, Core's method types, inference and

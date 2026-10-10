@@ -192,8 +192,7 @@ function is_mutable_key(key_type::DataType)
     ismutabletype(key_type) || return false
     found = methods(hash, Tuple{key_type, UInt})
     for method in found
-        signature = Base.unwrap_unionall(method.sig)
-        parameters = signature.parameters
+        parameters = signature_types(method.sig)
         length(parameters) < 2 && continue
         slot = parameters[2]
         slot == Any && continue
@@ -291,7 +290,7 @@ end
 
 # An isbits address still compares by identity. A content key is an isbits value other than an address.
 function key_returns_bits(key)
-    results = Base.return_types(key)
+    results = inferred_return_types(key)
     isempty(results) && return true
     for result in results
         result isa DataType || return false

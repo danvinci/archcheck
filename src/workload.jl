@@ -18,16 +18,9 @@ struct PriorRun end
 records_calls(workload) = true
 records_calls(::PriorRun) = false
 
-# A keyword call compiles the body function, so that specialization counts for the method which declares the keywords.
-function keyword_body(method::Method)
-    keywords = Base.kwarg_decl(method)
-    isempty(keywords) && return nothing
-    Base.bodyfunction(method)
-end
-
 function record_specializations!(existing, method::Method, modules)
     method.module in modules || return
-    for instance in Base.specializations(method)
+    for instance in method_instances(method)
         push!(existing, instance)
     end
 end
@@ -37,7 +30,7 @@ workload made each one; the walk, which makes one for every method it walks, has
 function existing_specializations(modules)
     existing = Base.IdSet{Core.MethodInstance}()
     module_set = Set{Module}(modules)
-    Base.visit(Core.methodtable) do method
+    each_loaded_method() do method
         record_specializations!(existing, method, module_set)
     end
     existing
@@ -47,15 +40,16 @@ end
 specialization_ran(instance::Core.MethodInstance, existing) = instance in existing
 
 function holds_specialization(method::Method, existing)
-    for instance in Base.specializations(method)
+    for instance in method_instances(method)
         specialization_ran(instance, existing) && return true
     end
     false
 end
 
+# A keyword call compiles the body function, so that specialization counts for the method which declares the keywords.
 function is_compiled(method::Method, existing)
     holds_specialization(method, existing) && return true
-    body = keyword_body(method)
+    body = body_function(method)
     isnothing(body) && return false
     for inner in methods(body)
         holds_specialization(inner, existing) && return true
@@ -70,9 +64,7 @@ function argument_is_any(@nospecialize(param))
 end
 
 function all_arguments_any(method::Method)
-    signature = Base.unwrap_unionall(method.sig)
-    signature isa DataType || return false
-    params = signature.parameters
+    params = signature_types(method.sig)
     length(params) < 2 && return false
     last_index = length(params)
     for index in 2:last_index
@@ -82,12 +74,10 @@ function all_arguments_any(method::Method)
 end
 
 function is_type_constructor(method::Method)
-    signature = Base.unwrap_unionall(method.sig)
-    signature isa DataType || return false
-    params = signature.parameters
+    params = signature_types(method.sig)
     isempty(params) && return false
-    head = Base.unwrap_unionall(params[1])
-    Base.isType(head)
+    held = type_object_held(params[1])
+    !isnothing(held)
 end
 
 # A call written as Type{Params}(...) compiles the all-Any constructor Julia installs beside the typed one, so the
@@ -110,32 +100,21 @@ function credit_typed_constructors!(reached, defined, existing)
     end
 end
 
-# A function type carries one leading hash plus its name. A second hash marks a keyword body, a closure, or a local function.
 function is_generated(method::Method)
-    sig = Base.unwrap_unionall(method.sig)
-    sig isa DataType || return false
-    params = sig.parameters
+    params = signature_types(method.sig)
     isempty(params) && return false
     ft = params[1]
     ft === typeof(Core.kwcall) && return true
     # A callable bound by a type variable, `(f::F)(x) where F`, has no function name to read.
     ft isa DataType || return false
-    name = nameof(ft)
-    generated_function_name(name)
-end
-
-function generated_function_name(name::Symbol)
-    label = string(name)
-    startswith(label, "#") || return false
-    rest = chop(label; head = 1, tail = 0)
-    occursin('#', rest)
+    is_generated_function_type(ft)
 end
 
 # What the package has compiled so far. Read before the method graph's walk, whose specializations would count too.
 function compiled_methods(modules)
     existing = existing_specializations(modules)
     reached = Set{Method}()
-    Base.visit(Core.methodtable) do method
+    each_loaded_method() do method
         record_compiled!(reached, method, modules, existing)
     end
     defined = project_methods(modules)
@@ -160,8 +139,7 @@ method_in_table(value::Type, method::Method) = method in methods(value)
 method_in_table(value, ::Method) = false
 
 function argument_types(method::Method)
-    unwrapped = Base.unwrap_unionall(method.sig)
-    params = unwrapped.parameters
+    params = signature_types(method.sig)
     positional = params[2:end]
     Tuple{positional...}
 end

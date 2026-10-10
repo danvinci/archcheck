@@ -13,6 +13,10 @@ function each_loaded_method(action)
     nothing
 end
 
+"""The method instances Julia has made of a method, compiled or inferred, from `Base.specializations`; a method
+nothing called and nothing inferred has none."""
+method_instances(method::Method) = Base.specializations(method)
+
 function keep_project_method!(defined, method::Method, project)
     method.module in project || return
     is_latest(method) && push!(defined, method)
@@ -42,6 +46,77 @@ function written_name(name::Symbol)
     isempty(parts) ? text : String(first(parts))
 end
 
+"""Whether a function type belongs to a function lowering made: Julia names a function's type `#` and the function's
+name, and a keyword body, closure or local function has a generated name, so its type's name holds a second `#`."""
+function is_generated_function_type(function_type::DataType)
+    label = string(nameof(function_type))
+    startswith(label, "#") || return false
+    rest = chop(label; head = 1, tail = 0)
+    occursin('#', rest)
+end
+
+# A where-clause wraps a body type whose variables it binds; `Base.unwrap_unionall` strips every clause and leaves
+# those variables free in the body.
+
+"""The DataType a type names under its where-clauses, its variables free; nothing for a union, `Union{}`, a type
+variable or a value that is no type."""
+function declared_datatype(@nospecialize(type))
+    type isa Type || return nothing
+    body = Base.unwrap_unionall(type)
+    body isa DataType ? body : nothing
+end
+
+"""The types a method signature lists, the function's own slot first, its where-variables free; empty for a
+signature that names no tuple."""
+function signature_types(@nospecialize(signature))
+    body = declared_datatype(signature)
+    isnothing(body) && return Core.svec()
+    body.parameters
+end
+
+"""The type a `Type{T}` names under any where-clauses, the `T`; nothing for any other type. `Base.isType` tells
+`Type{T}` from a plain DataType."""
+function type_object_held(@nospecialize(type))
+    body = declared_datatype(type)
+    isnothing(body) && return nothing
+    Base.isType(body) || return nothing
+    only(body.parameters)
+end
+
+# Whether a binding's value is a union type under its where-clauses: a union names no single module.
+function is_union_type(@nospecialize(value))
+    value isa Type || return false
+    body = Base.unwrap_unionall(value)
+    body isa Union
+end
+
+"""Each member type a union holds; a type that is no union is its own one member. `Base.uniontypes` flattens nested
+unions."""
+union_members(@nospecialize(type)) = Base.uniontypes(type)
+
+"""Whether a type holds a type variable no where-clause inside it binds; such a type names no values of its own.
+`Base.has_free_typevars` walks the type's parameters for one."""
+has_free_variables(@nospecialize(type)) = Base.has_free_typevars(type)
+
+"""`type` under the where-clauses of `outer` that bind a variable it holds free, outermost first, so it names values
+again. `Base.rewrap_unionall` binds each of `outer`'s variables in turn."""
+under_clauses_of(@nospecialize(type), @nospecialize(outer)) = Base.rewrap_unionall(type, outer)
+
+# Inference gives Any for a call more methods than this match (`max_methods` of the default inference parameters).
+const INFERENCE_METHODS_MAX = Base.Compiler.InferenceParams().max_methods
+
+"""The type inference gives calling `f` with arguments of these types, joined over every method that matches.
+`Base.infer_return_type` infers in the current world."""
+inferred_return_type(f, signature) = Base.infer_return_type(f, signature)
+
+"""The type inference gives each method of `f` at its declared signature, one per method. `Base.return_types`
+infers in the current world."""
+inferred_return_types(f) = Base.return_types(f)
+
+"""A fresh interpreter with the default inference parameters in the current world; frames inferred with one share its
+cache."""
+inference_interpreter() = Base.Compiler.NativeInterpreter()
+
 # `Base.kwarg_decl` lists the keywords a method declares, read from the keyword sorter lowering made for it.
 declares_keywords(method::Method) = !isempty(Base.kwarg_decl(method))
 
@@ -58,13 +133,12 @@ argument_names(method::Method) = Base.method_argnames(method)
 # The keyword method `Core.kwcall` holds for a method that declares keywords.
 function keyword_method(method::Method)
     declares_keywords(method) || return nothing
-    body = Base.unwrap_unionall(method.sig)
-    params = body.parameters
+    params = signature_types(method.sig)
     tail = params[2:end]
     owner = params[1]
     bare = Tuple{NamedTuple, owner, tail...}
     # The method's where-clause binds the parameters of the query.
-    query = Base.rewrap_unionall(bare, method.sig)
+    query = under_clauses_of(bare, method.sig)
     which(Core.kwcall, query)
 end
 
@@ -135,6 +209,23 @@ function top_modules()
     end
     by_name
 end
+
+"""The loaded root module of the package `name` names from `home`'s environment; nothing when the environment names
+none or the package is not loaded. `Base.maybe_root_module` reads the loaded root without loading it."""
+function loaded_dependency(home::Module, name::String)
+    id = Base.identify_package(home, name)
+    isnothing(id) && return nothing
+    Base.maybe_root_module(id)
+end
+
+"""The modules `home` brings in whole with a bare `using`, Base and Core included, as the module itself records them
+(`jl_module_usings`, julia.h)."""
+function used_modules(home::Module)
+    ccall(:jl_module_usings, Any, (Any,), home)::Vector{Any}
+end
+
+# Whether this process is building a package image, from `Base.generating_output`; code run then is cached.
+is_building_image() = Base.generating_output()
 
 # The root module of the loaded package of this name, from `Base.loaded_modules`; nothing when none is loaded.
 function loaded_package(name::String)

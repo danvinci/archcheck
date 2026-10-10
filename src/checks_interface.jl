@@ -242,12 +242,11 @@ end
 # The concrete type a module binds under `name`; nothing for any other binding.
 function concrete_type_named(home::Module, name::Symbol)
     name === nameof(home) && return nothing
-    startswith(string(name), "#") && return nothing
+    is_generated_name(name) && return nothing
     isdefined(home, name) || return nothing
     bound = getfield(home, name)
-    bound isa Type || return nothing
-    unwrapped = Base.unwrap_unionall(bound)
-    unwrapped isa DataType || return nothing
+    unwrapped = declared_datatype(bound)
+    isnothing(unwrapped) && return nothing
     isabstracttype(unwrapped) && return nothing
     unwrapped
 end

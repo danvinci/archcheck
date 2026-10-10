@@ -19,16 +19,16 @@ end
 # The element type an array slot holds, closed over its method's type variables so slots of two methods compare.
 # `eltype` reads an element with free type variables as `Any`.
 function element_type(@nospecialize(slot), @nospecialize(signature))
-    array = Base.unwrap_unionall(slot)
-    array isa DataType || return Any
-    abstract_array = Base.unwrap_unionall(AbstractArray)
+    array = declared_datatype(slot)
+    isnothing(array) && return Any
+    abstract_array = declared_datatype(AbstractArray)
     array_name = abstract_array.name
     while array.name !== array_name
         array = supertype(array)
     end
     held = first(array.parameters)
-    within_slot = Base.rewrap_unionall(held, slot)
-    Base.rewrap_unionall(within_slot, signature)
+    within_slot = under_clauses_of(held, slot)
+    under_clauses_of(within_slot, signature)
 end
 
 function is_storage_argument(@nospecialize(earlier), @nospecialize(later), earlier_method::Method, later_method::Method)
@@ -54,10 +54,8 @@ end
 
 # The first signature slot is the function. Argument slots start at the second.
 function storage_labels(earlier::Method, later::Method, texts)
-    earlier_sig = Base.unwrap_unionall(earlier.sig)
-    later_sig = Base.unwrap_unionall(later.sig)
-    earlier_params = earlier_sig.parameters
-    later_params = later_sig.parameters
+    earlier_params = signature_types(earlier.sig)
+    later_params = signature_types(later.sig)
     length(earlier_params) == length(later_params) || return nothing
     labels = String[]
     for index in 2:length(earlier_params)
@@ -93,7 +91,7 @@ function order_methods(owned, places, repo)
 end
 
 function has_array_argument(method::Method)
-    params = Base.unwrap_unionall(method.sig).parameters
+    params = signature_types(method.sig)
     for index in 2:length(params)
         bound = bound_type(params[index])
         bound isa Type && bound <: AbstractArray && return true

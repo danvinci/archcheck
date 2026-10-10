@@ -49,9 +49,8 @@ function imported_module(home::Module, dots, path)::Union{Nothing,Module}
     if dots == 0
         found = bound_module(home, first(path))
         if isnothing(found)
-            id = Base.identify_package(home, string(first(path)))
-            isnothing(id) && return nothing
-            found = Base.maybe_root_module(id)
+            package_name = string(first(path))
+            found = loaded_dependency(home, package_name)
         end
     else
         for _ in 2:dots

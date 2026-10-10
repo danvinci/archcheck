@@ -57,11 +57,11 @@ function run(::DerivedReaders, ctx)
 end
 
 function producer_shape(producer)
-    returns = Base.return_types(producer)
+    returns = inferred_return_types(producer)
     numeric = false
     for candidate in returns
-        for member in Base.uniontypes(candidate)
-            body = Base.unwrap_unionall(member)
+        for member in union_members(candidate)
+            body = declared_datatype(member)
             if struct_body(body)
                 return (wrapper = body, numeric = false)
             end
@@ -103,7 +103,7 @@ end
 function read_typed!(item, ctx)
     seen = Set{NTuple{4,String}}()
     repo = ctx.index.repo
-    interp = Core.Compiler.NativeInterpreter()
+    interp = inference_interpreter()
     for method in reached_methods(ctx.methods)
         root = Base.moduleroot(method.module)
         (root === Core || root === Base) && continue
@@ -171,8 +171,8 @@ skipped_callee(::Union{Core.Builtin,Core.IntrinsicFunction}) = true
 skipped_callee(value::Function) = nameof(value) in MOVED_CALLEES
 
 function skipped_callee(@nospecialize(value::Type))
-    body = Base.unwrap_unionall(value)
-    body isa DataType && body.name.name === :NamedTuple
+    body = declared_datatype(value)
+    !isnothing(body) && body.name.name === :NamedTuple
 end
 
 carries_type(@nospecialize(type), wrapper) = type === wrapper
@@ -180,8 +180,8 @@ carries_type(type::Union, wrapper) = carries_type(type.a, wrapper) || carries_ty
 
 function carries_type(@nospecialize(type::Type), wrapper)
     type === wrapper && return true
-    body = Base.unwrap_unionall(type)
-    body isa DataType || return false
+    body = declared_datatype(type)
+    isnothing(body) && return false
     tuple_like = body <: Tuple
     named = body.name.name === :NamedTuple
     tuple_like || named || return false
@@ -211,8 +211,8 @@ callee_name(value::Function) = string(nameof(value))
 callee_name(@nospecialize(value)) = string(value)
 
 function callee_name(@nospecialize(value::Type))
-    body = Base.unwrap_unionall(value)
-    body isa DataType ? string(body.name.name) : string(body)
+    body = declared_datatype(value)
+    isnothing(body) ? string(value) : string(body.name.name)
 end
 
 function push_finding!(mod, file, symbol, line, label, callee, via, detail, dest)

@@ -38,9 +38,7 @@ uses_struct_params(@nospecialize(::Any), ::Any) = false
 
 # Type{Float64} names one type object. Type{<:T} names every subtype, so dispatch stays open.
 function is_closed_type_object(@nospecialize(declared))
-    unwrapped = Base.unwrap_unionall(declared)
-    Base.isType(unwrapped) || return false
-    held = only(unwrapped.parameters)
+    held = type_object_held(declared)
     held isa Type && isconcretetype(held)
 end
 
@@ -62,10 +60,8 @@ is_open_position(@nospecialize(::Union), ::Any) = false
 is_open_position(@nospecialize(position::TypeVar), vars) = !(position in vars)
 
 function is_open_position(@nospecialize(position::DataType), vars)
-    if Base.isType(position)
-        held = only(position.parameters)
-        return is_open_position(held, vars)
-    end
+    held = type_object_held(position)
+    isnothing(held) || return is_open_position(held, vars)
     for param in position.parameters
         is_open_position(param, vars) && return true
     end
@@ -82,7 +78,8 @@ is_container_type(@nospecialize(::Any)) = false
 # A Dict element type is Pair, so its key and value are read apart.
 # An array or a set is open when its element type is open.
 function container_field_open(@nospecialize(declared))
-    unwrapped = Base.unwrap_unionall(declared)
+    unwrapped = declared_datatype(declared)
+    isnothing(unwrapped) && return true
     isconcretetype(unwrapped) || return true
     if unwrapped <: AbstractDict && length(unwrapped.parameters) >= 2
         key_type = unwrapped.parameters[1]
@@ -107,13 +104,14 @@ function is_open_field(@nospecialize(declared), vars = TypeVar[])
     if is_container_type(declared)
         return container_field_open(declared)
     end
-    !isconcretetype(Base.unwrap_unionall(declared))
+    body = declared_datatype(declared)
+    isnothing(body) || !isconcretetype(body)
 end
 
 # The fields of a struct type, or of an instance an alias names, whose declared types leave dispatch open.
 function open_fields(@nospecialize(declared))
     vars = struct_typevars(declared)
-    body = Base.unwrap_unionall(declared)
+    body = declared_datatype(declared)::DataType
     found = Tuple{Symbol,Any}[]
     # By position: a zip over `fieldnames` and `fieldtypes` compiles once per struct shape.
     for position in 1:fieldcount(body)
@@ -194,9 +192,8 @@ function check_abstract_fields(mods, sites, index::SourceIndex)
             (is_self || is_internal) && continue
             isdefined(mod, name) || continue
             declared_type = getproperty(mod, name)
-            declared_type isa Type || continue
-            body = Base.unwrap_unionall(declared_type)
-            body isa DataType || continue
+            body = declared_datatype(declared_type)
+            isnothing(body) && continue
             isstructtype(body) || continue
             parentmodule(body) in package || continue
             family = body.name.wrapper

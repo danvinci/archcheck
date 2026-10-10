@@ -184,8 +184,7 @@ end
 # keyword slots, and the probed source's names for the slots after them, which the probed body reads.
 function body_signature(body::Function, target::Method, slots::Vector{Symbol})
     names = argument_names(target)
-    declared = Base.unwrap_unionall(target.sig)
-    types = declared.parameters
+    types = signature_types(target.sig)
     keyword_end = length(names) - length(slots)
     args = Any[]
     for index in 2:length(names)

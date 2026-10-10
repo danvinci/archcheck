@@ -19,7 +19,7 @@ function precompile_checks()
     (defaults..., configured...)
 end
 
-if ccall(:jl_generating_output, Cint, ()) == 1
+if is_building_image()
     let report = joinpath(mktempdir(), "architecture.jsonl")
         gate_call = (Core.kwcall, Tuple{NamedTuple, typeof(gate), Module})
         checks = precompile_checks()

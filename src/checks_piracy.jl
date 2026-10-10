@@ -22,16 +22,14 @@ end
 
 # One foreign member makes a Union foreign: Union{Owned,Int} claims Int as well.
 function is_foreign(@nospecialize(union_type::Union), owns)
-    members = Base.uniontypes(union_type)
+    members = union_members(union_type)
     any_member_foreign(members, owns)
 end
 
 # Type{T} belongs where T does. Any other type is foreign when its module and its parameters are.
 function is_foreign(@nospecialize(datatype::DataType), owns)
-    if Base.isType(datatype)
-        held = only(datatype.parameters)
-        return is_foreign(held, owns)
-    end
+    held = type_object_held(datatype)
+    isnothing(held) || return is_foreign(held, owns)
     owns(parentmodule(datatype)) && return false
     all_foreign(datatype.parameters, owns)
 end
@@ -90,7 +88,7 @@ function check_module_piracy(defined, root::Module; repo, strict::Bool)
         scopes = scopes_by_home[home]
         function_type, arguments = split_signature(method.sig)
         # A Union in the function slot is foreign when every member is foreign.
-        members = Base.uniontypes(function_type)
+        members = union_members(function_type)
         owns_function = mod -> is_in_any_scope(mod, scopes, strict)
         all_foreign(members, owns_function) || continue
         owns_argument = mod -> is_in_any_scope(mod, scopes, false)

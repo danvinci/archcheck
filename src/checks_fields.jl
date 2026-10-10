@@ -281,9 +281,9 @@ function check_foreign_fields(index::SourceIndex, mods)
         M = get(by_key, file.mod, nothing)
         isnothing(M) && continue
         # a read through a Union reads the field on each member
-        for access in field_reads(file.tree, M, inferred).reads, member in Base.uniontypes(access.type)
-            S = Base.unwrap_unionall(member)
-            S isa DataType || continue
+        for access in field_reads(file.tree, M, inferred).reads, member in union_members(access.type)
+            S = declared_datatype(member)
+            isnothing(S) && continue
             owner = get(key_of, parentmodule(S), nothing)
             (isnothing(owner) || owner == file.mod || is_open_read(owner, S, access.field)) && continue
             symbol = "$owner.$(nameof(S)).$(access.field)"

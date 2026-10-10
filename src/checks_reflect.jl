@@ -3,9 +3,9 @@
 
 # The function a method belongs to; nothing for a keyword method, a callable struct, or an abstract callee.
 function method_function(method::Method)
-    signature = Base.unwrap_unionall(method.sig)
-    signature isa DataType || return nothing
-    callee = signature.parameters[1]
+    params = signature_types(method.sig)
+    isempty(params) && return nothing
+    callee = params[1]
     callee isa DataType || return nothing
     isdefined(callee, :instance) || return nothing
     value = callee.instance
@@ -163,14 +163,11 @@ end
 
 # The module a (possibly parametric) type is defined in; resolves Type{X}, skips TypeVar/Union.
 function type_module(@nospecialize(declared))
-    declared isa TypeVar && return nothing
-    unwrapped = Base.unwrap_unionall(declared)
-    unwrapped isa DataType || return nothing
-    if Base.isType(unwrapped)
-        held = only(unwrapped.parameters)
-        return type_module(held)
-    end
-    parentmodule(unwrapped)
+    held = type_object_held(declared)
+    isnothing(held) || return type_module(held)
+    body = declared_datatype(declared)
+    isnothing(body) && return nothing
+    parentmodule(body)
 end
 
 # A keyword method is a method of kwcall. Its third slot holds the function it wraps.
@@ -179,7 +176,7 @@ is_kwcall_signature(@nospecialize(sig)) = sig <: Tuple{typeof(Core.kwcall),Any,A
 # A method signature's function slot and its argument types. A keyword method is a method of Core.kwcall whose
 # third slot holds the function it wraps: (kwcall, kwargs, f, args...).
 function split_signature(@nospecialize(sig))
-    params = Base.unwrap_unionall(sig).parameters
+    params = signature_types(sig)
     slot = is_kwcall_signature(sig) ? 3 : 1
     (params[slot], params[slot + 1:end])
 end
@@ -299,10 +296,7 @@ owned_subject(@nospecialize(value)) = typeof(value)
 
 # A Union has no parent module. The module that owns the alias binding stands for it.
 function binding_owner(home, name, value)
-    unwrapped = Base.unwrap_unionall(value)
-    if unwrapped isa Union
-        return which(home, name)
-    end
+    is_union_type(value) && return which(home, name)
     subject = owned_subject(value)
     parentmodule(subject)
 end

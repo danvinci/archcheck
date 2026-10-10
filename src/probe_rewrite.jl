@@ -212,12 +212,12 @@ type_expression(value::Symbol) = QuoteNode(value)
 type_expression(value::Any) = value
 
 function type_expression(type::Type)
-    Base.has_free_typevars(type) || return type
+    has_free_variables(type) || return type
     spelled_type(type)
 end
 
 function type_expression(vararg::Core.TypeofVararg)
-    Base.has_free_typevars(vararg) || return vararg
+    has_free_variables(vararg) || return vararg
     element = type_expression(vararg.T)
     isdefined(vararg, :N) || return Expr(:curly, Vararg, element)
     count = type_expression(vararg.N)
@@ -239,7 +239,7 @@ function spelled_type(type::DataType)
 end
 
 function spelled_type(type::Union)
-    members = Base.uniontypes(type)
+    members = union_members(type)
     spelled_parameters(Union, members)
 end
 

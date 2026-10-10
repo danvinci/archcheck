@@ -46,8 +46,7 @@ function resolves_through_using(home::Module, name::Symbol)
     isdefined(home, name) || return false
     value = getglobal(home, name)
     exports_value(Core, name, value) && return true
-    used = ccall(:jl_module_usings, Any, (Any,), home)::Vector{Any}
-    for candidate in used
+    for candidate in used_modules(home)
         candidate isa Module || continue
         exports_value(candidate, name, value) && return true
     end

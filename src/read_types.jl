@@ -49,7 +49,7 @@ collect_free_typevars!(found, bound, @nospecialize(::Any)) = nothing
 # union-all whose unwrap is this same datatype.
 function bind_free_parameters(@nospecialize(receiver_type))
     receiver_type isa TypeVar && return receiver_type
-    Base.has_free_typevars(receiver_type) || return receiver_type
+    has_free_variables(receiver_type) || return receiver_type
     found = TypeVar[]
     bound = TypeVar[]
     collect_free_typevars!(found, bound, receiver_type)
@@ -204,10 +204,8 @@ end
 
 # The datatype an applied type is built on. A union has no single datatype.
 function type_head(@nospecialize(applied))
-    applied isa Union && return nothing
-    applied isa Type || return nothing
-    unwrapped = Base.unwrap_unionall(applied)
-    unwrapped isa DataType || return nothing
+    unwrapped = declared_datatype(applied)
+    isnothing(unwrapped) && return nothing
     unwrapped.name.wrapper
 end
 
@@ -234,9 +232,10 @@ end
 # that declares no such field, or declares it through a type variable, leaves the read untyped.
 function declared_field_type(T, field)
     declared = Type[]
-    for member in Base.uniontypes(T)
-        struct_type = Base.unwrap_unionall(member)
-        struct_type isa DataType && isstructtype(struct_type) && hasfield(struct_type, field) || return nothing
+    for member in union_members(T)
+        struct_type = declared_datatype(member)
+        isnothing(struct_type) && return nothing
+        isstructtype(struct_type) && hasfield(struct_type, field) || return nothing
         member_declared = fieldtype(struct_type, field)
         member_declared isa Type || return nothing
         push!(declared, member_declared)
@@ -282,20 +281,18 @@ function argument_type(state, scope, node)
         known = value_type(state, scope, node)
     end
     isnothing(known) && return Any
-    Base.has_free_typevars(known) ? Any : known
+    has_free_variables(known) ? Any : known
 end
 
 # T when it is one concrete type; nothing for a Union, an abstract type or Any.
 concrete_type(T) = T isa DataType && isconcretetype(T) ? T : nothing
 
-# Inference gives Any for a call more methods than this match, so the scan skips such a call.
-const INFERENCE_METHODS_MAX = Core.Compiler.InferenceParams().max_methods
-
-# The one concrete type Julia infers for calling f with arguments of these types; nothing for any other result.
+# The one concrete type Julia infers for calling f with arguments of these types; nothing for any other result. A call
+# more methods match than inference follows infers Any, so the scan skips it.
 function inferred_type(f, signature)
     matches = methods(f, signature)
     (isempty(matches) || length(matches) > INFERENCE_METHODS_MAX) && return nothing
-    result = Base.infer_return_type(f, signature)
+    result = inferred_return_type(f, signature)
     concrete_type(result)
 end
 
@@ -380,7 +377,7 @@ end
 # The element a loop over a collection binds, when every step of `iterate` yields one concrete type.
 function element_type(@nospecialize(collection))
     collection_type = resolved(collection)
-    (isnothing(collection_type) || Base.has_free_typevars(collection_type)) && return nothing
+    (isnothing(collection_type) || has_free_variables(collection_type)) && return nothing
     first_step = iterate_step(Tuple{collection_type})
     isnothing(first_step) && return nothing
     step_state = fieldtype(first_step, 2)
@@ -392,7 +389,7 @@ end
 
 # The (element, state) tuple type Julia infers for an `iterate` call that does not end the loop.
 function iterate_step(signature)
-    stepped = Base.infer_return_type(iterate, signature)
+    stepped = inferred_return_type(iterate, signature)
     step = typeintersect(stepped, Tuple{Any,Any})
     step isa DataType && fieldcount(step) == 2 ? step : nothing
 end
