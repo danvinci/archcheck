@@ -70,7 +70,7 @@ function kinds end
 """A check's findings over the parsed and loaded package, as a `Vector{Finding}`. Given a context built from the package alone, it works without the full gate."""
 function run end
 
-"""When a check reads the package: `:static` by default, before the workload, from the parse and the loaded modules; `:workload` after it, from `ctx.observed`."""
+"""When a check reads the package: `:static` by default, before the workload, from the parse and the loaded modules; `:graph` after the method graph's walk, which follows the workload, from `ctx.methods`; `:workload` then too, from `ctx.observed`."""
 phase(::Check) = :static
 
 # A finding's kind must be one its check declares, or the gate has no severity for it.
@@ -252,6 +252,7 @@ function run(::FileSinkable, ctx)
     collect_modules(judge, ctx)
 end
 kinds(::FileSinkable) = (:file_sinkable => :advisory,)
+phase(::FileSinkable) = :graph
 
 # sinkable and extract-candidate are one analysis at two granularities, so one check emits both.
 function run(::Sinkable, ctx)

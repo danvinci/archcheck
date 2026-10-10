@@ -10,6 +10,8 @@ struct OverlappingCalls <: Check end
 
 kinds(::OverlappingCalls) = (:overlapping_call => :advisory,)
 
+phase(::OverlappingCalls) = :graph
+
 function call_text(call)
     name = string(call.callee)
     if !isempty(call.qualifier)

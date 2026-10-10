@@ -82,8 +82,7 @@ function writes_definition(call)
     for node in walk_nodes(call)
         is_method_form(node) && return true
         kind = JS.kind(node)
-        is_type_definition = kind == K"struct" || kind == K"abstract" || kind == K"primitive"
-        is_type_definition && return true
+        is_type_form(kind) && return true
     end
     false
 end

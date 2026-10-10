@@ -6,6 +6,8 @@ struct DerivedReaders <: Check end
 
 kinds(::DerivedReaders) = (:unlisted_reader => :advisory,)
 
+phase(::DerivedReaders) = :graph
+
 const MOVED_CALLEES = (
     :getfield, :getproperty, :setfield!, :setproperty!, :tuple,
     :apply_type, :typeassert, :isa, :typeof, :nfields, :fieldtype,

@@ -1,4 +1,4 @@
-const PHASES = (:static, :workload)
+const PHASES = (:static, :graph, :workload)
 
 # The checks of one phase, in registry order. An unknown phase is a typo, so it throws.
 function checks_in(checks, wanted::Symbol)
@@ -9,7 +9,7 @@ function checks_in(checks, wanted::Symbol)
     Tuple(check for check in checks if phase(check) === wanted)
 end
 
-"""Parses `pkg`'s `src/` once, runs `workload()` with `probes` armed, walks the method graph from `entries`, then runs the static `checks` (`CHECKS` by default) and the checks that read the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names."""
+"""Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()` with `probes` armed, then walks the method graph from `entries` and runs the checks that read the graph or the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names."""
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
@@ -23,6 +23,7 @@ function gate(pkg::Module;
               derived::Tuple{Vararg{Derived}} = ())
     severity = severities(checks; error_kinds)   # before the parse, so a bad error_kinds fails fast
     static = checks_in(checks, :static)
+    walking = checks_in(checks, :graph)
     observing = checks_in(checks, :workload)
     if isnothing(workload)
         waiting = typeof.(observing)
@@ -30,15 +31,17 @@ function gate(pkg::Module;
         isnothing(probes) || throw(ArgumentError("probes observe a workload, and none is declared"))
     end
     parsed = Context(pkg; src, entry_dirs, derived)   # the one parse, src/ and entry dirs
-    # The workload runs before the method graph's walk and the static checks, whose lookups make specializations
-    # it would read as compiled. Restored probes define methods after this call's world began.
+    findings = run_checks(parsed, static)
+    # The walk makes a specialization of each method it walks, so it waits until the workload's reach is read.
+    # Restored probes define methods after this call's world began.
     unwalked = parsed
     if !isnothing(workload)
         observed = observe(workload, probes, parsed)
         unwalked = Context(parsed; observed)
     end
     ctx = Base.invokelatest(with_method_graph, unwalked, entries)
-    findings = Base.invokelatest(run_checks, ctx, static)
+    walked_findings = Base.invokelatest(run_checks, ctx, walking)
+    append!(findings, walked_findings)
     observed_findings = Base.invokelatest(run_checks, ctx, observing)
     append!(findings, observed_findings)
 
