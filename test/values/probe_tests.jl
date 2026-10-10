@@ -122,6 +122,8 @@ const LOCAL_JOINS = load_package("LocalJoins", """
         end
         total
     end
+
+    quoted() = (:wait => :fetch,)
     """)
 
 const NEST_OUTER = load_package("NestOuter", """
@@ -425,20 +427,21 @@ end
     @test record.name === :keep
 end
 
-@testset "a local named wait or fetch keeps its value in a probed method" begin
+@testset "a local or a quoted symbol named wait or fetch keeps its value in a probed method" begin
     pkg = LOCAL_JOINS.pkg
-    probes = Probes(; functions = (pkg.by_parameter, pkg.by_local, pkg.by_loop), slow_s = 0.0)
+    probes = Probes(; functions = (pkg.by_parameter, pkg.by_local, pkg.by_loop, pkg.quoted), slow_s = 0.0)
     returned = Ref{Any}(nothing)
     workload = function ()
         parameter = pkg.by_parameter(1)
         assigned = pkg.by_local(1)
         looped = pkg.by_loop([1, 2])
-        returned[] = (parameter, assigned, looped)
+        symbols = pkg.quoted()
+        returned[] = (parameter, assigned, looped, symbols)
     end
     seen = observed_gate(pkg; workload, probes)
-    @test returned[] == (2, 3, 5)
+    @test returned[] == (2, 3, 5, (:wait => :fetch,))
     names = sort([record.name for record in seen.observed.records])
-    @test names == [:by_local, :by_loop, :by_parameter]
+    @test names == [:by_local, :by_loop, :by_parameter, :quoted]
 end
 
 @testset "a session armed inside another keeps its calls apart" begin

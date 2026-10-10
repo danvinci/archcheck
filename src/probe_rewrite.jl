@@ -160,6 +160,12 @@ end
 
 is_wait_name(name, site) = name in site.free_joins
 
+# The name a join is written by, `wait` or `Base.wait`; a quoted `:wait` is a symbol value and names none.
+written_join(node::Symbol) = node
+written_join(node::GlobalRef) = node.name
+written_join(node::Expr) = node.head === :. ? macro_symbol(node) : nothing
+written_join(::Any) = nothing
+
 # The probe a wait becomes, holding the session it records in.
 function wait_probe(name::Symbol, site)
     if name === :fetch
@@ -189,7 +195,7 @@ function rewrite_broadcast(node, site)
     tail = node.args[2]
     tail isa Expr || return nothing
     tail.head === :tuple || return nothing
-    name = macro_symbol(node.args[1])
+    name = written_join(node.args[1])
     is_wait_name(name, site) || return nothing
     probe = wait_probe(name, site)
     rewritten_tail = rewrite_waits(tail, site)
@@ -205,7 +211,7 @@ function rewrite_dot(node, site)
 end
 
 function rewrite_wait_head(node, site)
-    name = macro_symbol(node)
+    name = written_join(node)
     is_wait_name(name, site) || return node
     wait_probe(name, site)
 end
