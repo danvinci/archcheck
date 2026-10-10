@@ -27,8 +27,8 @@ end
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
 # A package written to a fresh directory and imported into Main, top-level as a user's package is: `spine` is the
-# body of `module name`, starting on its second line, and `files` the other sources by path under `src/`.
-function load_package(name::AbstractString, spine::AbstractString, files = Pair{String,String}[])
+# body of `module name` from its second line, `files` the other sources under `src/`, `project` more Project.toml.
+function load_package(name::AbstractString, spine::AbstractString, files = Pair{String,String}[], project = "")
     root = mktempdir()
     src = joinpath(root, "src")
     mkpath(src)
@@ -43,7 +43,7 @@ function load_package(name::AbstractString, spine::AbstractString, files = Pair{
     high = UInt128(seed) << 64
     low = UInt128(hash(seed))
     uuid = Base.UUID(high | low)
-    write(joinpath(root, "Project.toml"), "name = \"$name\"\nuuid = \"$uuid\"\n")
+    write(joinpath(root, "Project.toml"), "name = \"$name\"\nuuid = \"$uuid\"\n$project")
     binding = Symbol(name)
     pushfirst!(LOAD_PATH, root)
     try

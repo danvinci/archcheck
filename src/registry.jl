@@ -4,8 +4,8 @@
 struct Context{D<:Tuple}
     index::SourceIndex                      # the one parse of src/ and the entry dirs
     graph::ModuleGraph                      # module rank + cross-module references
-    root::Module                            # the package module itself; in mods only when it is the package's one module
-    mods::Vector{Module}                    # loaded modules at every depth, rank order; reflection checks only
+    root::Module                            # the package module itself
+    mods::Vector{Module}                    # loaded modules at every depth, root and extensions too, rank order
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
     defined::Vector{Method}                 # every live method the package's modules define, in source order
@@ -30,7 +30,8 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     root = nameof(pkg)
     parses = package_parses(src)
     dir2mod = package_layout(parses, spine, root)
-    index = build_source_index(parses, src, dir2mod; entry_dirs, root)
+    extensions = loaded_extensions(pkg, parses.repo)
+    index = build_source_index(parses, src, dir2mod; entry_dirs, root, extensions)
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
     mods = Module[]
     for key in ordered

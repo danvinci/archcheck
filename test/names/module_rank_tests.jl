@@ -111,8 +111,10 @@ end
     "utils.jl" => """
     include("deeper.jl")
     unused_util() = 1
+    kept_util() = 1
     module Piracy
-    unused_piracy() = 1
+    using ..SpineFiles: kept_util
+    unused_piracy() = kept_util()
     end
     """,
     "deeper.jl" => "unused_deeper() = 1\n",
@@ -199,7 +201,7 @@ end
 
 @testset "a reference to a later module is a back edge and a self or external name is not" begin
     forward = module_edge_rows(FORWARD_CALL)
-    @test (:back_edge, "Bb", "1->2", "qualified") in forward
+    @test (:back_edge, "Bb", "1.1->1.2", "qualified") in forward
     @test !any(row -> row[2] == "Aa", forward)
     @test !any(row -> row[2] == "SomePkg", forward)
     down = module_edge_rows(DOWNWARD_CALL)
@@ -233,7 +235,7 @@ end
         case = load_package(case_name, spec.spine, spec.files)
         ctx = Base.invokelatest(case_context, case)
         rank_names = Set(string(key) for key in keys(ctx.index.rank))
-        @test rank_names == Set(spec.modules)
+        @test rank_names == Set([spec.modules; case_name])
         layered = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])
         @test back_edge_pairs(ModuleBackEdges(strict = true), ctx) == layered
         outward = Set((from, to) for (from, to) in layered if !startswith(from, to * "."))
@@ -242,8 +244,8 @@ end
 end
 
 @testset "an inline module is ranked and owns its own code" begin
-    cases = ((INLINE_CHILD, Symbol("Aa.Inline"), "Aa"), (INLINE_ROOT, :Tokens, "InlineRoot"))
-    for (case, inline, parent) in cases
+    cases = ((INLINE_CHILD, Symbol("Aa.Inline"), "Aa", "1.1.2->1.1"), (INLINE_ROOT, :Tokens, "InlineRoot", "1.2->1"))
+    for (case, inline, parent, order) in cases
         ctx = case_context(case)
         corpus = ArchCheck.run(Corpus(), ctx)
         @test !any(finding -> finding.kind === :unranked_module, corpus)
@@ -252,7 +254,7 @@ end
         climb = only(found)
         @test climb.mod === inline
         @test climb.symbol == parent
-        @test ev(climb, :include_order) == "1.2->1"
+        @test ev(climb, :include_order) == order
     end
 end
 
@@ -277,6 +279,59 @@ end
         (:Piracy, "src/utils.jl", "unused_piracy"),
     ])
     @test rows == expected
+end
+
+@testset "the root ranks beside its directory modules, so a name a block imports from it is judged" begin
+    ctx = case_context(SPINE_FILES)
+    @test haskey(ctx.index.rank, :SpineFiles)
+    found = ArchCheck.run(DeclaredNames(), ctx)
+    imported = only(found)
+    @test imported.mod === :Piracy
+    @test imported.symbol == "SpineFiles.kept_util"
+    @test ev(imported, :via) == "using"
+end
+
+# Extensions on loaded triggers, one also named by a fallback include as older Julia needs, and one whose trigger is
+# absent.
+const HOSTED = load_package("Hosted", """
+_inner() = 1
+@static if false
+    include("../ext/HostedTestExt.jl")
+end
+""", [
+    "../ext/HostedRandomExt.jl" => """
+    module HostedRandomExt; __precompile__(false)
+    using Hosted: _inner
+    scaled(x::Int) = map(step -> step * _inner(), 1:x)
+    end
+    """,
+    "../ext/HostedTestExt.jl" => "module HostedTestExt; __precompile__(false)\nusing Hosted: _inner\nend\n",
+    "../ext/HostedAbsentExt.jl" => "module HostedAbsentExt\nusing Hosted: _inner\nend\n",
+], """
+[weakdeps]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Absent = "4d5c8b1e-0f3a-4e6b-9c2d-7a1b3c5d7e9f"
+
+[extensions]
+HostedRandomExt = "Random"
+HostedTestExt = "Test"
+HostedAbsentExt = "Absent"
+""")
+
+@testset "a loaded extension is one of the package's modules and loads after it" begin
+    ctx = case_context(HOSTED)
+    loaded = [Base.get_extension(HOSTED.pkg, name) for name in (:HostedRandomExt, :HostedTestExt)]
+    @test all(in(ctx.mods), loaded)
+    @test !haskey(ctx.index.rank, :HostedAbsentExt)
+    fallback = [file for file in ctx.index.files if file.path == joinpath("ext", "HostedTestExt.jl")]
+    @test only(fallback).mod === :HostedTestExt
+    @test isempty(ArchCheck.run(Corpus(), ctx))
+    @test isempty(ArchCheck.run(ModuleBackEdges(strict = true), ctx))
+    found = ArchCheck.run(DeclaredNames(), ctx)
+    imports = Set((finding.mod, finding.symbol) for finding in found)
+    @test imports == Set([(:HostedRandomExt, "Hosted._inner"), (:HostedTestExt, "Hosted._inner")])
+    @test isempty(ArchCheck.run(ModulePiracy(), ctx))
 end
 
 @testset "a loaded submodule no file places is unranked" begin

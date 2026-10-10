@@ -12,7 +12,7 @@ struct FileNode
     mod::Symbol       # owning module
     path::String      # repo-relative path
     name::String      # basename
-    modrank::Vector{Int}   # module rank: package-spine position, then its place in each enclosing module
+    modrank::Vector{Int}   # module rank: the package 1, its extensions after, then the place in each enclosing module
     filerank::Int     # load position inside its module; 0 for a module's own code, or for a file nothing loads
     iswrapper::Bool   # this module's entry: its directory's entry file, or its module block
     scan::FileScan    # this code's defs and the names each references
@@ -51,6 +51,7 @@ struct IndexBuild
     repo::String                                              # root every path below is relative to
     src_root::String                                          # absolute src/ being indexed
     root::Symbol                                              # package name, the root module's key
+    extensions::Vector{Pair{Symbol,String}}                   # loaded extension -> its absolute entry file
     ranks::Dict{Symbol,Vector{Int}}                           # module -> its load position in each enclosing module
     dir2mod::Dict{String,Symbol}                              # src subdir -> module, nested by dotted key
     openers::Dict{String,Tuple{Symbol,String}}                # a directory module's absolute entry file -> its key, directory
@@ -109,13 +110,14 @@ function nested_dirs(build::IndexBuild, moddir)
     inner
 end
 
-function start_index(parses::Parses, src_root::AbstractString, dir2mod, root)
+function start_index(parses::Parses, src_root::AbstractString, dir2mod, root, extensions)
     rooted = source_root(src_root)
     dirs = nest_modules(parses, rooted, dir2mod)
     build = IndexBuild(
         parses.repo,
         rooted,
         root,
+        extensions,
         Dict{Symbol,Vector{Int}}(),
         dirs,
         Dict{String,Tuple{Symbol,String}}(),
@@ -200,6 +202,8 @@ function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
         push!(build.missing, (unit.owner, rel, spec, line))
         return
     end
+    # A loaded extension's entry is its extension's to place, where a fallback include for older Julia names it too.
+    any(extension -> last(extension) == target, build.extensions) && return
     if haskey(build.openers, target)
         target in build.visited && return
         key, moddir = build.openers[target]
@@ -239,23 +243,28 @@ function place_block!(build::IndexBuild, unit::LoadUnit, block, file)
     walk_code!(build, inner, body, file)
 end
 
-# The root opens at the spine. A one-module package's root is ranked; a package with directory modules leaves its
-# root unranked, and the spine's modules rank from the empty prefix.
+# The root opens at the spine, first in load order; every module the spine declares ranks inside it.
 function walk_package!(build::IndexBuild)
     spine_name = string(build.root) * ".jl"
     joined = joinpath(build.src_root, spine_name)
     spine = normpath(joined)
     isfile(spine) || return
-    rank = Int[]
-    if haskey(build.dir2mod, SINGLE_MODULE_DIR)
-        rank = [1]
-        build.ranks[build.root] = rank
-    end
+    rank = [1]
+    build.ranks[build.root] = rank
     nested = nested_dirs(build, build.src_root)
     open_module!(build, build.root, rank, spine, nested)
 end
 
-# A module's rank; empty for the unranked root of a package with directory modules, the prefix its modules extend.
+# Julia loads an extension once the package and its triggers have loaded, so each ranks after the whole package.
+function walk_extensions!(build::IndexBuild)
+    for (position, (key, entry)) in enumerate(build.extensions)
+        rank = [1 + position]
+        build.ranks[key] = rank
+        open_module!(build, key, rank, entry, String[])
+    end
+end
+
+# A module's rank; empty for a module no load walk reaches.
 module_rank(build::IndexBuild, owner::Symbol) = get(build.ranks, owner, Int[])
 
 # The includes of code no load walk reached: an expression, or a file absent on disk.
@@ -418,9 +427,11 @@ function source_index(build::IndexBuild)
     )
 end
 
-function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; entry_dirs = String[], root::Symbol)
-    build = start_index(parses, src_root, dir2mod, root)
+function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; entry_dirs = String[], root::Symbol,
+                            extensions = Pair{Symbol,String}[])
+    build = start_index(parses, src_root, dir2mod, root, extensions)
     walk_package!(build)
+    walk_extensions!(build)
     index_placements!(build)
     add_loose_files!(build)
     add_refs!(build)

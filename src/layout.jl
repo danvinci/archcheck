@@ -134,6 +134,9 @@ end
 # The directory key of a single-module package: src/ itself.
 const SINGLE_MODULE_DIR = "."
 
+# The directory beside src/ that Julia's package loader reads extensions from.
+const EXTENSION_DIR = "ext"
+
 # The package's directory modules. A spine that declares none makes the package one module: the root, keyed by
 # its own name, owning src/.
 function package_layout(parses::Parses, spine_path::AbstractString, root::Symbol)

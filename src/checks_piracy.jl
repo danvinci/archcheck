@@ -66,9 +66,6 @@ function is_in_any_scope(mod, scopes, exact::Bool)
     false
 end
 
-# The directory beside src/ that Julia's package loader reads extensions from.
-const EXTENSION_DIR = "ext"
-
 # Whether a module's `module` line sits in the package's extension directory.
 function is_extension(mod::Module, repo)
     file, _ = module_site(mod, repo)

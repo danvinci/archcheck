@@ -328,6 +328,6 @@ end
     index = index_of(SPINE_ORDER)
     @test index.dir2mod["aa"] === :Aa
     @test index.dir2mod["bb/inner"] === :Inner
-    @test index.rank[:Aa] == [1]
-    @test index.rank[:Inner] == [2]
+    @test index.rank[:Aa] == [1, 1]
+    @test index.rank[:Inner] == [1, 2]
 end

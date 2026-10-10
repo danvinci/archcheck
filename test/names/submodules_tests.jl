@@ -4,7 +4,7 @@
     ctx = Context(Nested)
     backs = ArchCheck.run(ModuleBackEdges(), ctx)
     orders = evidence_rows(backs, :include_order)
-    @test orders == [(:back_edge, "Geo.Cuts", "3.1->3.2")]
+    @test orders == [(:back_edge, "Geo.Cuts", "1.3.1->1.3.2")]
 
     corpus = ArchCheck.run(Corpus(), ctx)
     @test !any(finding -> finding.kind === :unranked_module, corpus)

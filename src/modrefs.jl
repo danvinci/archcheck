@@ -16,15 +16,40 @@ function key_segments(key::Symbol)
     Symbol.(parts)
 end
 
-# The loaded module a dotted key names below the package; nothing when the package did not load it, as for a file
-# included under a version check that fails on this Julia.
+# The loaded module a dotted key names below the package or one of its loaded extensions; nothing when Julia did
+# not load it, as for a file included under a version check that fails on this Julia.
 function loaded_module(pkg::Module, key::Symbol)::Union{Nothing,Module}
-    found = pkg
-    for segment in key_segments(key)
+    segments = key_segments(key)
+    head = first(segments)
+    if isdefined(pkg, head)
+        found = getfield(pkg, head)
+    else
+        found = Base.get_extension(pkg, head)
+    end
+    isnothing(found) && return nothing
+    for segment in segments[2:end]
         isdefined(found, segment) || return nothing
         found = getfield(found, segment)
     end
     found
+end
+
+# The package's extensions Julia has loaded, each by name with the entry file it loaded. Julia names an extension
+# after its entry under `ext/`: `ext/Name.jl` or `ext/Name/Name.jl`.
+function loaded_extensions(pkg::Module, repo::AbstractString)
+    found = Pair{Symbol,String}[]
+    directory = joinpath(repo, EXTENSION_DIR)
+    isdir(directory) || return found
+    for entry in readdir(directory)
+        stem = first(splitext(entry))
+        name = Symbol(stem)
+        extension = Base.get_extension(pkg, name)
+        isnothing(extension) && continue
+        loaded = pathof(extension)::String
+        path = normpath(loaded)
+        push!(found, name => path)
+    end
+    unique!(found)
 end
 
 # The names module paths resolve against.
