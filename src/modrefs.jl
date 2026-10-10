@@ -355,22 +355,6 @@ struct ReachModules
     top::Dict{Symbol,Module}      # each loaded top-level module by name, where a path with no leading dot opens
 end
 
-# Every top-level module this Julia has loaded, by name. A name two loaded packages share names neither.
-function top_modules()
-    by_name = Dict{Symbol,Module}()
-    shared = Set{Symbol}()
-    for loaded in loaded_roots()
-        name = nameof(loaded)
-        held = get(by_name, name, loaded)
-        held === loaded || push!(shared, name)
-        by_name[name] = loaded
-    end
-    for name in shared
-        delete!(by_name, name)
-    end
-    by_name
-end
-
 
 # Where an import path opens, and the names after its opening. With no leading dot it opens at the loaded top-level
 # module its first name names; with dots, at the module its first name binds in `home` or a parent per further dot.

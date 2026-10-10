@@ -119,8 +119,22 @@ function package_uuid(package::Module)
     id.uuid
 end
 
-# Every package root module this Julia has loaded, from `Base.loaded_modules`.
-loaded_roots() = collect(Module, values(Base.loaded_modules))
+# Every top-level module this Julia has loaded, by name, from `Base.loaded_modules`. A name two loaded packages share
+# names neither.
+function top_modules()
+    by_name = Dict{Symbol,Module}()
+    shared = Set{Symbol}()
+    for loaded in values(Base.loaded_modules)
+        name = nameof(loaded)
+        held = get(by_name, name, loaded)
+        held === loaded || push!(shared, name)
+        by_name[name] = loaded
+    end
+    for name in shared
+        delete!(by_name, name)
+    end
+    by_name
+end
 
 # The root module of the loaded package of this name, from `Base.loaded_modules`; nothing when none is loaded.
 function loaded_package(name::String)
