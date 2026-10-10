@@ -27,6 +27,18 @@ end
     end
 end
 
+@testset "self-check: the self-gate's probes report a second parse of the same files" begin
+    parse_twice = function ()
+        Context(Nested)
+        Context(Nested)
+    end
+    checks = (Rebuilds(),)
+    probes = self_probes()
+    found = gate_findings(ArchCheck; checks, probes, workload = parse_twice)
+    rebuilt = Set(finding.symbol for finding in found)
+    @test "parse_file" in rebuilt
+end
+
 @testset "self-check: every exported check is run or named inapplicable" begin
     held = Set{Any}()
     for pair in NOT_APPLICABLE

@@ -15,9 +15,6 @@ const NOT_APPLICABLE = (
     (KeptBuilders, "no constructor result is kept for its caller with get!"),
     (Independent, "the package is one module, so no pair of modules is independent"),
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
-    (Rebuilds, "one probe session runs at a time, and this gate arms none"),
-    (TwoNames, "one probe session runs at a time, and this gate arms none"),
-    (Waits, "one probe session runs at a time, and this gate arms none"),
 )
 
 function exhibit_workload()
@@ -192,7 +189,14 @@ function static_checks()
 end
 
 function workload_checks()
-    (UnreachedMethods(),)
+    (UnreachedMethods(), Rebuilds(), TwoNames(), Waits())
+end
+
+# The derivations several readers share, each evaluated once per piece of code. Named by path: the tests reach
+# only public names.
+function self_probes()
+    producers = (:parse_file, :scan_tree, :method_bodies, :load_events)
+    Probes(functions = producers, slow_s = 0.0)
 end
 
 function self_checks()
@@ -205,12 +209,14 @@ end
 function self_gate(; report_path, io)
     checks = self_checks()
     entries = self_entries()
+    probes = self_probes()
     tests = joinpath(pkgdir(ArchCheck), "test")
     ArchCheck.gate(ArchCheck;
         report_path = report_path,
         io = io,
         checks = checks,
         entries = entries,
+        probes = probes,
         workload = exhibit_gate_quiet,
         entry_dirs = [tests],
     )
