@@ -15,13 +15,13 @@ function hash_value(value, seed::UInt, memo, depth::Int)
     if depth > CONTENT_DEPTH_MAX
         return hash(:depth, seed)
     end
-    mutable = ismutable(value)
-    if mutable && haskey(memo, value)
+    is_mutable = ismutable(value)
+    if is_mutable && haskey(memo, value)
         cached = memo[value]
         return hash(cached, seed)
     end
     result = hash_content(value, seed, memo, depth)
-    if mutable
+    if is_mutable
         memo[value] = result
     end
     result

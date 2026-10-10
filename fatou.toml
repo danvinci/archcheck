@@ -1,0 +1,8 @@
+# Fatou's lint, run by the self-check test.
+# The fixtures plant findings for ArchCheck to report, so they stay out.
+exclude = ["test/fixtures/"]
+
+[lint]
+# Fatou reads `f(@nospecialize(x::A))` and `f(@nospecialize(x::B))` as one signature. A real duplicate method
+# already fails ArchCheck's image build, which refuses a method overwrite.
+ignore = ["duplicate-method"]

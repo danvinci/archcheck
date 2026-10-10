@@ -11,12 +11,28 @@ end
     @test readlines(report) == String[]
 end
 
+@testset "self-check: Fatou's lint of the repository finds nothing" begin
+    linter = Sys.which("fatou")
+    @test !isnothing(linter)
+    if !isnothing(linter)
+        root = pkgdir(ArchCheck)
+        output = IOBuffer()
+        command = Cmd(`$linter lint --color never --quiet .`; dir = root)
+        unchecked = ignorestatus(command)
+        piped = pipeline(unchecked; stdout = output, stderr = output)
+        finished = run(piped)
+        report = String(take!(output))
+        @test finished.exitcode == 0
+        finished.exitcode == 0 || println(report)
+    end
+end
+
 @testset "self-check: every exported check is run or named inapplicable" begin
     held = Set{Any}()
     for pair in NOT_APPLICABLE
         push!(held, pair[1])
     end
-    missing = String[]
+    unlisted = String[]
     for name in names(ArchCheck)
         value = getfield(ArchCheck, name)
         body = value isa UnionAll ? Base.unwrap_unionall(value) : value
@@ -31,14 +47,14 @@ end
         end
         ran && continue
         value in held && continue
-        push!(missing, string(name))
+        push!(unlisted, string(name))
     end
-    sort!(missing)
-    @test missing == String[]
+    sort!(unlisted)
+    @test unlisted == String[]
 end
 
 @testset "an exported check type carries a docstring" begin
-    missing = String[]
+    undocumented = String[]
     for name in names(ArchCheck)
         isdefined(ArchCheck, name) || continue
         value = getfield(ArchCheck, name)
@@ -49,10 +65,10 @@ end
         binding = Base.Docs.Binding(ArchCheck, name)
         documented = haskey(Base.Docs.meta(ArchCheck), binding)
         documented && continue
-        push!(missing, string(name))
+        push!(undocumented, string(name))
     end
-    sort!(missing)
-    @test missing == String[]
+    sort!(undocumented)
+    @test undocumented == String[]
 end
 
 const SHARED_HUB = load_package("SharedHub", """
