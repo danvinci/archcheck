@@ -15,11 +15,11 @@ const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
 const GRAPH_WALKS_MAX = 4
 
 # Where a runtime-dispatched call can land depends on its signature alone, so one graph matches each signature once.
-struct CallLandings
-    module_set::Set{Module}        # modules whose methods expand and whose methods a dispatched call can land on
-    held::Base.IdSet{Method}       # package methods a callee unknown at its site can land on
-    prefixes::Vector{Type}         # the signatures of the held methods' functions, each open after its function slot
-    by_call::IdDict{Any,Vector{Tuple{Method,Core.MethodInstance}}}   # call signature -> each landing's written method and specialization
+struct CallLandings{M<:AbstractSet,P<:AbstractVector,C<:AbstractDict}
+    module_set::Set{Module}   # modules whose methods expand and whose methods a dispatched call can land on
+    held::M                   # package methods a callee unknown at its site can land on
+    prefixes::P               # the signatures of the held methods' functions, each open after its function slot
+    by_call::C                # call signature -> the written method and specialization of each landing
 end
 
 function CallLandings(modules, values)
