@@ -130,10 +130,10 @@ end
 const InferredTypes = IdDict{Tuple{Any,Any},Union{Nothing,DataType}}
 
 # One file's reads, walked in the namespace of the module that owns the file.
-struct ReadState{E}
+struct ReadState{E,C}
     mod::Module                      # the file's module, where annotations and callees resolve
     reads::Vector{E}                 # reads on typed receivers
-    inferred::InferredTypes          # answers shared by every file of one run, whose world stays fixed
+    inferred::C                      # InferredTypes shared by every file of one run, whose world stays fixed
 end
 
 # The value a dotted path binds in `mod` when every binding along it is constant; nothing otherwise.
