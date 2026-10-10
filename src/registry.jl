@@ -209,7 +209,11 @@ kinds(::BlanketExports) = (:blanket_export => :advisory,)
 run(::StaleExports, ctx) = check_stale_exports(package_modules(ctx); repo = ctx.index.repo)
 kinds(::StaleExports) = (:stale_export => :advisory,)
 
-run(check::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods, ctx.root; allowed = check.allowed)
+# One compiled run for every length of `allowed`.
+function run(@nospecialize(check::ReachesInternal), ctx)
+    allowed = collect(Module, check.allowed)
+    check_reaches_internal(ctx.index, ctx.mods, ctx.root; allowed)
+end
 kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
 
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)

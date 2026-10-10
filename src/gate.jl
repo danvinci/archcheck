@@ -1,12 +1,15 @@
 const PHASES = (:static, :graph, :workload)
 
-# The checks of one phase, in registry order. An unknown phase is a typo, so it throws.
-function checks_in(checks, wanted::Symbol)
+# The checks of one phase, in registry order. An unknown phase is a typo, so it throws. Held as `Vector{Check}`, every
+# caller's check list shares one compiled path; each `run` dispatches on its check.
+function checks_in(checks::Vector{Check}, wanted::Symbol)
+    phased = Check[]
     for check in checks
         stage = phase(check)
         stage in PHASES || throw(ArgumentError("$(typeof(check)) runs in phase $stage"))
+        stage === wanted && push!(phased, check)
     end
-    Tuple(check for check in checks if phase(check) === wanted)
+    phased
 end
 
 """Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()` with `probes` armed, then walks the method graph from `entries` and runs the checks that read the graph or the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names. Called at the end of `test/runtests.jl` with `workload = PriorRun()`, it reads what the test suite ran."""
@@ -21,10 +24,11 @@ function gate(pkg::Module;
               probes::Union{Nothing,Probes} = nothing,
               entries = (),
               derived::Tuple{Vararg{Derived}} = ())
-    severity = severities(checks; error_kinds)   # before the parse, so a bad error_kinds fails fast
-    static = checks_in(checks, :static)
-    walking = checks_in(checks, :graph)
-    observing = checks_in(checks, :workload)
+    listed = collect(Check, checks)
+    severity = severities(listed; error_kinds)   # before the parse, so a bad error_kinds fails fast
+    static = checks_in(listed, :static)
+    walking = checks_in(listed, :graph)
+    observing = checks_in(listed, :workload)
     if isnothing(workload)
         waiting = typeof.(observing)
         isempty(observing) || throw(ArgumentError("workload checks $waiting need a workload"))

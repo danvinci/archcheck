@@ -95,13 +95,14 @@ end
 # A binding's type: a declared type as it is, a deferred one computed on first use.
 resolved(::Nothing) = nothing
 resolved(T::Type) = T
-function resolved(deferred::Deferred)
+function resolved(@nospecialize(deferred::Deferred))
     held = computed_result(deferred)
     held isa ComputedType || return nothing
     held.type
 end
 
-function computed_result(deferred::Deferred)
+# Unspecialized: a deferred value's type nests one level per binding step.
+function computed_result(@nospecialize(deferred::Deferred))
     held = deferred.result
     isnothing(held) || return held
     value = deferred.compute(deferred.arguments...)
@@ -364,7 +365,7 @@ function call_type(state, scope, node)
 end
 
 # The element a loop over a collection binds, when every step of `iterate` yields one concrete type.
-function element_type(collection)
+function element_type(@nospecialize(collection))
     collection_type = resolved(collection)
     (isnothing(collection_type) || Base.has_free_typevars(collection_type)) && return nothing
     first_step = iterate_step(Tuple{collection_type})
@@ -384,7 +385,7 @@ function iterate_step(signature)
 end
 
 # The type of the value at a position of a destructured tuple, when the tuple's type is concrete and that long.
-function tuple_element(destructured, position)
+function tuple_element(@nospecialize(destructured), position)
     tuple_type = resolved(destructured)
     tuple_type isa DataType && tuple_type <: Tuple && isconcretetype(tuple_type) || return nothing
     position <= fieldcount(tuple_type) ? fieldtype(tuple_type, position) : nothing

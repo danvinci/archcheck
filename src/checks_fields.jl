@@ -142,7 +142,8 @@ function bind_iteration!(state, scope, targets, node)
     walk_field_reads!(state, scope, node)
 end
 
-function bind_target!(state, scope, target, source)
+# A deferred source's type nests one level per binding step, so specializing on it compiles once per nesting shape.
+function bind_target!(state, scope, target, @nospecialize(source))
     name = target.val
     kind = JS.kind(target)
     if name isa Symbol

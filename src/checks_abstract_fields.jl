@@ -114,10 +114,11 @@ end
 function open_fields(@nospecialize(declared))
     vars = struct_typevars(declared)
     body = Base.unwrap_unionall(declared)
-    field_names = fieldnames(body)
-    field_types = fieldtypes(body)
     found = Tuple{Symbol,Any}[]
-    for (field, field_type) in zip(field_names, field_types)
+    # By position: a zip over `fieldnames` and `fieldtypes` compiles once per struct shape.
+    for position in 1:fieldcount(body)
+        field = fieldname(body, position)
+        field_type = fieldtype(body, position)
         is_open_field(field_type, vars) || continue
         push!(found, (field, field_type))
     end
@@ -175,7 +176,7 @@ function alias_findings!(findings, owner, @nospecialize(declared_type), name, fa
     struct_open = open_fields(family)
     kept_open = Set(first(each) for each in struct_open)
     instance_open = open_fields(declared_type)
-    opened = [(field, declared) for (field, declared) in instance_open if !(field in kept_open)]
+    opened = filter(each -> !(first(each) in kept_open), instance_open)
     isempty(opened) && return
     site = const_site(index, owner, name)
     detail = "the instance this alias names opens a field its struct keeps closed"
