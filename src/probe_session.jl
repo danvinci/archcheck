@@ -37,31 +37,35 @@ struct ProbeTrace
     waits::Vector{WaitRecord}     # waits those calls logged
 end
 
-const FRAME_KEY = :archcheck_probe_frames
-const ARGUMENT_KEY = :archcheck_probe_arguments
 const ROOT_CALLER = Symbol("")
-const PARENT_CALL = Base.ScopedValues.ScopedValue{Symbol}(ROOT_CALLER)
 
-struct OpenFrame
+struct OpenFrame{A<:Tuple}
     name::Symbol                 # function running
     file::String                 # repo-relative path
     line::Int                    # source line
     started::Float64             # entry time (s)
     caller::Symbol               # nearest recorded caller at entry
     enclosing::Vector{Symbol}    # calls already open, outermost first
+    arguments::A                 # the call's arguments, hashed when it leaves
     is_probed::Bool                    # true when this call was asked for
     is_ambient::Bool                   # this call is a non-probed function, or one encloses it
     key_hash::Union{Nothing,UInt}      # hash of the declared key; nothing when the producer declares none
 end
 
+"""What one `arm!` collects. Each rewritten method holds the session that armed it, and each task keeps the frames
+of a session under that session, so sessions armed at once keep their calls apart."""
 mutable struct ProbeSession
     slow_s::Float64                 # minimum duration that leaves a record (s)
     records::Vector{ProbeRecord}    # calls that met the duration
     waits::Vector{WaitRecord}       # waits logged while armed
     lock::ReentrantLock             # guards the record list and the wait list
+    parent::Base.ScopedValues.ScopedValue{Symbol}   # the probed call open where a task was spawned
 end
 
-const ACTIVE = Ref{Union{Nothing,ProbeSession}}(nothing)
+function ProbeSession(slow_s::Float64)
+    parent = Base.ScopedValues.ScopedValue{Symbol}(ROOT_CALLER)
+    ProbeSession(slow_s, ProbeRecord[], WaitRecord[], ReentrantLock(), parent)
+end
 
 is_channel(::Channel) = true
 is_channel(::Any) = false
@@ -73,28 +77,31 @@ function arguments_fed(arguments)
     false
 end
 
-function stored_local(key::Symbol)
+# A task's open frames for one session, stored in the task under the session; nothing when none is open.
+function session_frames(session::ProbeSession)
     storage = task_local_storage()
-    get(storage, key, nothing)
-end
-
-function stored_vector(key::Symbol, ::Type{T}) where {T}
-    stored = stored_local(key)
+    stored = get(storage, session, nothing)
     isnothing(stored) && return nothing
-    stored::Vector{T}
+    stored::Vector{OpenFrame}
 end
 
-function task_vector(key::Symbol, ::Type{T}) where {T}
-    stored = stored_vector(key, T)
-    if isnothing(stored)
-        fresh = T[]
-        task_local_storage(key, fresh)
-        return fresh
+function opened_frames(session::ProbeSession)
+    stored = session_frames(session)
+    isnothing(stored) || return stored
+    fresh = OpenFrame[]
+    task_local_storage(session, fresh)
+    fresh
+end
+
+function close_frame(session::ProbeSession)
+    frames = session_frames(session)::Vector{OpenFrame}
+    frame = pop!(frames)
+    if isempty(frames)
+        storage = task_local_storage()
+        delete!(storage, session)
     end
-    stored
+    frame
 end
-
-active_frames() = stored_vector(FRAME_KEY, OpenFrame)
 
 function nearest_probed(frames)
     index = length(frames)
@@ -122,7 +129,7 @@ function ambient_call(frames, is_probed::Bool)
     false
 end
 
-function caller_of(frames)
+function caller_of(session::ProbeSession, frames)
     frame = nearest_probed(frames)
     if !isnothing(frame)
         name = frame.name
@@ -130,32 +137,29 @@ function caller_of(frames)
             return name
         end
     end
-    PARENT_CALL[]
+    session.parent[]
 end
 
-function probed_frame()
-    frames = active_frames()
+function probed_frame(session::ProbeSession)
+    frames = session_frames(session)
     isnothing(frames) && return nothing
     nearest_probed(frames)
 end
 
-function probe_enter(name::Symbol, file::String, line::Int, arguments::Tuple,
+function probe_enter(session::ProbeSession, name::Symbol, file::String, line::Int, arguments::Tuple,
         key_hash::Union{Nothing,UInt}, is_probed::Bool)
-    session = ACTIVE[]
-    isnothing(session) && return false
-    frames = task_vector(FRAME_KEY, OpenFrame)
-    held = task_vector(ARGUMENT_KEY, Any)
+    frames = opened_frames(session)
     names = ancestor_names(frames)
-    caller = caller_of(frames)
+    caller = caller_of(session, frames)
     covered = ambient_call(frames, is_probed)
     started = time()
-    entered = OpenFrame(name, file, line, started, caller, names, is_probed, covered, key_hash)
+    entered = OpenFrame(name, file, line, started, caller, names, arguments, is_probed, covered, key_hash)
     push!(frames, entered)
-    push!(held, arguments)
-    true
+    nothing
 end
 
-function make_record(frame::OpenFrame, arguments, result, stopped::Float64)
+function make_record(frame::OpenFrame, result, stopped::Float64)
+    arguments = frame.arguments
     argument_hash = content_hash(arguments)
     keyed = frame.key_hash
     if !isnothing(keyed)
@@ -187,27 +191,17 @@ function push_wait(session::ProbeSession, record::WaitRecord)
     nothing
 end
 
-function probe_leave(session_active::Bool, result)
-    session_active || return nothing
-    frames = task_vector(FRAME_KEY, OpenFrame)
-    held = task_vector(ARGUMENT_KEY, Any)
-    frame = pop!(frames)
-    arguments = pop!(held)
-    session = ACTIVE[]
-    isnothing(session) && return nothing
+function probe_leave(session::ProbeSession, result)
+    frame = close_frame(session)
     stopped = time()
     duration = stopped - frame.started
     duration >= session.slow_s || return nothing
-    record = make_record(frame, arguments, result, stopped)
+    record = make_record(frame, result, stopped)
     push_record(session, record)
     nothing
 end
 
-function probe_abort(session_active::Bool)
-    session_active || return nothing
-    frames = task_vector(FRAME_KEY, OpenFrame)
-    held = task_vector(ARGUMENT_KEY, Any)
-    pop!(frames)
-    pop!(held)
+function probe_abort(session::ProbeSession)
+    close_frame(session)
     nothing
 end

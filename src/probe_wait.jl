@@ -10,56 +10,52 @@ function record_wait(frame::OpenFrame, child, started::Float64, stopped::Float64
     WaitRecord(frame.name, site, consumer_task, child_id, started, stopped, identity, reached)
 end
 
-function finish_wait(child, started::Float64, result)
-    frame = probed_frame()
+function finish_wait(session::ProbeSession, child, started::Float64, result)
+    frame = probed_frame(session)
     isnothing(frame) && return result
-    session = ACTIVE[]
-    isnothing(session) && return result
     stopped = time()
     record = record_wait(frame, child, started, stopped, result)
     push_wait(session, record)
     result
 end
 
-function probe_fetch(child)
+function probe_fetch(session::ProbeSession, child)
     started = time()
     try
         result = Base.fetch(child)
-        return finish_wait(child, started, result)
+        return finish_wait(session, child, started, result)
     catch
-        finish_wait(child, started, nothing)
+        finish_wait(session, child, started, nothing)
         rethrow()
     end
 end
 
-function probe_wait(child)
+function probe_wait(session::ProbeSession, child)
     started = time()
     try
         Base.wait(child)
-    catch
-        finish_wait(child, started, nothing)
-        rethrow()
+    finally
+        finish_wait(session, child, started, nothing)
     end
-    finish_wait(child, started, nothing)
     nothing
 end
 
 # `wait` on a failed task throws its `TaskFailedException`, the error `@sync` collects for it.
-function wait_synced(item, errors)
+function wait_synced(session::ProbeSession, item, errors)
     started = time()
     try
         Base.wait(item)
     catch failure
         push!(errors, failure)
     end
-    finish_wait(item, started, nothing)
+    finish_wait(session, item, started, nothing)
     nothing
 end
 
-function take_synced(channel, errors)
+function take_synced(session::ProbeSession, channel, errors)
     while isready(channel)
         item = take!(channel)
-        wait_synced(item, errors)
+        wait_synced(session, item, errors)
     end
     nothing
 end
@@ -85,9 +81,9 @@ function throw_synced(errors)
     throw(collected)
 end
 
-function log_sync_end(channel)
+function log_sync_end(session::ProbeSession, channel)
     errors = Any[]
-    take_synced(channel, errors)
+    take_synced(session, channel, errors)
     close(channel)
     late_synced(channel, errors)
     throw_synced(errors)

@@ -103,6 +103,14 @@ const SLOT_HOLDER = load_package("SlotHolder", """
     keep(slots) = slots
     """)
 
+const NEST_OUTER = load_package("NestOuter", """
+    outer_step(x) = x + 1
+    """)
+
+const NEST_INNER = load_package("NestInner", """
+    inner_step(f) = f()
+    """)
+
 @testset "equal values share an argument hash and a result hash, and the record names the method" begin
     method = only(methods(Probed.same))
     site = (joinpath("src", "Probed.jl"), method.line)
@@ -394,6 +402,51 @@ end
     seen = observed_gate(pkg; checks = (Rebuilds(),), workload = holding_call, probes)
     record = only(seen.observed.records)
     @test record.name === :keep
+end
+
+@testset "a session armed inside another keeps its calls apart" begin
+    outer_pkg = NEST_OUTER.pkg
+    inner_pkg = NEST_INNER.pkg
+    inner_seen = Ref{Any}(nothing)
+    nested_run = function ()
+        outer_pkg.outer_step(1)
+        inner_probes = Probes(; functions = (inner_pkg.inner_step,), slow_s = 0.0)
+        inner_work = () -> inner_pkg.inner_step(() -> outer_pkg.outer_step(2))
+        inner_seen[] = observed_gate(inner_pkg; workload = inner_work, probes = inner_probes)
+        outer_pkg.outer_step(3)
+    end
+    outer_probes = Probes(; functions = (outer_pkg.outer_step,), slow_s = 0.0)
+    seen = observed_gate(outer_pkg; workload = nested_run, probes = outer_probes)
+    outer_records = seen.observed.records
+    outer_names = [record.name for record in outer_records]
+    @test outer_names == [:outer_step, :outer_step, :outer_step]
+    # The middle call ran inside the inner session's `inner_step`, which the outer session does not see.
+    for record in outer_records
+        @test record.caller === Symbol("")
+        @test isempty(record.enclosing)
+    end
+    inner_records = inner_seen[].observed.records
+    inner_names = [record.name for record in inner_records]
+    @test inner_names == [:inner_step]
+end
+
+@testset "a method another armed session probes is refused, and that session keeps recording" begin
+    pkg = NEST_OUTER.pkg
+    refused = Ref{Any}(nothing)
+    probes = Probes(; functions = (pkg.outer_step,), slow_s = 0.0)
+    overlapping_run = function ()
+        refused[] = caught(gate_findings, pkg; workload = () -> nothing, probes)
+        pkg.outer_step(1)
+    end
+    seen = observed_gate(pkg; workload = overlapping_run, probes)
+    @test refused[] isa ArgumentError
+    refused_text = sprint(showerror, refused[])
+    @test occursin("outer_step", refused_text)
+    @test occursin("still armed", refused_text)
+    names = [record.name for record in seen.observed.records]
+    @test names == [:outer_step]
+    restored = Base.invokelatest(pkg.outer_step, 1)
+    @test restored == 2
 end
 
 @testset "a stdlib method, recorded at the build machine's path, is probed from its local source" begin

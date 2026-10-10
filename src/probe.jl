@@ -128,7 +128,30 @@ function key_for(derived, method)
     nothing
 end
 
-function install_method!(method, located, is_probed::Bool, originals, skipped, key)
+# A rewritten method holds its session among its roots, the literals its code names.
+function holds_session(method::Method)
+    isdefined(method, :roots) || return false
+    for root in method.roots
+        root isa ProbeSession && return true
+    end
+    false
+end
+
+# A keyword method's body is rewritten in place of the method the table lists for it.
+function is_probed_method(method::Method)
+    holds_session(method) && return true
+    body = defined_body(method)
+    isnothing(body) && return false
+    rewritten = newest_method(body)
+    isnothing(rewritten) && return false
+    holds_session(rewritten)
+end
+
+function install_method!(method, located, session, is_probed::Bool, originals, skipped, key)
+    if is_probed_method(method)
+        note_skip!(skipped, method, "probed by a session still armed")
+        return nothing
+    end
     if isdefined(method, :generator)
         note_skip!(skipped, method, "generated")
         return nothing
@@ -141,7 +164,8 @@ function install_method!(method, located, is_probed::Bool, originals, skipped, k
     saved = Expr(statement)
     retag_lines!(saved, method.file)
     line = Int(method.line)
-    probed = rewrite_definition(saved, method.name, located.file.path, line, is_probed, key)
+    site = ProbeSite(session, method.name, located.file.path, line, is_probed, key)
+    probed = rewrite_definition(saved, site)
     if isnothing(probed)
         note_skip!(skipped, method, "a form the rewrite does not take")
         return nothing
@@ -245,7 +269,7 @@ function replaced_source(method::Method, saved::Expr, probed::Expr, home::Module
     source
 end
 
-function install!(functions, is_probed::Bool, ctx, originals, skipped)
+function install!(functions, session, is_probed::Bool, ctx, originals, skipped)
     modules = package_modules(ctx)
     for target in functions
         defined = methods(target)
@@ -255,7 +279,7 @@ function install!(functions, is_probed::Bool, ctx, originals, skipped)
             located = method_form(ctx.index, method)
             is_unprobed_constructor(target, located) && continue
             key = key_for(ctx.derived, method)
-            install_method!(method, located, is_probed, originals, skipped, key)
+            install_method!(method, located, session, is_probed, originals, skipped, key)
         end
     end
     nothing
@@ -291,27 +315,22 @@ function keyed_producers(derived)
 end
 
 """Evaluates every method of the probed functions defined in the package again, from the index's parse, with an
-entry and an exit probe. Returns the handle that collects the records and later restores the methods."""
+entry and an exit probe. Returns the handle that collects the records and later restores the methods. Sessions
+nest: a method another armed session probes is refused."""
 function arm!(probes::Probes, ctx)
-    active = ACTIVE[]
-    isnothing(active) || throw(ArgumentError("a probe session is already armed"))
-    records = ProbeRecord[]
-    waits = WaitRecord[]
-    session = ProbeSession(probes.slow_s, records, waits, ReentrantLock())
+    session = ProbeSession(probes.slow_s)
     originals = MethodSource[]
     skipped = ProbeSkip[]
-    ACTIVE[] = session
     try
         producers = keyed_producers(ctx.derived)
-        install!(producers, true, ctx, originals, skipped)
+        install!(producers, session, true, ctx, originals, skipped)
         listed = except_installed(probes.functions, producers)
         ambient = except_installed(probes.ambient, producers)
-        install!(listed, true, ctx, originals, skipped)
-        install!(ambient, false, ctx, originals, skipped)
+        install!(listed, session, true, ctx, originals, skipped)
+        install!(ambient, session, false, ctx, originals, skipped)
         isempty(skipped) || throw(skip_error(skipped))
     catch
         restore_originals(originals)
-        ACTIVE[] = nothing
         rethrow()
     end
     ProbeHandle(session, originals)
@@ -320,10 +339,6 @@ end
 """Restores every method a handle probed to its source definition and returns the calls and the waits collected while armed."""
 function disarm!(armed::ProbeHandle)
     restore_originals(armed.originals)
-    active = ACTIVE[]
-    if active === armed.session
-        ACTIVE[] = nothing
-    end
     records = copy(armed.session.records)
     waits = copy(armed.session.waits)
     ProbeTrace(records, waits)
