@@ -111,7 +111,7 @@ struct FileSinkable <: Check end
 struct Sinkable <: Check end
 """Runs in `CHECKS`. A function body ends in a bare tuple of three or more slots."""
 struct TupleReturns <: Check end
-"""Runs in `CHECKS`. A top-level definition has no reference in the source or the entry directories. `public_is_entry`, on by default, counts an exported or public name as a reference; an application turns it off."""
+"""Runs in `CHECKS`. A top-level function no root reaches through the names code reads, cycles included. Roots are the names entry scripts read, names read outside any function, `__init__`, methods on functions or types the package does not judge, and, with `public_is_entry` on by default, exported or public names; an application turns it off."""
 struct DeadCode <: Check
     public_is_entry::Bool   # an exported or public name counts as an entry point
 end
@@ -184,7 +184,10 @@ kinds(::ModulePiracy) = (:module_piracy => :error,)
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
 kinds(::TupleReturns) = (:tuple_return => :advisory,)
 
-run(check::DeadCode, ctx) = check_dead_code_static(ctx.index; public_is_entry = check.public_is_entry)
+function run(check::DeadCode, ctx)
+    modules = package_modules(ctx)
+    check_dead_code_static(ctx.index, modules; public_is_entry = check.public_is_entry)
+end
 kinds(::DeadCode) = (:dead_code => :advisory,)
 
 run(::BlanketExports, ctx) = check_blanket_exports(ctx.index)

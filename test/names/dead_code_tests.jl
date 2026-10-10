@@ -1,17 +1,32 @@
-# An uncalled definition is dead. A script entry keeps a name alive. A test entry does not.
+# A definition no root reaches through names is dead. A script entry keeps a name alive. A test entry does not.
 
-function dead_symbols(case; entry_dirs = String[], options...)
+function dead_findings(case; entry_dirs = String[], options...)
     check = DeadCode(; options...)
     ctx = case_context(case; entry_dirs)
     found = ArchCheck.run(check, ctx)
-    Set(finding.symbol for finding in found)
+    Dict(finding.symbol => finding for finding in found)
 end
+
+dead_symbols(case; options...) = Set(keys(dead_findings(case; options...)))
 
 const DEAD_ENTRY_DIR = mktempdir()
 write(joinpath(DEAD_ENTRY_DIR, "run.jl"), "entry()\n")
 const DEAD_AND_CALLED = load_package("DeadAndCalled", """
 include("body.jl")
-""", ["body.jl" => "keep() = 1\ngone() = 2\nentry() = keep()\n"])
+""", ["body.jl" => """
+keep() = 1
+gone() = 2
+entry() = keep()
+chain_head() = chain_tail()
+chain_tail() = 3
+ping() = pong()
+pong() = ping()
+spin(n) = n > 0 ? spin(n - 1) : 0
+macro emitted()
+    :(expanded())
+end
+expanded() = 4
+"""])
 
 const DEFAULT_HELPER = load_package("DefaultHelper", """
 owner(x = helper()) = x
@@ -35,7 +50,10 @@ const EXPORTED_NAME = load_package("ExportedName", """
 export uncalled
 public visible
 include("impl.jl")
-""", ["impl.jl" => "uncalled() = 1\nvisible() = 2\nhidden() = 3\n"])
+for name in names(@__MODULE__; all = true)
+    startswith(string(name), "loop_api") && @eval export \$name
+end
+""", ["impl.jl" => "uncalled() = 1\nvisible() = 2\nhidden() = 3\nloop_api() = loop_helper()\nloop_helper() = 4\n"])
 
 const QUALIFIED_CALL = load_package("QualifiedCall", """
 include("aa/Aa.jl")
@@ -179,7 +197,16 @@ neg_typed_local() = 1
 pos_make() = PosMarker()
 """
 
+# Exported, so each owner is a root and a name its code reads stays live.
+const LOCAL_BINDING_OWNERS = (
+    "labeled_owner", "nested_label_owner", "called_label_owner", "keyed_owner", "same_owner", "later_owner",
+    "earlier_owner", "keyed_same_owner", "hid_owner", "anon_owner", "destruct_owner", "where_owner",
+    "global_owner", "callback_owner", "branch_owner", "try_owner", "lambda_owner", "let_owner",
+    "nested_global_owner", "gen_owner", "ordered_owner", "nest_owner", "indexed_owner", "typed_owner",
+)
+
 const LOCAL_BINDINGS = load_package("LocalBindings", """
+export $(join(LOCAL_BINDING_OWNERS, ", "))
 include("types.jl")
 include("body.jl")
 include("ext.jl")
@@ -202,17 +229,21 @@ const LOCAL_BINDING_LIVE = (
     "pos_inner_helper", "pos_store", "pos_make", "pos_global_helper", "pos_callback_helper",
 )
 
-@testset "an uncalled definition is dead and a called one stays" begin
-    dead = dead_symbols(DEAD_AND_CALLED; entry_dirs = [DEAD_ENTRY_DIR])
-    @test "gone" in dead
-    @test !("keep" in dead)
-    @test !("entry" in dead)
+@testset "a definition only dead code names is dead, and its evidence names them" begin
+    dead = dead_findings(DEAD_AND_CALLED; entry_dirs = [DEAD_ENTRY_DIR])
+    @test Set(keys(dead)) == Set(["gone", "chain_head", "chain_tail", "ping", "pong", "spin"])
+    @test isempty(dead["gone"].evidence)
+    @test isempty(dead["chain_head"].evidence)
+    @test ev(dead["chain_tail"], :named_by) == "chain_head"
+    @test ev(dead["ping"], :named_by) == "pong"
+    @test ev(dead["pong"], :named_by) == "ping"
+    @test ev(dead["spin"], :named_by) == "spin"
 end
 
-@testset "a default argument keeps its helper and the uncalled owner stays dead" begin
-    dead = dead_symbols(DEFAULT_HELPER)
-    @test "owner" in dead
-    @test !("helper" in dead)
+@testset "a default argument's call names its helper" begin
+    dead = dead_findings(DEFAULT_HELPER)
+    @test isempty(dead["owner"].evidence)
+    @test ev(dead["helper"], :named_by) == "owner"
 end
 
 @testset "a script entry keeps a definition and a directory named test does not" begin
@@ -224,17 +255,17 @@ end
     @test "tested" in tested
 end
 
-@testset "an exported or public name is an entry unless the package turns that off" begin
+@testset "an exported or public name is an entry unless the package turns that off, a load-time export included" begin
     library = dead_symbols(EXPORTED_NAME)
     @test library == Set(["hidden"])
     application = dead_symbols(EXPORTED_NAME; public_is_entry = false)
-    @test application == Set(["uncalled", "visible", "hidden"])
+    @test application == Set(["uncalled", "visible", "hidden", "loop_api", "loop_helper"])
 end
 
-@testset "a qualified call from another module keeps the definition" begin
-    dead = dead_symbols(QUALIFIED_CALL)
-    @test !("helper" in dead)
-    @test "user" in dead
+@testset "a qualified call from another module names the definition" begin
+    dead = dead_findings(QUALIFIED_CALL)
+    @test isempty(dead["user"].evidence)
+    @test ev(dead["helper"], :named_by) == "user"
 end
 
 const FIELD_READS = load_package("FieldReads", """
@@ -268,12 +299,14 @@ include("body.jl")
 ])
 
 @testset "a field read is not a reference to the function it shares a name with" begin
-    dead = dead_symbols(FIELD_READS)
+    dead = dead_findings(FIELD_READS)
     for name in ("neg_argument_field", "neg_nested_field", "neg_call_field", "neg_loop_field", "neg_top_field")
-        @test name in dead
+        @test isempty(dead[name].evidence)
     end
-    for name in ("pos_qualified", "pos_spliced", "pos_macro_qualified")
-        @test !(name in dead)
+    named = ("pos_qualified" => "qualified_owner", "pos_spliced" => "spliced_owner",
+             "pos_macro_qualified" => "macro_owner")
+    for (name, owner) in named
+        @test ev(dead[name], :named_by) == owner
     end
 end
 

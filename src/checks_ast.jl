@@ -27,29 +27,91 @@ function published_names(index)
     names
 end
 
-# A curly constructor binds no name: dispatch reaches it through its type, as it reaches `Base.show` methods.
-# A type the module defines is referenced by its own definition, so only another module's type is in question.
-function dead_code_findings(index, entries)
+# The top-level functions DeadCode judges, by module and name. A curly constructor binds no name: dispatch reaches
+# it through its type, as it reaches `Base.show` methods.
+function judged_defs(index)
     defs = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
-    referenced = Set{Symbol}()
+    for file in index.files, name in file.scan.funcs
+        name in file.scan.constructors && continue
+        line = file.scan.line[name]
+        defs[(file.mod, name)] = (file.path, line)
+    end
+    defs
+end
+
+# Each name a definition's code reads, by the definition's name, merged over its methods and modules.
+function name_edges(index)
+    edges = Dict{Symbol,Set{Symbol}}()
+    for file in index.files, (name, used) in file.scan.refs
+        targets = get!(Set{Symbol}, edges, name)
+        union!(targets, used)
+    end
+    edges
+end
+
+# The entries, every name read outside a function (an import, a top-level call, a macro's body, a type's own
+# name), and code keyed by a name no judged function holds: a method on another module's function, a type's members.
+function name_roots(index, edges, judged, entries)
+    roots = Set{Symbol}(entries)
     for file in index.files
-        for names in values(file.scan.refs)
-            union!(referenced, names)
-        end
-        union!(referenced, file.scan.modrefs)
-        for name in file.scan.funcs
-            name in file.scan.constructors && continue
-            line = file.scan.line[name]
-            defs[(file.mod, name)] = (file.path, line)
+        union!(roots, file.scan.modrefs)
+    end
+    for name in keys(edges)
+        name in judged || push!(roots, name)
+    end
+    roots
+end
+
+# Every name the roots reach by following what each reached definition reads.
+function reached_names(edges, roots)
+    reached = Set{Symbol}()
+    pending = collect(roots)
+    while !isempty(pending)   # unbounded: each name enters `reached` once, so the walk ends
+        name = pop!(pending)
+        name in reached && continue
+        push!(reached, name)
+        targets = get(edges, name, ())
+        for target in targets
+            target in reached || push!(pending, target)
         end
     end
+    reached
+end
+
+# Each unreached judged name -> the unreached definitions that read it. A root reads nothing unreached.
+function dead_readers(edges, reached, judged)
+    readers = Dict{Symbol,Vector{Symbol}}()
+    for (name, used) in edges
+        name in reached && continue
+        for target in used
+            target in judged || continue
+            target in reached && continue
+            push!(get!(Vector{Symbol}, readers, target), name)
+        end
+    end
+    readers
+end
+
+function dead_code_findings(index, entries)
+    defs = judged_defs(index)
+    judged = Set(last(key) for key in keys(defs))
+    edges = name_edges(index)
+    roots = name_roots(index, edges, judged, entries)
+    reached = reached_names(edges, roots)
+    readers = dead_readers(edges, reached, judged)
     findings = Finding[]
     for ((mod, name), (file, line)) in defs
-        name in referenced && continue
-        name in entries && continue
-        detail = "no reference in src or scripts"
+        name in reached && continue
         symbol = string(name)
-        push!(findings, Finding(mod, :dead_code, file, symbol, line, detail))
+        if haskey(readers, name)
+            names = sort!(string.(readers[name]))
+            evidence = [:named_by => join(names, ",")]
+            detail = "only dead definitions name it"
+            push!(findings, Finding(mod, :dead_code, file, symbol, line, detail, evidence))
+        else
+            detail = "no reference in src or scripts"
+            push!(findings, Finding(mod, :dead_code, file, symbol, line, detail))
+        end
     end
     findings
 end
@@ -57,13 +119,17 @@ end
 # Julia calls a module's `__init__` when it loads, so its definition needs no source reference.
 const RUNTIME_ENTRIES = (:__init__,)
 
-# A top-level def with no call site in src and absent from scripts/.
-# The parse records calls inside closures, so a deck-wrapped function still counts as referenced.
-function check_dead_code_static(index; public_is_entry::Bool)
+# A top-level function no root reaches through names, cycles included. A loaded module's `names` holds what its
+# load exported or declared public, as an `@eval export` loop does, beside the lists the parse reads.
+function check_dead_code_static(index, modules; public_is_entry::Bool)
     entries = union(index.external, RUNTIME_ENTRIES)
     if public_is_entry
         published = published_names(index)
         union!(entries, published)
+        for mod in modules
+            loaded = names(mod)
+            union!(entries, loaded)
+        end
     end
     dead_code_findings(index, entries)
 end
