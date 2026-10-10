@@ -10,9 +10,24 @@ end
 # A keyword body is the generated `#name#N` function. Its edges belong to the method the source wrote.
 const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
 
+# Inference reads a callee it already holds more precisely than one it meets mid-walk, so a first walk in a cold
+# process can land a call differently. The graph is the walk a further walk reproduces.
+const GRAPH_WALKS_MAX = 4
+
 """The calls between methods reached from `entries`, each a `Core.MethodInstance` or a `(function, argument types)`
 pair; only methods `modules` define expand, and `values` names the functions a callee unknown at its site can hold."""
 function method_graph(entries, modules, values)
+    previous = nothing
+    for _walk in 1:GRAPH_WALKS_MAX
+        current = walk_methods(entries, modules, values)
+        is_settled = !isnothing(previous) && current.edges == previous.edges
+        is_settled && return current
+        previous = current
+    end
+    error("the method graph changed on each of $GRAPH_WALKS_MAX walks")
+end
+
+function walk_methods(entries, modules, values)
     module_set = Set{Module}(modules)
     edges = Dict{Method,Set{Method}}()
     pending = Core.MethodInstance[]
