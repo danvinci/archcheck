@@ -125,10 +125,15 @@ function Base.copy(scope::Scope)
     Scope(types, locals)
 end
 
+# What inference gave for each (callee, signature) a scan asked about: one concrete type, or nothing. Keyed by
+# identity, so a callee's own `hash` stays uncalled.
+const InferredTypes = IdDict{Tuple{Any,Any},Union{Nothing,DataType}}
+
 # One file's reads, walked in the namespace of the module that owns the file.
 struct ReadState{E}
     mod::Module                      # the file's module, where annotations and callees resolve
     reads::Vector{E}                 # reads on typed receivers
+    inferred::InferredTypes          # answers shared by every file of one run, whose world stays fixed
 end
 
 # The value a dotted path binds in `mod` when every binding along it is constant; nothing otherwise.
@@ -294,6 +299,14 @@ function inferred_type(f, signature)
     concrete_type(result)
 end
 
+# The inferred concrete type, asked of inference once per callee and signature in a run.
+function known_inferred_type(state, f, signature)
+    key = (f, signature)
+    get!(state.inferred, key) do
+        inferred_type(f, signature)
+    end
+end
+
 # The NamedTuple type a call's keyword arguments form; nothing when one is splatted or not named plainly.
 function keywords_type(state, scope, keywords)
     names = Symbol[]
@@ -334,13 +347,13 @@ function inferred_result(state, scope, f, operands)
     end
     if isempty(keywords)
         signature = Tuple{positional...}
-        return inferred_type(f, signature)
+        return known_inferred_type(state, f, signature)
     end
     named = keywords_type(state, scope, keywords)
     isnothing(named) && return nothing
     callee_type = Core.Typeof(f)
     signature = Tuple{named, callee_type, positional...}
-    inferred_type(Core.kwcall, signature)
+    known_inferred_type(state, Core.kwcall, signature)
 end
 
 # A call through a global function no local binding shadows, typed by inference.
