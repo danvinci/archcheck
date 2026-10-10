@@ -73,7 +73,7 @@ ArchCheck.gate(MyPackage;
     workload = PriorRun())
 ```
 
-`PriorRun()` runs nothing, so `UnreachedMethods` reports the methods the tests never compiled. A test that errors still counts every method it ran. Probes record only calls made while they are armed, so the gate refuses them beside `PriorRun()`.
+`PriorRun()` runs nothing, so `UnreachedMethods` reports the methods the tests never compiled; a test that errors inside a testset still counts every method it ran. An extension whose trigger only the tests load is judged too, since the gate reads the modules loaded when it runs. Probes record only calls made while they are armed, so the gate refuses them beside `PriorRun()`.
 
 ## Writing a check
 
