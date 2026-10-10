@@ -9,7 +9,7 @@ function checks_in(checks, wanted::Symbol)
     Tuple(check for check in checks if phase(check) === wanted)
 end
 
-"""Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()` with `probes` armed and the checks that read it. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names."""
+"""Parses `pkg`'s `src/` once, runs `workload()` with `probes` armed, walks the method graph from `entries`, then runs the static `checks` (`CHECKS` by default) and the checks that read the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names."""
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
@@ -29,15 +29,18 @@ function gate(pkg::Module;
         isempty(observing) || throw(ArgumentError("workload checks $waiting need a workload"))
         isnothing(probes) || throw(ArgumentError("probes observe a workload, and none is declared"))
     end
-    ctx = Context(pkg; src, entry_dirs, entries, derived)   # the one parse, src/ and entry dirs
-    findings = run_checks(ctx, static)
+    parsed = Context(pkg; src, entry_dirs, derived)   # the one parse, src/ and entry dirs
+    # The workload runs before the method graph's walk and the static checks, whose lookups make specializations
+    # it would read as compiled. Restored probes define methods after this call's world began.
+    unwalked = parsed
     if !isnothing(workload)
-        observed = observe(workload, probes, ctx)
-        after_workload = Context(ctx; observed)
-        # Restored probes define methods and keyword bodies after this call's world began.
-        observed_findings = Base.invokelatest(run_checks, after_workload, observing)
-        append!(findings, observed_findings)
+        observed = observe(workload, probes, parsed)
+        unwalked = Context(parsed; observed)
     end
+    ctx = Base.invokelatest(with_method_graph, unwalked, entries)
+    findings = Base.invokelatest(run_checks, ctx, static)
+    observed_findings = Base.invokelatest(run_checks, ctx, observing)
+    append!(findings, observed_findings)
 
     mkpath(dirname(report_path))
     previous = previous_fingerprints(report_path)

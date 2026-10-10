@@ -2,29 +2,102 @@
 
 """What the method table holds after one run of the workload, the probed calls that run made, and the waits those calls logged."""
 struct Observation
-    reached::Set{Method}             # live methods compiled during the run or earlier; a keyword body or a restored probe credits its method
+    reached::Set{Method}             # live methods compiled during the run or earlier, read before the method graph's walk; a keyword body, a restored probe or an all-Any constructor credits its method
     records::Vector{ProbeRecord}     # probed calls of at least the probes' slow threshold; empty when nothing is probed
     waits::Vector{WaitRecord}        # waits those calls logged; empty when nothing is probed
     seconds::Float64                 # the workload's wall time (s)
 end
 
 # A keyword call compiles the body function, so that specialization counts for the method which declares the keywords.
-function is_compiled(method::Method)
-    specs = Base.specializations(method)
-    isempty(specs) || return true
+function keyword_body(method::Method)
     keywords = Base.kwarg_decl(method)
-    isempty(keywords) && return false
-    body = Base.bodyfunction(method)
-    isnothing(body) && return false
-    body_compiled(body)
+    isempty(keywords) && return nothing
+    Base.bodyfunction(method)
 end
 
-function body_compiled(body::Function)
-    for inner in methods(body)
-        specs = Base.specializations(inner)
-        isempty(specs) || return true
+function record_specializations!(existing, method::Method, modules)
+    method.module in modules || return
+    for instance in Base.specializations(method)
+        push!(existing, instance)
+    end
+end
+
+"""The specializations of the package's methods, read before the method graph's walk. Load, earlier runs and the
+workload made each one; the walk, which makes one for every method it walks, has not run yet."""
+function existing_specializations(modules)
+    existing = Base.IdSet{Core.MethodInstance}()
+    module_set = Set{Module}(modules)
+    Base.visit(Core.methodtable) do method
+        record_specializations!(existing, method, module_set)
+    end
+    existing
+end
+
+"""Whether a specialization ran, or was compiled to run: `existing`, from `existing_specializations`, holds it."""
+specialization_ran(instance::Core.MethodInstance, existing) = instance in existing
+
+function holds_specialization(method::Method, existing)
+    for instance in Base.specializations(method)
+        specialization_ran(instance, existing) && return true
     end
     false
+end
+
+function is_compiled(method::Method, existing)
+    holds_specialization(method, existing) && return true
+    body = keyword_body(method)
+    isnothing(body) && return false
+    for inner in methods(body)
+        holds_specialization(inner, existing) && return true
+    end
+    false
+end
+
+function argument_is_any(@nospecialize(param))
+    param === Any && return true
+    param isa Core.TypeofVararg || return false
+    param.T === Any
+end
+
+function all_arguments_any(method::Method)
+    signature = Base.unwrap_unionall(method.sig)
+    signature isa DataType || return false
+    params = signature.parameters
+    length(params) < 2 && return false
+    last_index = length(params)
+    for index in 2:last_index
+        argument_is_any(params[index]) || return false
+    end
+    true
+end
+
+function is_type_constructor(method::Method)
+    signature = Base.unwrap_unionall(method.sig)
+    signature isa DataType || return false
+    params = signature.parameters
+    isempty(params) && return false
+    head = Base.unwrap_unionall(params[1])
+    Base.isType(head)
+end
+
+# A call written as Type{Params}(...) compiles the all-Any constructor Julia installs beside the typed one, so the
+# typed constructor at that site ran.
+function credit_typed_constructors!(reached, defined, existing)
+    sites = Set{Tuple{Symbol,Symbol,Int,Int}}()
+    typed = Method[]
+    for method in defined
+        is_type_constructor(method) || continue
+        if !all_arguments_any(method)
+            push!(typed, method)
+            continue
+        end
+        holds_specialization(method, existing) || continue
+        push!(sites, (method.name, method.file, method.line, method.nargs))
+    end
+    for method in typed
+        site = (method.name, method.file, method.line, method.nargs)
+        site in sites && push!(reached, method)
+    end
 end
 
 # A function type carries one leading hash plus its name. A second hash marks a keyword body, a closure, or a local function.
@@ -48,11 +121,15 @@ function generated_function_name(name::Symbol)
     occursin('#', rest)
 end
 
+# What the package has compiled so far. Read before the method graph's walk, whose specializations would count too.
 function compiled_methods(modules)
+    existing = existing_specializations(modules)
     reached = Set{Method}()
     Base.visit(Core.methodtable) do method
-        record_compiled!(reached, method, modules)
+        record_compiled!(reached, method, modules, existing)
     end
+    defined = project_methods(modules)
+    credit_typed_constructors!(reached, defined, existing)
     reached
 end
 
@@ -95,19 +172,20 @@ function restored_method(probed::Method)
     chosen
 end
 
-function collect_compiled!(found, functions, modules)
+function collect_compiled!(found, functions, modules, existing)
     module_set = Set{Module}(modules)
     for func in functions
         defined = methods(func)
         for method in defined
-            record_compiled!(found, method, module_set)
+            record_compiled!(found, method, module_set, existing)
         end
     end
 end
 
 function compiled_probed(armed::ProbeHandle, modules)
+    existing = existing_specializations(modules)
     found = Method[]
-    collect_compiled!(found, armed.functions, modules)
+    collect_compiled!(found, armed.functions, modules, existing)
     found
 end
 
@@ -119,16 +197,16 @@ function credit_restored!(reached, probed_compiled)
     end
 end
 
-function record_compiled!(reached, method::Method, modules)
+function record_compiled!(reached, method::Method, modules, existing)
     method.module in modules || return
     is_generated(method) && return
     is_live_method(method) || return
-    is_compiled(method) || return
+    is_compiled(method, existing) || return
     push!(reached, method)
 end
 
 """Runs the workload, a zero-argument callable, once with the probes armed (`nothing` probes nothing), and reads
-which of the package's methods it compiled."""
+which of the package's methods it compiled. The gate calls it before it walks the method graph."""
 function observe(workload, probes, ctx)
     records = ProbeRecord[]
     waits = WaitRecord[]

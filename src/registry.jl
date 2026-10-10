@@ -38,9 +38,8 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
         loaded = loaded_module(pkg, key)
         isnothing(loaded) || push!(mods, loaded)
     end
-    project = package_modules(pkg, mods)
-    methods = isempty(entries) ? nothing : method_graph(entries, project, value_names(index))
-    Context(index, pkg, mods; methods, derived)
+    unwalked = Context(index, pkg, mods; derived)
+    with_method_graph(unwalked, entries)
 end
 
 # The same context once the workload has run. Restored probes defined methods, so the method list is read again.
@@ -48,6 +47,17 @@ function Context(ctx::Context; observed::Observation)
     modules = package_modules(ctx)
     defined = project_methods(modules)
     Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, defined, ctx.methods, observed,
+            ctx.derived)
+end
+
+# The context with the calls between methods from `entries`; unchanged when none is declared. The walk makes a
+# specialization of each method it walks, so a workload's reach is read before it.
+function with_method_graph(ctx::Context, entries)
+    isempty(entries) && return ctx
+    project = package_modules(ctx)
+    names = value_names(ctx.index)
+    methods = method_graph(entries, project, names)
+    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, methods, ctx.observed,
             ctx.derived)
 end
 

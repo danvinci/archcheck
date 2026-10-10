@@ -20,6 +20,12 @@ const TWIN_CONSTRUCTOR = load_package("TwinConstructor", """
     spare(x::Int) = x + 1
     """)
 
+const WALKED_BOX = load_package("WalkedBox", """
+    struct Box{T}
+        value::T
+    end
+    """)
+
 const PARAMETRIC_BOX = load_package("ParametricBox", """
     struct Box{T}
         value::T
@@ -60,7 +66,28 @@ const EXPORTED_SPARE = load_package("ExportedSpare", """
     hidden(x::Int) = x + 3
     """)
 
-@testset "only the method nobody called and no graph call lands on is unreached" begin
+# A macro outside the package. The method it builds is filed in this test file.
+module ForeignMacro
+    macro tally(name)
+        quote
+            $(esc(name))(x::Int) = x + 5
+        end
+    end
+end
+
+# `@enum` files the methods it builds at its call, where the source writes no definition of them. A struct's
+# constructors are filed at its first field, here a macro call inside the written struct.
+const MACRO_BUILT = load_package("MacroBuilt", """
+    @enum Shade light dark
+    Main.ForeignMacro.@tally tallied
+    @inline kept(x::Int) = x + 6
+    mutable struct Counter
+        @atomic count::Int
+    end
+    spare(x::Int) = x + 1
+    """)
+
+@testset "only the methods nobody called and no graph call lands on are unreached, the graph's entry included" begin
     pkg = LEFT_UNCALLED.pkg
     entry = (pkg.route, Tuple{Int,Any})
     reach_workload = function ()
@@ -70,13 +97,22 @@ const EXPORTED_SPARE = load_package("ExportedSpare", """
     checks = (UnreachedMethods(),)
     entries = (entry,)
     found = gate_findings(pkg; checks, workload = reach_workload, entries)
-    hit = only(found)
     uncalled = only(methods(pkg.uncalled))
+    route = only(methods(pkg.route))
+    hit = only(finding for finding in found if finding.symbol == "uncalled")
     @test hit.mod === :LeftUncalled
     @test hit.line == Int(uncalled.line)
     rows = evidence_rows(found, :module, :signature)
-    signature = string(uncalled.sig)
-    @test rows == [(:unreached_method, "uncalled", "LeftUncalled", signature)]
+    route_row = (:unreached_method, "route", "LeftUncalled", string(route.sig))
+    uncalled_row = (:unreached_method, "uncalled", "LeftUncalled", string(uncalled.sig))
+    @test rows == [route_row, uncalled_row]
+end
+
+@testset "a method a macro builds where the source writes no definition of it stays quiet" begin
+    pkg = MACRO_BUILT.pkg
+    found = gate_findings(pkg; checks = (UnreachedMethods(),), workload = () -> nothing)
+    rows = evidence_rows(found)
+    @test rows == [(:unreached_method, "Counter"), (:unreached_method, "kept"), (:unreached_method, "spare")]
 end
 
 @testset "a dynamic call reaches only the methods its types match, and the methods those call" begin
@@ -86,8 +122,11 @@ end
     workload = () -> pkg.ready()
     found = gate_findings(pkg; checks = (UnreachedMethods(),), workload, entries)
     unmatched = which(pkg.place, Tuple{String,String})
+    route = only(methods(pkg.route))
     rows = evidence_rows(found, :signature)
-    @test rows == [(:unreached_method, "place", string(unmatched.sig))]
+    place_row = (:unreached_method, "place", string(unmatched.sig))
+    route_row = (:unreached_method, "route", string(route.sig))
+    @test rows == [place_row, route_row]
 end
 
 @testset "a method a dynamic call reaches calls on with the types that call holds" begin
@@ -97,8 +136,11 @@ end
     workload = () -> pkg.ready()
     found = gate_findings(pkg; checks = (UnreachedMethods(),), workload, entries)
     unmatched = which(pkg.kind, Tuple{String})
+    route = only(methods(pkg.route))
     rows = evidence_rows(found, :signature)
-    @test rows == [(:unreached_method, "kind", string(unmatched.sig))]
+    kind_row = (:unreached_method, "kind", string(unmatched.sig))
+    route_row = (:unreached_method, "route", string(route.sig))
+    @test rows == [kind_row, route_row]
 end
 
 @testset "a compiler Any constructor beside a typed one stays quiet" begin
@@ -121,6 +163,14 @@ end
     found = gate_findings(pkg; checks = (check,), workload, entries)
     rows = evidence_rows(found)
     @test rows == [(:unreached_method, "spare")]
+end
+
+@testset "a parametric constructor the graph only walks is unreached" begin
+    pkg = WALKED_BOX.pkg
+    entry = (pkg.Box{Int}, Tuple{Int})
+    found = gate_findings(pkg; checks = (UnreachedMethods(),), workload = () -> nothing, entries = (entry,))
+    rows = evidence_rows(found)
+    @test rows == [(:unreached_method, "Box")]
 end
 
 @testset "an exported uncalled method stays quiet unless the package turns public entries off" begin
