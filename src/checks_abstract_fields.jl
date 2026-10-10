@@ -110,9 +110,83 @@ function is_open_field(@nospecialize(declared), vars = TypeVar[])
     !isconcretetype(Base.unwrap_unionall(declared))
 end
 
-function check_abstract_fields(mods, sites)
+# The fields of a struct type, or of an instance an alias names, whose declared types leave dispatch open.
+function open_fields(@nospecialize(declared))
+    vars = struct_typevars(declared)
+    body = Base.unwrap_unionall(declared)
+    field_names = fieldnames(body)
+    field_types = fieldtypes(body)
+    found = Tuple{Symbol,Any}[]
+    for (field, field_type) in zip(field_names, field_types)
+        is_open_field(field_type, vars) || continue
+        push!(found, (field, field_type))
+    end
+    found
+end
+
+# The name a `const name = ...` or `const name{T} = ...` binds; nothing for any other const form.
+function const_bound_name(node)
+    for assignment in child_nodes(node)
+        JS.kind(assignment) == K"=" || continue
+        target = first(child_nodes(assignment))
+        if JS.kind(target) == K"curly"
+            parts = child_nodes(target)
+            target = first(parts)
+        end
+        return node_symbol(target)
+    end
+    nothing
+end
+
+# Where a module's code binds `name` with `const`. An alias has no def line of its own in the index's scans.
+function const_site(index::SourceIndex, owner::Symbol, name::Symbol)
+    for file in index.files
+        file.mod === owner || continue
+        for node in walk_nodes(file.tree)
+            JS.kind(node) == K"const" || continue
+            const_bound_name(node) === name || continue
+            line = source_line(node)
+            return (file.path, line)
+        end
+    end
+    ("", 0)
+end
+
+function push_fields!(findings, owner, name, site, detail, fields)
+    file, line = site
+    for (field, declared) in fields
+        symbol = string(name, ".", field)
+        evidence = [:declared => string(declared)]
+        finding = Finding(owner, :abstract_field, file, symbol, line, detail, evidence)
+        push!(findings, finding)
+    end
+end
+
+# A struct, judged by its own name at its definition.
+function struct_findings!(findings, owner, @nospecialize(declared_type), name, sites)
+    site = site_of(sites, owner, name, ("", 0))
+    fields = open_fields(declared_type)
+    detail = "the field's type leaves dispatch open"
+    push_fields!(findings, owner, name, site, detail, fields)
+end
+
+# An alias of an instance opens a field only where the struct it names keeps that field closed.
+function alias_findings!(findings, owner, @nospecialize(declared_type), name, family, index)
+    struct_open = open_fields(family)
+    kept_open = Set(first(each) for each in struct_open)
+    instance_open = open_fields(declared_type)
+    opened = [(field, declared) for (field, declared) in instance_open if !(field in kept_open)]
+    isempty(opened) && return
+    site = const_site(index, owner, name)
+    detail = "the instance this alias names opens a field its struct keeps closed"
+    push_fields!(findings, owner, name, site, detail, opened)
+end
+
+function check_abstract_fields(mods, sites, index::SourceIndex)
+    package = Set(mods)
     findings = Finding[]
     for mod in mods
+        owner = module_key(mod)
         for name in names(mod; all = true)
             is_self = name === nameof(mod)
             is_internal = startswith(string(name), "#")
@@ -120,23 +194,16 @@ function check_abstract_fields(mods, sites)
             isdefined(mod, name) || continue
             declared_type = getproperty(mod, name)
             declared_type isa Type || continue
-            vars = struct_typevars(declared_type)
             body = Base.unwrap_unionall(declared_type)
             body isa DataType || continue
-            is_struct = isstructtype(body) && parentmodule(body) === mod
-            is_struct || continue
-            field_names = fieldnames(body)
-            field_types = fieldtypes(body)
-            for (field, declared) in zip(field_names, field_types)
-                is_open_field(declared, vars) || continue
-                owner = module_key(mod)
-                fallback = ("", 0)
-                file, line = site_of(sites, owner, name, fallback)
-                symbol = string(name, ".", field)
-                detail = "the field's type leaves dispatch open"
-                evidence = [:declared => string(declared)]
-                finding = Finding(owner, :abstract_field, file, symbol, line, detail, evidence)
-                push!(findings, finding)
+            isstructtype(body) || continue
+            parentmodule(body) in package || continue
+            family = body.name.wrapper
+            is_own_name = declared_type === family && name === nameof(family) && parentmodule(body) === mod
+            if is_own_name
+                struct_findings!(findings, owner, declared_type, name, sites)
+            else
+                alias_findings!(findings, owner, declared_type, name, family, index)
             end
         end
     end

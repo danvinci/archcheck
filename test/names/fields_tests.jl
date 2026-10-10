@@ -26,20 +26,31 @@ struct Param{T}
     r::Real
     ws::Vector{Pair{K,T} where K}
 end
+const Renamed = Open
+const IntParam = Param{Int}
+const VectorParam{T} = Param{Vector{T}}
+const AnyParam = Param{Any}
 """)
 
 const OPEN_FIELD_NAMES = Set([
     "Open.xs", "Open.any", "Open.absv", "Open.absf", "Open.d", "Open.s", "Open.da",
     "Open.map", "Open.r", "Open.spec", "Param.ys", "Param.r", "Param.ws",
+    "AnyParam.x", "AnyParam.zs",
 ])
 
-@testset "a field whose stored type leaves dispatch open is a finding" begin
+# An alias repeats its struct's open fields; only an instance opening a field the struct keeps closed adds one.
+@testset "a field whose stored type leaves dispatch open is a finding, once, where it is written" begin
     ctx = case_context(OPEN_FIELDS)
     found = ArchCheck.run(AbstractFields(), ctx)
     symbols = Set(finding.symbol for finding in found)
     @test symbols == OPEN_FIELD_NAMES
+    @test length(found) == length(OPEN_FIELD_NAMES)
     rows = evidence_rows(found, :declared)
     @test (:abstract_field, "Open.xs", "Vector") in rows
+    @test (:abstract_field, "AnyParam.zs", "Vector{Any}") in rows
+    alias_lines = Set(finding.line for finding in found if startswith(finding.symbol, "AnyParam."))
+    @test alias_lines == Set([30])
+    @test all(finding -> finding.line > 0, found)
 end
 
 @testset "a field read on another module's struct is a finding" begin

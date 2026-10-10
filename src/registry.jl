@@ -205,7 +205,7 @@ kinds(::PrivateImports) = (:private_import => :advisory,)
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
 
-run(::AbstractFields, ctx) = check_abstract_fields(package_modules(ctx), ctx.sites)
+run(::AbstractFields, ctx) = check_abstract_fields(package_modules(ctx), ctx.sites, ctx.index)
 kinds(::AbstractFields) = (:abstract_field => :advisory,)
 
 run(check::ReaderSet, ctx) =
