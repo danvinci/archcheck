@@ -57,6 +57,36 @@ end
 
 case_context(case; options...) = Context(case.pkg; options...)
 
+# Extensions on loaded triggers, one also named by a fallback include, one with an absent trigger; one extension's
+# definitions use its trigger's type. The module-rank and sink tests read it.
+const HOSTED = load_package("Hosted", """
+_inner() = 1
+@static if false
+    include("../ext/HostedTestExt.jl")
+end
+""", [
+    "../ext/HostedRandomExt.jl" => """
+    module HostedRandomExt; __precompile__(false)
+    using Random
+    using Hosted: _inner
+    scaled(x::Int) = map(step -> step * _inner(), 1:x)
+    draw(source::Random.AbstractRNG) = rand(source) * _inner()
+    end
+    """,
+    "../ext/HostedTestExt.jl" => "module HostedTestExt; __precompile__(false)\nusing Hosted: _inner\nend\n",
+    "../ext/HostedAbsentExt.jl" => "module HostedAbsentExt\nusing Hosted: _inner\nend\n",
+], """
+[weakdeps]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Absent = "4d5c8b1e-0f3a-4e6b-9c2d-7a1b3c5d7e9f"
+
+[extensions]
+HostedRandomExt = "Random"
+HostedTestExt = "Test"
+HostedAbsentExt = "Absent"
+""")
+
 # `gate` with a throwaway report and no output, returning its findings.
 function gate_findings(pkg; options...)
     report = joinpath(mktempdir(), "architecture.jsonl")
@@ -94,10 +124,10 @@ end
 file_scans(ctx) = Dict(file.name => file.scan for file in ctx.index.files)
 
 function syntax_nodes(node)
-    kids = Base.JuliaSyntax.children(node)
-    isnothing(kids) && return 1
+    children = Base.JuliaSyntax.children(node)
+    isnothing(children) && return 1
     total = 1
-    for child in kids
+    for child in children
         total += syntax_nodes(child)
     end
     total

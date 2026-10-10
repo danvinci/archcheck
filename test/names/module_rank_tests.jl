@@ -291,36 +291,6 @@ end
     @test ev(imported, :via) == "using"
 end
 
-# Extensions on loaded triggers, one also named by a fallback include as older Julia needs, and one whose trigger is
-# absent. One extension's definitions call the root, one of them with its trigger's type.
-const HOSTED = load_package("Hosted", """
-_inner() = 1
-@static if false
-    include("../ext/HostedTestExt.jl")
-end
-""", [
-    "../ext/HostedRandomExt.jl" => """
-    module HostedRandomExt; __precompile__(false)
-    using Random
-    using Hosted: _inner
-    scaled(x::Int) = map(step -> step * _inner(), 1:x)
-    draw(source::Random.AbstractRNG) = rand(source) * _inner()
-    end
-    """,
-    "../ext/HostedTestExt.jl" => "module HostedTestExt; __precompile__(false)\nusing Hosted: _inner\nend\n",
-    "../ext/HostedAbsentExt.jl" => "module HostedAbsentExt\nusing Hosted: _inner\nend\n",
-], """
-[weakdeps]
-Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-Absent = "4d5c8b1e-0f3a-4e6b-9c2d-7a1b3c5d7e9f"
-
-[extensions]
-HostedRandomExt = "Random"
-HostedTestExt = "Test"
-HostedAbsentExt = "Absent"
-""")
-
 @testset "a loaded extension is one of the package's modules and loads after it" begin
     ctx = case_context(HOSTED)
     loaded = [Base.get_extension(HOSTED.pkg, name) for name in (:HostedRandomExt, :HostedTestExt)]
