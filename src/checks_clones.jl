@@ -37,15 +37,6 @@ mutable struct MixState
     renames::Dict{Symbol,Int}  # local name to its first-appearance number
 end
 
-struct MethodBody
-    name::Symbol          # method name
-    line::Int             # source line of the method
-    file::String          # repo-relative path
-    mod::Symbol           # owning module
-    body::JS.SyntaxNode   # body syntax
-    bound::Set{Symbol}    # names this body binds
-end
-
 function absorb!(state, token)
     state.primary = hash(token, state.primary)
     state.secondary = hash(token, state.secondary)
@@ -145,88 +136,6 @@ function digest_of(node, bound)
     state = empty_mix()
     absorb_tree!(state, node, bound, :value)
     CloneDigest(state.primary, state.secondary, state.nodes)
-end
-
-function child_index(parent, node)
-    kids = child_nodes(parent)
-    isnothing(kids) && return nothing
-    for index in eachindex(kids)
-        kids[index] === node && return index
-    end
-    nothing
-end
-
-function node_inside(node, ancestor)
-    current = node
-    while !isnothing(current)
-        current === ancestor && return true
-        current = current.parent
-    end
-    false
-end
-
-function bound_of(node, root, root_bound, memo)
-    haskey(memo, node) && return memo[node]
-    if node === root || isnothing(node.parent)
-        memo[node] = root_bound
-        return root_bound
-    end
-    parent = node.parent
-    parent_bound = bound_of(parent, root, root_bound, memo)
-    index = child_index(parent, node)
-    if isnothing(index)
-        memo[node] = parent_bound
-        return parent_bound
-    end
-    inner = child_locals(parent, index, parent_bound)
-    memo[node] = inner
-    inner
-end
-
-# A method written in a default argument sits in the signature, outside the body.
-function in_method_body(node, root)
-    current = node.parent
-    while !isnothing(current) && current !== root
-        if is_method_form(current)
-            body = method_body(current)
-            isnothing(body) && return false
-            return node_inside(node, body)
-        end
-        current = current.parent
-    end
-    true
-end
-
-function method_name_of(sig)
-    named = sig_name(sig)
-    isnothing(named) || return named
-    qualified = qualified_method_name(sig)
-    isnothing(qualified) || return qualified
-    callable_receiver(sig)
-end
-
-function file_methods(file)
-    found = MethodBody[]
-    root = file.tree
-    root_bound = Set{Symbol}()
-    memo = IdDict{JS.SyntaxNode,Set{Symbol}}()
-    memo[root] = root_bound
-    for node in walk_nodes(root)
-        is_method_form(node) || continue
-        in_method_body(node, root) || continue
-        body = method_body(node)
-        isnothing(body) && continue
-        kids = child_nodes(node)
-        signature = kids[1]
-        name = method_name_of(signature)
-        isnothing(name) && continue
-        enclosing = bound_of(node, root, root_bound, memo)
-        bound = body_locals(signature, body, enclosing)
-        line = source_line(node)
-        record = MethodBody(name, line, file.path, file.mod, body, bound)
-        push!(found, record)
-    end
-    found
 end
 
 function count_nodes!(counts, node)
@@ -364,8 +273,7 @@ function expression_clone_findings(index, min_nodes)
     for file in index.files
         counts = IdDict{JS.SyntaxNode,Int}()
         count_nodes!(counts, file.tree)
-        methods = file_methods(file)
-        for method in methods
+        for method in file.bodies
             root_path = Int[]
             walk_sites!(grouped, counts, method.body, method, root_path, min_nodes, method.bound)
         end

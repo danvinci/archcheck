@@ -17,6 +17,7 @@ struct FileNode
     iswrapper::Bool   # this module's entry: its directory's entry file, or its module block
     scan::FileScan    # this code's defs and the names each references
     tree::JS.SyntaxNode   # this code from the file's one parse, kept so no check reads the file again
+    bodies::Vector{MethodBody}   # every method this code writes, nested ones included, with the names each binds
 end
 
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
@@ -276,7 +277,8 @@ function add_node!(build::IndexBuild, owner::Symbol, path, filerank, iswrapper, 
     name = basename(rel)
     modrank = module_rank(build, owner)
     scan = scan_tree(code)
-    node = FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code)
+    bodies = method_bodies(code, rel, owner)
+    node = FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code, bodies)
     push!(build.nodes, node)
 end
 

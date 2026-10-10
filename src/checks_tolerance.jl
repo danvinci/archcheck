@@ -277,7 +277,7 @@ function tolerance_findings(index, tolerances)
     names = Set(tolerances)
     found = Finding[]
     for file in index.files
-        methods = file_methods(file)
+        methods = file.bodies
         for method in methods
             predicates = local_methods(methods, method)
             reached = reached_tolerances(predicates, names)

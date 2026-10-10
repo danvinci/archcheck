@@ -1,4 +1,5 @@
-# Which names are local to a child. The walk that reads them lives beside this.
+# Which names are local to a child, and each method body with the names it binds. The walk that reads them lives
+# beside this.
 
 function is_nested_scope(node)
     kind = JS.kind(node)
@@ -332,6 +333,97 @@ function child_bindings(node, index)
         end
     end
     names
+end
+
+struct MethodBody
+    name::Symbol          # method name
+    line::Int             # source line of the method
+    file::String          # repo-relative path
+    mod::Symbol           # owning module
+    body::JS.SyntaxNode   # body syntax
+    bound::Set{Symbol}    # names this body binds
+end
+
+function child_index(parent, node)
+    kids = child_nodes(parent)
+    isnothing(kids) && return nothing
+    for index in eachindex(kids)
+        kids[index] === node && return index
+    end
+    nothing
+end
+
+function node_inside(node, ancestor)
+    current = node
+    while !isnothing(current)
+        current === ancestor && return true
+        current = current.parent
+    end
+    false
+end
+
+function bound_of(node, root, root_bound, memo)
+    haskey(memo, node) && return memo[node]
+    if node === root || isnothing(node.parent)
+        memo[node] = root_bound
+        return root_bound
+    end
+    parent = node.parent
+    parent_bound = bound_of(parent, root, root_bound, memo)
+    index = child_index(parent, node)
+    if isnothing(index)
+        memo[node] = parent_bound
+        return parent_bound
+    end
+    inner = child_locals(parent, index, parent_bound)
+    memo[node] = inner
+    inner
+end
+
+# A method written in a default argument sits in the signature, outside the body.
+function in_method_body(node, root)
+    current = node.parent
+    while !isnothing(current) && current !== root
+        if is_method_form(current)
+            body = method_body(current)
+            isnothing(body) && return false
+            return node_inside(node, body)
+        end
+        current = current.parent
+    end
+    true
+end
+
+function method_name_of(sig)
+    named = sig_name(sig)
+    isnothing(named) || return named
+    qualified = qualified_method_name(sig)
+    isnothing(qualified) || return qualified
+    callable_receiver(sig)
+end
+
+# Every method written in one piece of code, nested ones included, each with the names its body binds.
+function method_bodies(root, path::String, mod::Symbol)
+    found = MethodBody[]
+    root_bound = Set{Symbol}()
+    memo = IdDict{JS.SyntaxNode,Set{Symbol}}()
+    memo[root] = root_bound
+    for node in walk_nodes(root)
+        is_method_form(node) || continue
+        in_method_body(node, root) || continue
+        body = method_body(node)
+        isnothing(body) && continue
+        kids = child_nodes(node)
+        signature = kids[1]
+        name = method_name_of(signature)
+        isnothing(name) && continue
+        enclosing = bound_of(node, root, root_bound, memo)
+        bound = body_locals(signature, body, enclosing)
+        line = source_line(node)
+        record = MethodBody(name, line, path, mod, body, bound)
+        push!(found, record)
+    end
+    found
 end
 
 # Visits every node with the name of the nearest enclosing top-level def.
