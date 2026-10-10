@@ -71,7 +71,7 @@ function check_opt_entries(entries; repo, target_modules)
 end
 
 run(check::OptAnalysis, ctx) =
-    check_opt_entries(check.entries; repo = ctx.index.repo, target_modules = ctx.mods)
+    check_opt_entries(check.entries; repo = ctx.index.repo, target_modules = package_modules(ctx))
 
 # Without JET the analysis cannot run, so it declares no kinds and a JET-less run claims none of them clean.
 function kinds(::OptAnalysis)

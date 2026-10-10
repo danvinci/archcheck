@@ -205,11 +205,11 @@ kinds(::PrivateImports) = (:private_import => :advisory,)
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
 
-run(::AbstractFields, ctx) = check_abstract_fields(ctx.mods, ctx.sites)
+run(::AbstractFields, ctx) = check_abstract_fields(package_modules(ctx), ctx.sites)
 kinds(::AbstractFields) = (:abstract_field => :advisory,)
 
 run(check::ReaderSet, ctx) =
-    check_reader_set(ctx.mods, check.super, check.required; sites = ctx.sites)
+    check_reader_set(package_modules(ctx), check.super, check.required; sites = ctx.sites)
 kinds(::ReaderSet) = (:reader_set => :error,)
 
 run(check::ScanSeeds, ctx) = check_scan_seeds(ctx.index; directories = check.directories)
