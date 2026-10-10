@@ -24,6 +24,7 @@ By default (`ArchCheck.CHECKS`), the gate holds that:
 - Every file parses, every include resolves, and the package spine ranks every file and module (`Corpus`).
 - Modules and files depend only on what loads before them, with no cycles; a module may use the modules that enclose it (`ModuleBackEdges`, `ModuleCycles`, `FileBackEdges`, and `strict = true` to hold enclosing modules to the order too). A definition that needs only lower layers is reported as one to move down (`Sinkable`, `FileSinkable`).
 - Code reaches another module through its exported or `public` names, declared in its `using` and `import` lines, and reads no field of a struct another module owns (`ReachesInternal`, `DeclaredModules`, `ForeignFields`).
+- Each name a module reads from outside comes through an import list rather than a bare `using`, and each name an import list binds is read (`ImportedNames`).
 - A method on a function from outside the package takes a type the package owns (`ModulePiracy`, and `strict = true` to judge each module alone).
 - Each exported name has one owner and a definition, nothing is exported wholesale, and every definition is used; a module and the modules it encloses count as one owner, and exported or `public` names count as used (`OwnerUniqueness`, `StaleExports`, `BlanketExports`, `DeadCode`, and `strict = true` or `public_is_entry = false` to tighten each).
 - Struct fields have concrete types, closures do not box captured locals, and dispatch picks a method's path rather than a runtime type test (`AbstractFields`, `BoxedCaptures`, `TypeBranches`).
