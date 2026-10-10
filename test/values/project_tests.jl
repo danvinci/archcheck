@@ -172,7 +172,7 @@ const ABSENT_ROOT = load_package("AbsentRoot", "x() = 1\n")
     found = ArchCheck.run(check, ctx)
     load_time = [(finding.file, finding.line) for finding in found if isempty(finding.symbol)]
     @test sort!(load_time) == [("src/calls/bound.jl", 6), ("src/calls/loaded.jl", 1)]
-    rows = evidence_rows(found, :calls)
+    rows = evidence_rows(found, :references)
     expected = [
         (:unlisted_caller, "", "root_find"),
         (:unlisted_caller, "", "root_find"),
