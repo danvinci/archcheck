@@ -13,7 +13,6 @@ end
 const NOT_APPLICABLE = (
     (ToleranceSearch, "no quantity is compared with a named tolerance"),
     (KeptBuilders, "no constructor result is kept for its caller with get!"),
-    (CallerWhitelist, "no function has a closed list of callers"),
     (Independent, "the package is one module, so no pair of modules is independent"),
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
     (Rebuilds, "one probe session runs at a time, and this gate arms none"),
@@ -155,8 +154,30 @@ function self_opt()
     OptAnalysis(entries)
 end
 
+# Each file parses once, through the one cache.
+function parse_sites()
+    callees = (:parseall, :parse_file)
+    allowed = (("src/syntax.jl", :parse_file), ("src/syntax.jl", :parsed_tree))
+    CallerWhitelist(callees, allowed)
+end
+
+# The sites that run inference, each asking a question the others do not answer.
+function inference_sites()
+    callees = (:typeinf, :typeinf_frame, :code_typed, :code_typed_by_type, :return_types, :report_opt)
+    allowed = (
+        ("src/methodgraph.jl", :inference_frame),
+        ("src/checks_readers.jl", :read_typed!),
+        ("src/checks_readers.jl", :producer_shape),
+        ("src/checks_derived.jl", :key_returns_bits),
+        ("src/checks_opt.jl", :analyze_entries),
+    )
+    CallerWhitelist(callees, allowed)
+end
+
 function static_checks()
     active = collect(Check, ArchCheck.CHECKS)
+    push!(active, parse_sites())
+    push!(active, inference_sites())
     waits = UnreadWaits(allowed = (:probe_wait, :wait_synced))
     push!(active, waits)
     push!(active, OverlappingCalls())
