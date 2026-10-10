@@ -62,6 +62,9 @@ function holds_values(kind)
     kind == K"call" || kind == K"parameters" || kind == K"tuple"
 end
 
+# A node that runs one of its arms by its test: an if, an elseif, a ternary.
+is_branch_kind(kind) = kind == K"if" || kind == K"elseif" || kind == K"?"
+
 function source_line(node)
     location = JS.source_location(node)
     Int(location[1])

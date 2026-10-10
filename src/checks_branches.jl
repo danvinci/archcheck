@@ -33,7 +33,7 @@ function visit_type_branch!(walk::BranchWalk, node, is_discarded::Bool, owner::S
         visit_loop!(walk, node, 1:(last_index - 1), last_index, is_discarded, owner, params)
     elseif kind == K"generator"
         visit_loop!(walk, node, 2:length(children), 1, is_discarded, owner, params)
-    elseif kind == K"if" || kind == K"elseif" || kind == K"?"
+    elseif is_branch_kind(kind)
         record_type_branch!(walk, children, owner, params)
         visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
     elseif kind == K"&&" || kind == K"||"

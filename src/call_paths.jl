@@ -212,7 +212,7 @@ function visit_node!(walk, node, inside, exits, is_dead)::WalkFollow
     if kind == K"->" || kind == K"do"
         return visit_kind!(walk, node, WalkOf{:closure}(), inside, exits, is_dead)
     end
-    if kind == K"if" || kind == K"elseif" || kind == K"?"
+    if is_branch_kind(kind)
         return visit_kind!(walk, node, WalkOf{:arms}(), inside, exits, is_dead)
     end
     if kind == K"&&" || kind == K"||"
