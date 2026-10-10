@@ -39,13 +39,35 @@ include("aa/Aa.jl")
 using .Aa
 include("bb/Bb.jl")
 using .Bb
+include("cc/Cc.jl")
+using .Cc
 """, [
-    "aa/Aa.jl" => "module Aa\nf() = 1\nend\n",
+    "aa/Aa.jl" => """
+    module Aa
+    export @shown_macro
+    f() = 1
+    g() = 2
+    macro shown_macro() end
+    macro hidden_macro() end
+    end
+    """,
     "bb/Bb.jl" => """
     module Bb
     import ..PackagePath
     x() = PackagePath.Aa.f()
     end
+    """,
+    "cc/Cc.jl" => """
+    module Cc
+    import ..PackagePath as P
+    import ..Aa as A
+    using ..Aa: @shown_macro, @hidden_macro
+    include("use.jl")
+    end
+    """,
+    "cc/use.jl" => """
+    through_root() = P.Aa.g()
+    through_module() = A.g()
     """,
 ])
 
@@ -103,8 +125,15 @@ end
         obj.InternalNames.hidden
         # InternalNames.hidden()
         s = "InternalNames.hidden()"
+        import InternalNames as Renamed
+        Renamed.hidden()
+        Renamed.named()
         """
-    @test reached_from(script) == [("InternalNames.hidden", 2), ("InternalNames.hidden", 4), ("InternalNames.hidden", 7)]
+    expected = [
+        ("InternalNames.hidden", 2), ("InternalNames.hidden", 4), ("InternalNames.hidden", 7),
+        ("InternalNames.hidden", 18),
+    ]
+    @test reached_from(script) == expected
 end
 
 @testset "a type position, an assignment, or an extension reaches an internal name once per directory" begin
@@ -215,4 +244,21 @@ end
     symbols = Set(finding.symbol for finding in path_found)
     @test "Aa" in symbols
     @test !("PackagePath" in symbols)
+end
+
+@testset "a path through an import alias reaches the module the alias names, and an import list keeps its macros" begin
+    ctx = case_context(PACKAGE_PATH)
+    use_path = joinpath("src", "cc", "use.jl")
+    wrapper_path = joinpath("src", "cc", "Cc.jl")
+    declared = ArchCheck.run(DeclaredNames(), ctx)
+    declared_rows = Set((finding.symbol, ev(finding, :via), finding.file, finding.line)
+                        for finding in declared if finding.mod === :Cc)
+    @test declared_rows == Set([
+        ("Aa.g", "qualified", use_path, 1),
+        ("Aa.g", "qualified", use_path, 2),
+        ("Aa.@hidden_macro", "using", wrapper_path, 4),
+    ])
+    reached = ArchCheck.run(ReachesInternal(), ctx)
+    reached_rows = Set((finding.symbol, finding.line) for finding in reached if finding.file == use_path)
+    @test reached_rows == Set([("Aa.g", 1), ("Aa.g", 2)])
 end

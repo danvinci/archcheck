@@ -12,9 +12,9 @@ function is_blanket_names_call(n)
         isnothing(params) && continue
         for p in params
             JS.kind(p) == K"=" || continue
-            pk = child_nodes(p)
-            child_count(pk) < 2 && continue
-            pk[1].val === :all && pk[2].val === true && return true
+            keyword_parts = child_nodes(p)
+            child_count(keyword_parts) < 2 && continue
+            keyword_parts[1].val === :all && keyword_parts[2].val === true && return true
         end
     end
     false
@@ -106,6 +106,19 @@ function collect_const_aliases!(aliases, n, known)
     end
 end
 
+# The loaded module behind each name an `as` clause binds; a rename of a module this Julia did not load drops out.
+function loaded_aliases(renames, package::Module)
+    aliases = Dict{Symbol,Module}()
+    for (name, key) in renames
+        renamed = loaded_module(package, key)
+        isnothing(renamed) && continue
+        aliases[name] = renamed
+    end
+    aliases
+end
+
+loaded_aliases(renames, ::Nothing) = Dict{Symbol,Module}()
+
 function reaches_internal(mod_name, path, member, line)
     symbol = "$mod_name.$member"
     detail = "reference to a name its module does not declare public"
@@ -140,17 +153,21 @@ function check_reaches_internal(index::SourceIndex, mods, root::Symbol)
     for (path, tree) in scripts
         imported_internals!(findings, path, tree, modules, by_key)
     end
-    # A source file may name its own module's internals; an entry script has no module of its own.
-    units = Tuple{String,JS.SyntaxNode,Union{Nothing,Module}}[]
+    # A source file may name its own module's internals; an entry script has no module of its own. A source file
+    # resolves the renames its whole module makes, an entry script its own.
+    units = Tuple{String,JS.SyntaxNode,Union{Nothing,Module},Dict{Symbol,Symbol}}[]
     for f in index.files
         home = get(by_key, f.mod, nothing)
-        push!(units, (f.path, f.tree, home))
+        renames = get(index.aliases, f.mod, Dict{Symbol,Symbol}())
+        push!(units, (f.path, f.tree, home, renames))
     end
     for (path, tree) in scripts
-        push!(units, (path, tree, nothing))
+        renames = code_aliases!(Dict{Symbol,Symbol}(), modules, Symbol[], tree)
+        push!(units, (path, tree, nothing, renames))
     end
-    for (path, tree, home) in units
-        aliases = Dict{Symbol,Module}()
+    package = get(known, root, nothing)
+    for (path, tree, home, renames) in units
+        aliases = loaded_aliases(renames, package)
         collect_const_aliases!(aliases, tree, known)
         fs = empty_scan()
         placeholder = :_

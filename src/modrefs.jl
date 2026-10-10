@@ -31,6 +31,25 @@ end
 struct ModuleNames
     known::Set{Symbol}          # every project module, by dotted key below the package
     root::Union{Symbol,Nothing} # the package's own name, which a path may open with; nothing when unknown
+    aliases::Dict{Symbol,Dict{Symbol,Symbol}}   # module -> each name its `as` clauses bind -> the project module it names
+end
+
+# Names before any `as` clause is read: the read that collects the renames resolves through plain paths.
+ModuleNames(known, root) = ModuleNames(known, root, Dict{Symbol,Dict{Symbol,Symbol}}())
+
+# The key of the module `name` inside the module keyed `key`; the root's own modules are keyed by their names.
+child_key(modules::ModuleNames, key, name) = key === modules.root ? name : Symbol(key, ".", name)
+
+# The deepest project module `path` names below the module keyed `key`, and how many names of `path` that took.
+function descend_module(modules::ModuleNames, key, path)
+    spanned = 0
+    while spanned < length(path)
+        deeper = child_key(modules, key, path[spanned + 1])
+        deeper in modules.known || break
+        key = deeper
+        spanned += 1
+    end
+    key, spanned
 end
 
 # A path with no leading dot is absolute and opens at the root. One dot opens in `scope`, each further dot
@@ -43,28 +62,38 @@ end
 
 # The project module a path reaches from `scope`, and how many names of that path it spans.
 function resolve_module(modules::ModuleNames, scope, path, dots)
-    known = modules.known
     opening = resolve_opening(scope, dots)
+    rest = path[2:end]
     for depth in opening:-1:0
         if depth == 0 && first(path) === modules.root   # the package itself; its modules sit below it
-            length(path) == 1 && return modules.root, 1
-            inner, spanned = resolve_module(modules, Symbol[], path[2:end], 1)
-            isnothing(inner) && return modules.root, 1
+            inner, spanned = descend_module(modules, modules.root, rest)
             return inner, spanned + 1
         end
         segments = [scope[1:depth]; path[1]]
         key = Symbol(join(segments, "."))
-        key in known || continue
-        spanned = 1
-        while spanned < length(path)
-            deeper = Symbol(key, ".", path[spanned + 1])
-            deeper in known || break
-            key = deeper
-            spanned += 1
-        end
-        return key, spanned
+        key in modules.known || continue
+        deeper, spanned = descend_module(modules, key, rest)
+        return deeper, spanned + 1
     end
     nothing, 0
+end
+
+# The project module a qualified path written in `from` reaches. A name an `as` clause binds in `from` stands for
+# the module it renames, as Julia resolves the binding.
+function resolve_qualifier(modules::ModuleNames, from, scope, path)
+    renames = get(modules.aliases, from, nothing)
+    target = isnothing(renames) ? nothing : get(renames, first(path), nothing)
+    isnothing(target) && return resolve_module(modules, scope, path, 1)
+    rest = path[2:end]
+    deeper, spanned = descend_module(modules, target, rest)
+    deeper, spanned + 1
+end
+
+# One name of an import path: an identifier, or a macro's name with its `@` as Julia binds it.
+function importpath_name(child)::Union{Nothing,Symbol}
+    JS.kind(child) == K"macro_name" || return node_symbol(child)
+    inner = first(child_nodes(child))
+    Symbol("@", inner.val)
 end
 
 # Leading-dot count and names of an import path: `..A.B` -> (2, [:A, :B]).
@@ -74,14 +103,73 @@ function importpath_parts(path)
     children = child_nodes(path)
     isnothing(children) && return dots, names
     for child in children
-        child.val isa Symbol || continue
-        if child.val === :. && isempty(names)
+        name = importpath_name(child)
+        isnothing(name) && continue
+        if name === :. && isempty(names)
             dots += 1
         else
-            push!(names, child.val)
+            push!(names, name)
         end
     end
     dots, names
+end
+
+# An `as` node's renamed path and the name it binds: `..A.B as C` -> (2, [:A, :B], :C).
+function renamed_parts(node)
+    parts = child_nodes(node)
+    dots, path = importpath_parts(parts[1])
+    bound = node_symbol(parts[2])
+    (; dots, path, bound)
+end
+
+# Records `bound` as a name for the project module `path` names whole; a rename of anything else binds no module.
+function add_alias!(aliases, modules::ModuleNames, scope, dots, path, bound)
+    isnothing(bound) && return
+    isempty(path) && return
+    dots == 0 && first(path) !== modules.root && return
+    to, spanned = resolve_module(modules, scope, path, dots)
+    isnothing(to) && return
+    spanned == length(path) || return
+    aliases[bound] = to
+end
+
+# The module renames one using/import clause makes: `import A.B as C` binds C, `using A: b as c` binds c to A.b.
+function clause_aliases!(aliases, modules::ModuleNames, scope, clause)
+    kind = JS.kind(clause)
+    if kind == K"as"
+        whole = renamed_parts(clause)
+        add_alias!(aliases, modules, scope, whole.dots, whole.path, whole.bound)
+        return
+    end
+    kind == K":" || return
+    children = child_nodes(clause)
+    dots, base = importpath_parts(first(children))
+    for item in children[2:end]
+        JS.kind(item) == K"as" || continue
+        listed = renamed_parts(item)
+        path = [base; listed.path]
+        add_alias!(aliases, modules, scope, dots, path, listed.bound)
+    end
+end
+
+# The module renames one module's code makes. Julia takes using and import lines only outside method bodies and
+# quoted code, so the walk leaves those out.
+function code_aliases!(aliases, modules::ModuleNames, scope, node)
+    kind = JS.kind(node)
+    if kind == K"using" || kind == K"import"
+        for clause in child_nodes(node)
+            clause_aliases!(aliases, modules, scope, clause)
+        end
+        return aliases
+    end
+    kind == K"quote" && return aliases
+    is_method_form(node) && return aliases
+    children = child_nodes(node)
+    isnothing(children) && return aliases
+    for child in children
+        code_aliases!(aliases, modules, scope, child)
+    end
+    aliases
 end
 
 # The identifiers of a pure dotted name, `A.B.c` -> [:A, :B, :c]; nothing when any part is an expression.
@@ -139,7 +227,7 @@ end
 
 # A dotted name reaching a project module: the reference, with the first name past the module path.
 function qualified_ref(from, scope, file, line, modules, path, via)
-    to, spanned = resolve_module(modules, scope, path, 1)
+    to, spanned = resolve_qualifier(modules, from, scope, path)
     (isnothing(to) || to == from) && return nothing
     last_index = min(spanned + 1, length(path))
     reached = path[(spanned + 1):last_index]
@@ -165,7 +253,8 @@ function extension_ref(from, scope, file, line, modules, node)
     isnothing(call) && return nothing
     callee = first(child_nodes(call))
     path = dotted_names(callee)
-    child_count(path) < 2 && return nothing
+    isnothing(path) && return nothing
+    length(path) < 2 && return nothing
     qualified_ref(from, scope, file, line, modules, path, :extends)
 end
 

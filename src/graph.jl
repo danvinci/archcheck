@@ -27,6 +27,7 @@ struct SourceIndex
     dir2mod::Dict{String,Symbol}            # src subdir -> module
     files::Vector{FileNode}                 # every module-owned source file
     refs::Vector{ModRef}                    # cross-module references, from the same parse
+    aliases::Dict{Symbol,Dict{Symbol,Symbol}}   # module -> each name its `as` clauses bind -> the project module it names
     external::Set{Symbol}                   # names referenced from entry dirs other than test/
     scripts::Vector{Pair{String,JS.SyntaxNode}}   # entry-dir files outside src/, by walked path: each code root
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
@@ -57,6 +58,7 @@ struct IndexBuild
     placements::Vector{Placement}                             # loaded code in load order
     nodes::Vector{FileNode}                                   # code accepted into the index
     refs::Vector{ModRef}                                      # cross-module references from the same parse
+    aliases::Dict{Symbol,Dict{Symbol,Symbol}}                 # module -> each name its `as` clauses bind -> module it names
     unparsed::Vector{Tuple{Symbol,String}}                    # owner and path of a file the parse rejected
     missing::Vector{Tuple{Symbol,String,String,Int}}          # include of a file absent on disk: owner, includer, spec, line
     nonliteral::Vector{Tuple{Symbol,String,Int}}              # include whose argument is an expression: owner, file, line
@@ -121,6 +123,7 @@ function start_index(parses::Parses, src_root::AbstractString, dir2mod, root)
         Placement[],
         FileNode[],
         ModRef[],
+        Dict{Symbol,Dict{Symbol,Symbol}}(),
         Tuple{Symbol,String}[],
         Tuple{Symbol,String,String,Int}[],
         Tuple{Symbol,String,Int}[],
@@ -290,10 +293,17 @@ function index_placements!(build::IndexBuild)
     end
 end
 
-# Module references resolve once every module is known, the inline ones included.
+# Module references resolve once every module is known, the inline ones included, and once every module's renames
+# are read, since a file may write a path through a name another file of its module binds.
 function add_refs!(build::IndexBuild)
     known = Set(keys(build.ranks))
-    modules = ModuleNames(known, build.root)
+    plain = ModuleNames(known, build.root)
+    for node in build.nodes
+        scope = key_segments(node.mod)
+        renames = get!(Dict{Symbol,Symbol}, build.aliases, node.mod)
+        code_aliases!(renames, plain, scope, node.tree)
+    end
+    modules = ModuleNames(known, build.root, build.aliases)
     for node in build.nodes
         scope = key_segments(node.mod)
         walk_modrefs!(build.refs, node.mod, scope, node.path, modules, node.tree)
@@ -399,6 +409,7 @@ function source_index(build::IndexBuild)
         build.dir2mod,
         build.nodes,
         build.refs,
+        build.aliases,
         build.external,
         build.scripts,
         build.unparsed,
