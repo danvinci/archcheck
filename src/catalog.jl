@@ -18,6 +18,7 @@ const CHECKS = (
     DeclaredModules(),
     ForeignFields(),
     BoxedCaptures(),
+    UnusedBindings(),
     AbstractFields(),
     TypeBranches(),
     StorageOverloads(),

@@ -137,6 +137,8 @@ end
 ReachesInternal(; allowed::Tuple{Vararg{Module}} = ()) = ReachesInternal(allowed)
 """Runs in `CHECKS`. A closure assigns a captured local in more than one place, so lowering boxes it."""
 struct BoxedCaptures <: Check end
+"""Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two, and a name a macro call's arguments write counts as read."""
+struct UnusedBindings <: Check end
 """Runs in `CHECKS`. A struct field's stored type leaves dispatch open."""
 struct AbstractFields <: Check end
 """Configured through `gate(...; checks)` with a supertype and the readers its concrete subtypes must answer. A subtype with no matching method is a finding."""
@@ -218,6 +220,10 @@ kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
 
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
+
+run(::UnusedBindings, ctx) = check_unused_bindings(ctx.index, ctx.defined, package_modules(ctx))
+kinds(::UnusedBindings) = (:unused_argument => :advisory, :unused_local => :advisory,
+                           :ignored_parameter => :advisory)
 
 run(::AbstractFields, ctx) = check_abstract_fields(package_modules(ctx), ctx.sites, ctx.index)
 kinds(::AbstractFields) = (:abstract_field => :advisory,)

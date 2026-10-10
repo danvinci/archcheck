@@ -28,6 +28,7 @@ By default (`ArchCheck.CHECKS`), the gate holds that:
 - A method on a function from outside the package takes a type the package owns (`ModulePiracy`, and `strict = true` to judge each module alone).
 - Each exported name has one owner and a definition, nothing is exported wholesale, and every definition is used; a module and the modules it encloses count as one owner, and exported or `public` names count as used (`OwnerUniqueness`, `StaleExports`, `BlanketExports`, `DeadCode`, and `strict = true` or `public_is_entry = false` to tighten each).
 - Struct fields have concrete types, closures do not box captured locals, and dispatch picks a method's path rather than a runtime type test (`AbstractFields`, `BoxedCaptures`, `TypeBranches`).
+- Each argument and local a method names is read, and no position of a function is ignored by every method under one declared type; a name starting with `_` is exempt, and a name a macro call's arguments write counts as read (`UnusedBindings`: `unused_argument`, `unused_local`, `ignored_parameter`).
 - No function returns a bare tuple of three or more values, no expression is copied across methods, and no function takes the same values in two array storages (`TupleReturns`, `ExpressionClones`, `StorageOverloads`).
 
 Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:

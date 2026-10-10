@@ -35,6 +35,7 @@ include("read_types.jl")
 include("checks_fields.jl")
 include("checks_interface.jl")
 include("checks_branches.jl")
+include("checks_unused_bindings.jl")
 include("registry.jl")
 include("checks_imports.jl")
 include("checks_project.jl")
@@ -60,7 +61,7 @@ export Check, Context
 export Corpus, ModuleBackEdges, ModuleCycles, ContractsPurity, OwnerUniqueness, ModulePiracy
 export FileBackEdges, FileSinkable, Sinkable, TupleReturns, DeadCode, BlanketExports, StaleExports
 export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
-export ForeignFields, BoxedCaptures, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
+export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders
 export Independent, ReaderSet, ScanSeeds, OverlappingCalls, InferredCalls, OptAnalysis, OptEntry
