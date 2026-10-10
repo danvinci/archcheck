@@ -15,7 +15,7 @@ using ArchCheck, MyPackage
 ArchCheck.gate(MyPackage)
 ```
 
-`gate` parses `src/` once and runs the default checks. It prints the findings new since the last run, writes every finding as a JSON line to `test/out/architecture.jsonl`, and throws on a finding of an error kind; `error_kinds = (:dead_code,)` makes more kinds blocking. ArchCheck needs Julia 1.13.
+`gate` parses `src/` once and runs the default checks. It prints the findings new since the last run, writes every finding as a JSON line to `test/out/architecture.jsonl`, and throws on a finding of an error kind; `error_kinds = (:dead_code,)` makes more kinds blocking. ArchCheck needs Julia 1.13.1 or later.
 
 ## What it checks
 
