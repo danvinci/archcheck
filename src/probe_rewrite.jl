@@ -145,18 +145,27 @@ function argument_shape(signature::Expr)
     ArgumentShape(arguments, positional, keywords)
 end
 
-function is_wait_name(name)
-    name === :fetch && return true
-    name === :wait && return true
-    false
+const JOIN_NAMES = (:fetch, :wait)
+
+# The join names a method leaves unbound, read from its parse: there each one names Base's `fetch` or `wait`.
+function free_joins(form)
+    bound = Set{Symbol}()
+    bound_names!(bound, form)
+    free = Symbol[]
+    for name in JOIN_NAMES
+        name in bound || push!(free, name)
+    end
+    free
 end
 
+is_wait_name(name, site) = name in site.free_joins
+
 # The probe a wait becomes, holding the session it records in.
-function wait_probe(name::Symbol, session::ProbeSession)
+function wait_probe(name::Symbol, site)
     if name === :fetch
-        return Base.Fix1(probe_fetch, session)
+        return Base.Fix1(probe_fetch, site.session)
     end
-    Base.Fix1(probe_wait, session)
+    Base.Fix1(probe_wait, site.session)
 end
 
 function is_sync_macro(node::Expr)
@@ -166,55 +175,55 @@ function is_sync_macro(node::Expr)
     name === Symbol("@sync")
 end
 
-function rewrite_children(node::Expr, session)
+function rewrite_children(node::Expr, site)
     args = Any[]
     for child in node.args
-        walked = rewrite_waits(child, session)
+        walked = rewrite_waits(child, site)
         push!(args, walked)
     end
     Expr(node.head, args...)
 end
 
-function rewrite_broadcast(node, session)
+function rewrite_broadcast(node, site)
     length(node.args) < 2 && return nothing
     tail = node.args[2]
     tail isa Expr || return nothing
     tail.head === :tuple || return nothing
     name = macro_symbol(node.args[1])
-    is_wait_name(name) || return nothing
-    probe = wait_probe(name, session)
-    rewritten_tail = rewrite_waits(tail, session)
+    is_wait_name(name, site) || return nothing
+    probe = wait_probe(name, site)
+    rewritten_tail = rewrite_waits(tail, site)
     Expr(:., probe, rewritten_tail)
 end
 
-function rewrite_dot(node, session)
-    rewritten = rewrite_broadcast(node, session)
+function rewrite_dot(node, site)
+    rewritten = rewrite_broadcast(node, site)
     if !isnothing(rewritten)
         return rewritten
     end
-    rewrite_children(node, session)
+    rewrite_children(node, site)
 end
 
-function rewrite_wait_head(node, session)
+function rewrite_wait_head(node, site)
     name = macro_symbol(node)
-    is_wait_name(name) || return node
-    wait_probe(name, session)
+    is_wait_name(name, site) || return node
+    wait_probe(name, site)
 end
 
-function rewrite_call(node, session)
+function rewrite_call(node, site)
     isempty(node.args) && return node
     args = Any[]
     for child in node.args
-        walked = rewrite_waits(child, session)
-        replaced = rewrite_wait_head(walked, session)
+        walked = rewrite_waits(child, site)
+        replaced = rewrite_wait_head(walked, site)
         push!(args, replaced)
     end
     Expr(:call, args...)
 end
 
-function rewrite_sync(node, session)
+function rewrite_sync(node, site)
     body = last(node.args)
-    rewritten = rewrite_waits(body, session)
+    rewritten = rewrite_waits(body, site)
     channel = GlobalRef(Base, :Channel)
     finish = GlobalRef(@__MODULE__, :log_sync_end)
     bound = Base.sync_varname
@@ -222,27 +231,27 @@ function rewrite_sync(node, session)
     binding = Expr(:(=), bound, opened)
     value = gensym(:sync_value)
     assign = Expr(:(=), value, rewritten)
-    logged = Expr(:call, finish, session, bound)
+    logged = Expr(:call, finish, site.session, bound)
     block = Expr(:block, assign, logged, value)
     Expr(:let, binding, block)
 end
 
-rewrite_waits(node, session) = node
+rewrite_waits(node, site) = node
 
-function rewrite_waits(node::Expr, session)
-    rewrite_head(Val(node.head), node, session)
+function rewrite_waits(node::Expr, site)
+    rewrite_head(Val(node.head), node, site)
 end
 
-rewrite_head(::Val{:quote}, node::Expr, session) = node
+rewrite_head(::Val{:quote}, node::Expr, site) = node
 
-function rewrite_head(::Val{:macrocall}, node::Expr, session)
-    is_sync_macro(node) && return rewrite_sync(node, session)
-    rewrite_children(node, session)
+function rewrite_head(::Val{:macrocall}, node::Expr, site)
+    is_sync_macro(node) && return rewrite_sync(node, site)
+    rewrite_children(node, site)
 end
 
-rewrite_head(::Val{:.}, node::Expr, session) = rewrite_dot(node, session)
-rewrite_head(::Val{:call}, node::Expr, session) = rewrite_call(node, session)
-rewrite_head(::Val, node::Expr, session) = rewrite_children(node, session)
+rewrite_head(::Val{:.}, node::Expr, site) = rewrite_dot(node, site)
+rewrite_head(::Val{:call}, node::Expr, site) = rewrite_call(node, site)
+rewrite_head(::Val, node::Expr, site) = rewrite_children(node, site)
 
 function key_hash_expr(key, positional, keywords, producer::Symbol)
     isnothing(key) && return nothing
@@ -282,6 +291,7 @@ struct ProbeSite{K}
     line::Int                # its source line
     is_probed::Bool          # false for an ambient function, whose calls only mark the probed calls inside
     key::K                   # the producer's declared key function; nothing when it declares none
+    free_joins::Vector{Symbol}   # `fetch` and `wait` unless the method binds the name to a value of its own
 end
 
 function probe_body(site::ProbeSite, shape::ArgumentShape, body)
@@ -290,7 +300,7 @@ function probe_body(site::ProbeSite, shape::ArgumentShape, body)
     result = gensym(:probe_result)
     arguments = shape.arguments
     hashed = key_hash_expr(site.key, shape.positional, shape.keywords, name)
-    rewritten = rewrite_waits(body, session)
+    rewritten = rewrite_waits(body, site)
     enter = GlobalRef(@__MODULE__, :probe_enter)
     leave = GlobalRef(@__MODULE__, :probe_leave)
     abort = GlobalRef(@__MODULE__, :probe_abort)

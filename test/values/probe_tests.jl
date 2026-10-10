@@ -103,6 +103,27 @@ const SLOT_HOLDER = load_package("SlotHolder", """
     keep(slots) = slots
     """)
 
+const LOCAL_JOINS = load_package("LocalJoins", """
+    later(x) = x + 1
+
+    function by_parameter(wait)
+        later(wait)
+    end
+
+    function by_local(x)
+        fetch = x + 1
+        later(fetch)
+    end
+
+    function by_loop(xs)
+        total = 0
+        for wait in xs
+            total += later(wait)
+        end
+        total
+    end
+    """)
+
 const NEST_OUTER = load_package("NestOuter", """
     outer_step(x) = x + 1
     """)
@@ -402,6 +423,22 @@ end
     seen = observed_gate(pkg; checks = (Rebuilds(),), workload = holding_call, probes)
     record = only(seen.observed.records)
     @test record.name === :keep
+end
+
+@testset "a local named wait or fetch keeps its value in a probed method" begin
+    pkg = LOCAL_JOINS.pkg
+    probes = Probes(; functions = (pkg.by_parameter, pkg.by_local, pkg.by_loop), slow_s = 0.0)
+    returned = Ref{Any}(nothing)
+    workload = function ()
+        parameter = pkg.by_parameter(1)
+        assigned = pkg.by_local(1)
+        looped = pkg.by_loop([1, 2])
+        returned[] = (parameter, assigned, looped)
+    end
+    seen = observed_gate(pkg; workload, probes)
+    @test returned[] == (2, 3, 5)
+    names = sort([record.name for record in seen.observed.records])
+    @test names == [:by_local, :by_loop, :by_parameter]
 end
 
 @testset "a session armed inside another keeps its calls apart" begin
