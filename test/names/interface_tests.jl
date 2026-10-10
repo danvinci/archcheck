@@ -107,7 +107,7 @@ end
     @test isempty(fresh)
 end
 
-@testset "an entry script's qualified reference to an internal name reaches it" begin
+@testset "an entry script's qualified reference to an internal name reaches it, in quoted code too" begin
     script = """
         const G = InternalNames
         G.hidden()
@@ -131,12 +131,12 @@ end
         """
     expected = [
         ("InternalNames.hidden", 2), ("InternalNames.hidden", 4), ("InternalNames.hidden", 7),
-        ("InternalNames.hidden", 18),
+        ("InternalNames.hidden", 12), ("InternalNames.hidden", 18),
     ]
     @test reached_from(script) == expected
 end
 
-@testset "a type position, an assignment, or an extension reaches an internal name once per directory" begin
+@testset "a type position, a macro-wrapped argument, an assignment, or an extension reaches an internal name once per line" begin
     script = """
         const G = InternalNames
         typed(x::G.Secret)::G.Secret = x
@@ -144,10 +144,11 @@ end
         G.value = 4
         G.hidden(x) = x
         lambda = (x::G.Secret) -> x
+        wrapped(@nospecialize(x::G.Secret)) = x
         """
     expected = [
-        ("InternalNames.Secret", 2), ("InternalNames.Secret", 2), ("InternalNames.Secret", 3), ("InternalNames.Secret", 6),
-        ("InternalNames.hidden", 5), ("InternalNames.value", 4),
+        ("InternalNames.Secret", 2), ("InternalNames.Secret", 3), ("InternalNames.Secret", 6),
+        ("InternalNames.Secret", 7), ("InternalNames.hidden", 5), ("InternalNames.value", 4),
     ]
     @test reached_from(script; repeat_dir = true) == expected
 end
@@ -162,27 +163,27 @@ end
     @test reached_from(script) == [("InternalNames.hidden", 1), ("InternalNames.hidden", 3), ("InternalNames.other", 2)]
 end
 
-@testset "a reference reaches only what the module it names declares" begin
+@testset "a source reference reaches only what the module it is written through declares" begin
     ctx = Context(Nested)
-    found = ArchCheck.run(DeclaredNames(), ctx)
-    undeclared = Tuple{String,String,String}[]
+    found = ArchCheck.run(ReachesInternal(), ctx)
+    reached = Tuple{String,String,String,String}[]
     for finding in found
         via = ev(finding, :via)
-        push!(undeclared, (string(finding.mod), finding.symbol, via))
+        owner = ev(finding, :owner)
+        push!(reached, (string(finding.mod), finding.symbol, via, owner))
     end
-    @test Set(undeclared) == Set([
-        ("Geo", "Geo.Curves.calls_later", "import"),
-        ("Geo.Curves", "Low._lowpriv", "import"),
-        ("Geo.Cuts", "Geo.Curves._secret", "using"),
-        ("Geo.Curves", "Geo.Cuts.cut_only", "qualified"),
-        ("Hi", "Geo.Curves._secret", "qualified"),
-        ("Hi", "Geo.Cuts.Ring", "qualified"),
-        ("Hi", "Low._lowpriv", "extends"),
-        ("Hi", "Geo.gauge", "extends"),
+    @test Set(reached) == Set([
+        ("Geo", "Geo.Curves.calls_later", "import", "Geo.Curves"),
+        ("Geo.Curves", "Low._lowpriv", "import", "Low"),
+        ("Geo.Cuts", "Geo.Curves._secret", "using", "Geo.Curves"),
+        ("Geo.Curves", "Geo.Cuts.cut_only", "qualified", "Geo.Cuts"),
+        ("Hi", "Geo.Curves", "qualified", "Geo"),
+        ("Hi", "Geo.Curves._secret", "qualified", "Geo.Curves"),
+        ("Hi", "Geo.Cuts", "qualified", "Geo"),
+        ("Hi", "Geo.Cuts.Ring", "qualified", "Geo.Cuts"),
+        ("Hi", "Low._lowpriv", "qualified", "Low"),
+        ("Hi", "Geo.gauge", "qualified", "Low"),
     ])
-    private = ArchCheck.run(PrivateImports(), ctx)
-    @test !isempty(private)
-    @test all(item -> any(finding -> finding.file == item.file && finding.line == item.line, found), private)
 end
 
 @testset "a module extends only another module's documented public verb" begin
@@ -206,15 +207,6 @@ end
     @test private.file == joinpath("src", "hi", "Hi.jl")
     declared = ArchCheck.kinds(DeclaredExtensions())
     @test (:private_extension => :error) in declared
-
-    undeclared = ArchCheck.run(DeclaredNames(), ctx)
-    relayed = only(finding for finding in undeclared if finding.symbol == "Geo.gauge")
-    @test string(relayed.mod) == "Hi"
-    @test ev(relayed, :via) == "extends"
-    @test ev(relayed, :owner) == "Low"
-    reached = ArchCheck.run(ReachesInternal(), ctx)
-    secret = only(finding for finding in reached if finding.symbol == "Geo.gauge")
-    @test secret.file == joinpath("src", "hi", "Hi.jl")
 
     report = joinpath(mktempdir(), "architecture.jsonl")
     checks = (DeclaredExtensions(),)
@@ -250,15 +242,13 @@ end
     ctx = case_context(PACKAGE_PATH)
     use_path = joinpath("src", "cc", "use.jl")
     wrapper_path = joinpath("src", "cc", "Cc.jl")
-    declared = ArchCheck.run(DeclaredNames(), ctx)
-    declared_rows = Set((finding.symbol, ev(finding, :via), finding.file, finding.line)
-                        for finding in declared if finding.mod === :Cc)
-    @test declared_rows == Set([
+    reached = ArchCheck.run(ReachesInternal(), ctx)
+    reached_rows = Set((finding.symbol, ev(finding, :via), finding.file, finding.line)
+                       for finding in reached if finding.mod === :Cc)
+    @test reached_rows == Set([
+        ("PackagePath.Aa", "qualified", use_path, 1),
         ("Aa.g", "qualified", use_path, 1),
         ("Aa.g", "qualified", use_path, 2),
         ("Aa.@hidden_macro", "using", wrapper_path, 4),
     ])
-    reached = ArchCheck.run(ReachesInternal(), ctx)
-    reached_rows = Set((finding.symbol, finding.line) for finding in reached if finding.file == use_path)
-    @test reached_rows == Set([("PackagePath.Aa", 1), ("Aa.g", 1), ("Aa.g", 2)])
 end

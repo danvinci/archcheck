@@ -284,7 +284,7 @@ end
 @testset "the root ranks beside its directory modules, so a name a block imports from it is judged" begin
     ctx = case_context(SPINE_FILES)
     @test haskey(ctx.index.rank, :SpineFiles)
-    found = ArchCheck.run(DeclaredNames(), ctx)
+    found = ArchCheck.run(ReachesInternal(), ctx)
     imported = only(found)
     @test imported.mod === :Piracy
     @test imported.symbol == "SpineFiles.kept_util"
@@ -328,7 +328,7 @@ HostedAbsentExt = "Absent"
     @test only(fallback).mod === :HostedTestExt
     @test isempty(ArchCheck.run(Corpus(), ctx))
     @test isempty(ArchCheck.run(ModuleBackEdges(strict = true), ctx))
-    found = ArchCheck.run(DeclaredNames(), ctx)
+    found = ArchCheck.run(ReachesInternal(), ctx)
     imports = Set((finding.mod, finding.symbol) for finding in found)
     @test imports == Set([(:HostedRandomExt, "Hosted._inner"), (:HostedTestExt, "Hosted._inner")])
     @test isempty(ArchCheck.run(ModulePiracy(), ctx))

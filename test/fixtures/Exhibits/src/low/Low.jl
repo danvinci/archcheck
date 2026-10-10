@@ -17,7 +17,7 @@ function helper()
     Low._secret()
 end
 
-# private_import: a leading underscore marks the name its owner keeps internal
+# reaches_internal: Shape imports this name, which Low neither exports nor declares public
 function _secret()
     1
 end

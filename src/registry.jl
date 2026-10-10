@@ -120,10 +120,8 @@ DeadCode(; public_is_entry::Bool = true) = DeadCode(public_is_entry)
 struct BlanketExports <: Check end
 """Runs in `CHECKS`. An exported name is undefined."""
 struct StaleExports <: Check end
-"""Runs in `CHECKS`. Source refers to a name its module leaves unexported and unmarked public."""
+"""Runs in `CHECKS`. Code reads a name through one of the package's modules that neither exports it nor declares it public: a step of a qualified path, a qualified method name, or a name a `using` or `import` clause binds, in source files and entry scripts alike."""
 struct ReachesInternal <: Check end
-"""Runs in `CHECKS`. An import binds a name whose leading underscore marks it private."""
-struct PrivateImports <: Check end
 """Runs in `CHECKS`. A closure assigns a captured local in more than one place, so lowering boxes it."""
 struct BoxedCaptures <: Check end
 """Runs in `CHECKS`. A struct field's stored type leaves dispatch open."""
@@ -150,8 +148,6 @@ struct Independent{N} <: Check
         new{length(modules)}(modules)
     end
 end
-"""Runs in `CHECKS`. A reference reaches a name the module it is written through leaves unexported and unmarked public."""
-struct DeclaredNames <: Check end
 """Runs in `CHECKS`. A reference reaches a module the wrapper's using and import lines omit."""
 struct DeclaredModules <: Check end
 """Configured through `gate(...; checks)` by a package that holds its modules apart. A method is added to a function another of its modules owns and leaves unmarked public or undocumented."""
@@ -197,11 +193,8 @@ kinds(::BlanketExports) = (:blanket_export => :advisory,)
 run(::StaleExports, ctx) = check_stale_exports(package_modules(ctx); repo = ctx.index.repo)
 kinds(::StaleExports) = (:stale_export => :advisory,)
 
-run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods, nameof(ctx.root))
+run(::ReachesInternal, ctx) = check_reaches_internal(ctx.index, ctx.mods, ctx.root)
 kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
-
-run(::PrivateImports, ctx) = check_private_imports(ctx.index)
-kinds(::PrivateImports) = (:private_import => :advisory,)
 
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
@@ -218,9 +211,6 @@ kinds(::ScanSeeds) = (:scan_seed => :advisory,)
 
 run(check::Independent, ctx) = check_independent(ctx.graph, check.modules)
 kinds(::Independent) = (:sibling_edge => :error,)
-
-run(::DeclaredNames, ctx) = check_declared_names(ctx.index, ctx.mods)
-kinds(::DeclaredNames) = (:undeclared_name => :advisory,)
 
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
 kinds(::DeclaredModules) = (:undeclared_module => :advisory,)

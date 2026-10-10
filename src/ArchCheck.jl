@@ -56,7 +56,7 @@ export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
 export Check, Context
 export Corpus, ModuleBackEdges, ModuleCycles, ContractsPurity, OwnerUniqueness, ModulePiracy
 export FileBackEdges, FileSinkable, Sinkable, TupleReturns, DeadCode, BlanketExports, StaleExports
-export ReachesInternal, PrivateImports, DeclaredNames, DeclaredModules, DeclaredExtensions
+export ReachesInternal, DeclaredModules, DeclaredExtensions
 export ForeignFields, BoxedCaptures, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders

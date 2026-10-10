@@ -85,7 +85,7 @@ function walk_iteration!(scan, node, scope, on_qualified)
 end
 
 # The parts of an assignment's left side that read names: a type annotation, an index target, a property
-# base. A bare binding reads nothing.
+# base. A bare binding reads nothing; a macro around one, as `@nospecialize(x::T)`, reads what its argument does.
 function collect_lhs!(found, node)
     children = child_nodes(node)
     isnothing(children) && return found
@@ -99,6 +99,10 @@ function collect_lhs!(found, node)
     elseif kind == K"tuple" || kind == K"parameters"
         for child in children
             collect_lhs!(found, child)
+        end
+    elseif kind == K"macrocall"
+        for argument in children[2:end]
+            collect_lhs!(found, argument)
         end
     end
     found
@@ -153,12 +157,6 @@ end
 function scope_plain!(scan, node, scope, on_qualified)
     note_free_name!(scan, node, scope)
     scope_children!(scan, node, scope, on_qualified)
-end
-
-# A quote is walked only when no qualified-name callback is listening.
-function scope_quote!(scan, node, scope, on_qualified)
-    isnothing(on_qualified) || return
-    scope_plain!(scan, node, scope, on_qualified)
 end
 
 function scope_dot!(scan, node, scope, on_qualified)
@@ -299,9 +297,7 @@ end
 
 function walk_scoped!(scan, node, scope, on_qualified)
     kind = JS.kind(node)
-    if kind == K"quote"
-        scope_quote!(scan, node, scope, on_qualified)
-    elseif kind == K"."
+    if kind == K"."
         scope_dot!(scan, node, scope, on_qualified)
     elseif is_method_form(node)
         scope_method!(scan, node, scope, on_qualified)
