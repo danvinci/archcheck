@@ -27,6 +27,8 @@ function published_names(index)
     names
 end
 
+# A curly constructor binds no name: dispatch reaches it through its type, as it reaches `Base.show` methods.
+# A type the module defines is referenced by its own definition, so only another module's type is in question.
 function dead_code_findings(index, entries)
     defs = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
     referenced = Set{Symbol}()
@@ -36,6 +38,7 @@ function dead_code_findings(index, entries)
         end
         union!(referenced, file.scan.modrefs)
         for name in file.scan.funcs
+            name in file.scan.constructors && continue
             line = file.scan.line[name]
             defs[(file.mod, name)] = (file.path, line)
         end

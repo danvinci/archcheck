@@ -70,6 +70,13 @@ function sig_name(signature)::Union{Nothing,Symbol}
     type_name(head)
 end
 
+# A curly head (`T{P}(x) = ...`) adds a constructor method to the type `T` already bound, so it binds no name.
+function is_type_constructor(signature)
+    parts = call_parts(signature)
+    isnothing(parts) && return false
+    JS.kind(parts.head) == K"curly"
+end
+
 # A qualified generic identifies a method site without declaring a locally owned function.
 function qualified_method_name(signature)
     parts = call_parts(signature)

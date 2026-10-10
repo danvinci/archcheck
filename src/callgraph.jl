@@ -22,14 +22,16 @@ function build_call_graph(index, mod::Symbol)
     # and a reference is satisfiable by the earliest of them.
     home!(name, f) = (!haskey(files, name) || f.filerank < rank[files[name]]) && (files[name] = f.path)
     members = files_of(index, mod)
-    # An imported function's home is the module or package that declares it, so a method this module adds
-    # gives it no file here; its body's calls are still this module's own for caller analysis.
+    # An imported function's home is the module or package that declares it, and a curly constructor's home is its
+    # type's definition, so a method this module adds gives neither a file here; its body's calls stay this module's.
     imported = union(Set{Symbol}(), (f.scan.imports for f in members)...)
+    constructed = union(Set{Symbol}(), (f.scan.constructors for f in members)...)
+    homeless = union(imported, constructed)
     owned_funcs = union(Set{Symbol}(), (Set(f.scan.funcs) for f in members)...)
     for f in members
         rank[f.path] = f.filerank
         for name in f.scan.funcs
-            name in imported && continue
+            name in homeless && continue
             home!(name, f)
         end
         for name in f.scan.types

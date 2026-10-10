@@ -176,6 +176,9 @@ function walk_method_def!(scan, node, depth, current)
         scan.line[name] = line
         record_top_method!(scan, name, children)
     end
+    if top && is_type_constructor(children[1])
+        push!(scan.constructors, name)
+    end
     length(children) < 2 && return
     owner = method_owner(children[1], name, top, current, scan.types)
     body = children[2]

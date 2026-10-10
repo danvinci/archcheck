@@ -21,6 +21,7 @@ end
 # One file's top-level defs and, per def, the names its body references. Closures are included.
 struct FileScan
     funcs::Vector{Symbol}                                        # top-level function names, source order
+    constructors::Set{Symbol}                                    # type names a top-level curly head (`T{P}(x) = ...`) adds methods to
     types::Vector{Symbol}                                        # top-level struct and abstract type names
     refs::Dict{Symbol,Set{Symbol}}                               # definition or qualified method -> referenced names
     modrefs::Set{Symbol}                                         # names referenced outside any function
@@ -34,6 +35,7 @@ end
 
 function empty_scan()
     funcs = Symbol[]
+    constructors = Set{Symbol}()
     types = Symbol[]
     refs = Dict{Symbol,Set{Symbol}}()
     modrefs = Set{Symbol}()
@@ -43,7 +45,7 @@ function empty_scan()
     imports = Set{Symbol}()
     callsites = Dict{MethodSite,Vector{CallSite}}()
     forms = Dict{MethodSite,JS.SyntaxNode}()
-    FileScan(funcs, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms)
+    FileScan(funcs, constructors, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms)
 end
 
 # `nothing` on failure, so a caller accounts for it.

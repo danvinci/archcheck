@@ -103,6 +103,7 @@ function Base.getindex(row::PosIndexLaw, index)
     pos_foreign_helper()
 end
 pos_foreign_helper() = 1
+Some{T}(marker::PosMarker) where {T} = marker
 
 function global_owner()
     global pos_global_helper
@@ -285,4 +286,5 @@ end
         @test !(name in dead)
     end
     @test !("PosCallLaw" in dead)
+    @test !("Some" in dead)
 end

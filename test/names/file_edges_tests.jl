@@ -21,7 +21,7 @@ include("types.jl")
 include("extension.jl")
 include("late.jl")
 """, [
-    "types.jl" => "struct Shape{T} end\n",
+    "types.jl" => "struct Shape{T} end\nwrap(shape) = Some(shape)\n",
     "extension.jl" => """
     function Base.getindex(shape::Shape{T}, helper, index = default_index()) where {T}
         helper(index)
@@ -29,7 +29,7 @@ include("late.jl")
         nested(shape)
     end
     """,
-    "late.jl" => "default_index() = 1\nleaf(value) = value\nhelper() = 2\n",
+    "late.jl" => "default_index() = 1\nleaf(value) = value\nhelper() = 2\nSome{T}(shape::Shape{T}) where {T} = shape\n",
 ])
 
 const IMPORTED_BREAKS = load_package("ImportedBreaks", """
@@ -104,7 +104,7 @@ include("late.jl")
     "late.jl" => "late_fn() = 1\n",
 ])
 
-@testset "a qualified method keeps the file edge of the names it calls" begin
+@testset "a method on another module's function or type keeps its calls' edges and gives the name no file" begin
     found = file_backedges(QUALIFIED_INDEX)
     rows = edge_rows(found)
     @test rows == [("extension.jl", "late.jl", "Base.getindex")]
