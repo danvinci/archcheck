@@ -5,6 +5,7 @@ inference allows, or a discarded call that writes nothing, cannot throw and retu
 struct InferredCalls <: Check end
 
 kinds(::InferredCalls) = (:failing_call => :advisory, :dropped_value => :advisory)
+phase(::InferredCalls) = :graph
 
 function run(::InferredCalls, ctx)
     graph = ctx.methods
