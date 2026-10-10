@@ -37,6 +37,12 @@ const KEYED_HANDLE = load_package("KeyedHandle", """
     end
     """)
 
+const PLAIN_PRODUCER = load_package("PlainProducer", """
+    made(x) = Ref(x)
+    made_key(x) = x
+    never_made(x) = Ref(x + 1)
+    """)
+
 function handle_pair(mod)
     left = mod.Handle(HANDLE_WIDTH, HANDLE_HEIGHT, Ptr{Cvoid}(POINTER_LEFT))
     right = mod.Handle(HANDLE_WIDTH, HANDLE_HEIGHT, Ptr{Cvoid}(POINTER_RIGHT))
@@ -110,6 +116,18 @@ end
         (:rebuild, "build", "build", "2"),
         (:rebuild, "other", "other", "1"),
     ]
+end
+
+@testset "a keyed producer the workload ran is reached, though no probe lists it" begin
+    pkg = PLAIN_PRODUCER.pkg
+    declared = (Derived(pkg.made; key = pkg.made_key),)
+    probes = Probes(; functions = (), slow_s = 0.0)
+    workload = () -> pkg.made(1)
+    checks = (UnreachedMethods(public_is_entry = false),)
+    run_seen = observed_gate(pkg; checks, probes, workload, derived = declared)
+    unreached = Set(finding.symbol for finding in run_seen.findings)
+    @test !("made" in unreached)
+    @test "never_made" in unreached
 end
 
 @testset "a key that separates the two calls stays quiet" begin

@@ -23,9 +23,10 @@ struct MethodSource
     signature::String   # printed signature of the wrapper
 end
 
-struct ProbeHandle
+struct ProbeHandle{F<:Tuple}
     session::ProbeSession            # where records accumulate
     originals::Vector{MethodSource}  # statements to evaluate back
+    functions::F                     # every function whose methods the session rewrote: producers, probed, ambient
 end
 
 # The statement evaluated again: the method form with the macro calls that wrap it. A docstring stays out, since
@@ -352,11 +353,12 @@ function arm!(probes::Probes, ctx)
         install!(listed, session, true, ctx, originals, skipped)
         install!(ambient, session, false, ctx, originals, skipped)
         isempty(skipped) || throw(skip_error(skipped))
+        rewritten = (producers..., listed..., ambient...)
+        return ProbeHandle(session, originals, rewritten)
     catch
         restore_originals(originals)
         rethrow()
     end
-    ProbeHandle(session, originals)
 end
 
 """Restores every method a handle probed to its source definition and returns the calls and the waits collected while armed."""

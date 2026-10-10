@@ -448,9 +448,11 @@ end
     pkg = NEST_OUTER.pkg
     probes = Probes(; functions = (:outer_step,), slow_s = 0.0)
     workload = () -> pkg.outer_step(1)
-    seen = observed_gate(pkg; workload, probes)
+    checks = (UnreachedMethods(public_is_entry = false),)
+    seen = observed_gate(pkg; checks, workload, probes)
     names = [record.name for record in seen.observed.records]
     @test names == [:outer_step]
+    @test isempty(seen.findings)
     absent = Probes(; functions = (:(Inner.absent),), slow_s = 0.0)
     refused = caught(gate_findings, pkg; workload, probes = absent)
     @test refused isa ArgumentError

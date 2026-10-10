@@ -105,10 +105,9 @@ function collect_compiled!(found, functions, modules)
     end
 end
 
-function compiled_probed(probes, modules)
+function compiled_probed(armed::ProbeHandle, modules)
     found = Method[]
-    collect_compiled!(found, probes.functions, modules)
-    collect_compiled!(found, probes.ambient, modules)
+    collect_compiled!(found, armed.functions, modules)
     found
 end
 
@@ -144,7 +143,7 @@ function observe(workload, probes, ctx)
         # every read of the method table run in the latest one. disarm! still runs when the workload throws.
         try
             elapsed = @elapsed Base.invokelatest(workload)
-            probed_compiled = Base.invokelatest(compiled_probed, probes, modules)
+            probed_compiled = Base.invokelatest(compiled_probed, armed, modules)
         finally
             traced = disarm!(armed)
             records = traced.records
