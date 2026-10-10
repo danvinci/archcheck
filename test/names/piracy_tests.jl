@@ -41,8 +41,13 @@ include("../ext/GlueExt.jl")
     """,
 ])
 
+# A signature as a fresh process prints it in full: from a module holding only the standard imports, no alias named.
+const FRESH_SCOPE = Module(:FreshScope)
+
 function method_signature(parts...)
-    string(Tuple{parts...})
+    signature = Tuple{parts...}
+    context = (:module => FRESH_SCOPE, :compact => false)
+    sprint(show, signature; context)
 end
 
 @testset "a method on a foreign function needs an argument type its package owns, or when strict its module" begin
