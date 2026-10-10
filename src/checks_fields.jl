@@ -244,15 +244,6 @@ function field_reads(tree, mod::Module)
     state
 end
 
-# The docstrings `home` records for its binding `name`; nothing when it records none. The lookup leaves a module
-# with no docs uninitialised.
-function recorded_docs(home::Module, name::Symbol)
-    docs = Base.Docs.meta(home; autoinit = false)
-    isnothing(docs) && return nothing
-    binding = Base.Docs.Binding(home, name)
-    get(docs, binding, nothing)
-end
-
 # A field S's docstring documents. Julia records field docstrings under `:fields` only when S has its own docstring.
 function is_documented_field(S::DataType, field)
     home = parentmodule(S)

@@ -119,6 +119,32 @@ function submodules(mod::Module)
     found
 end
 
+# stale-export: Julia accepts `export foo` with no `foo`, so a deleted definition leaves the name in
+# names(M) forever and no load ever complains.
+function check_stale_exports(mods; repo)
+    findings = Finding[]
+    for M in mods
+        owner = module_key(M)
+        path, line = module_site(M, repo)
+        for n in names(M)
+            n === nameof(M) && continue
+            isdefined(M, n) && continue
+            found = Finding(owner, :stale_export, path, string(n), line, "exported name is never defined")
+            push!(findings, found)
+        end
+    end
+    findings
+end
+
+# The docstrings `home` records for its binding `name`; nothing when it records none. The lookup leaves a module
+# with no docs uninitialised.
+function recorded_docs(home::Module, name::Symbol)
+    docs = Base.Docs.meta(home; autoinit = false)
+    isnothing(docs) && return nothing
+    binding = Base.Docs.Binding(home, name)
+    get(docs, binding, nothing)
+end
+
 # unranked-module: a loaded submodule no wrapper declares by the spine rule, so the index files it under its
 # parent and no rank rule reaches it.
 function check_module_corpus(mods, rank; repo)

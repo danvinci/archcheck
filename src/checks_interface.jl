@@ -44,23 +44,6 @@ function check_blanket_exports(index::SourceIndex)
     findings
 end
 
-# stale-export: Julia accepts `export foo` with no `foo`, so a deleted definition leaves the name in
-# names(M) forever and no load ever complains.
-function check_stale_exports(mods; repo)
-    findings = Finding[]
-    for M in mods
-        owner = module_key(M)
-        path, line = module_site(M, repo)
-        for n in names(M)
-            n === nameof(M) && continue
-            isdefined(M, n) && continue
-            found = Finding(owner, :stale_export, path, string(n), line, "exported name is never defined")
-            push!(findings, found)
-        end
-    end
-    findings
-end
-
 # Loaded modules plus their parents, so `Root.Child` follows Module identity along the path.
 function loaded_modules(mods)
     known = Dict{Symbol,Module}()

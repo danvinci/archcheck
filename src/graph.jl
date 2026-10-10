@@ -419,6 +419,24 @@ end
 
 build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, index.refs)
 
+# The node naming what a call calls: its operator token, the member of a dotted name, a type application's type,
+# or the bare name. Every other identifier in the call is a value it passes.
+function callee_node(call)
+    children = child_nodes(call)
+    (isnothing(children) || isempty(children)) && return nothing
+    if is_operator_call(call)
+        JS.is_prefix_op_call(call) && return first(children)
+        index = findfirst(operator_token, children)
+        return isnothing(index) ? nothing : children[index]
+    end
+    head = first(children)
+    kind = JS.kind(head)
+    (kind == K"curly" || kind == K".") || return head
+    parts = child_nodes(head)
+    isnothing(parts) && return head
+    kind == K"curly" ? first(parts) : last(parts)
+end
+
 # Names written anywhere but as a callee: stored, passed, returned, exported, or read by an entry script. A function
 # called through a value unknown at its call site was written as one of these.
 function value_names(index::SourceIndex)
