@@ -31,8 +31,6 @@ struct ArgumentShape
 end
 
 function keep_name!(names, found::Symbol)
-    text = string(found)
-    all(==('_'), text) && return false
     push!(names, found)
     true
 end
@@ -124,6 +122,151 @@ function collect_call!(positional_names, positional_forms, keyword_names, keywor
         end
     end
     nothing
+end
+
+# An argument the source leaves unnamed (`::Type{T}`) or names `_` takes a fresh name, so the probe hashes it:
+# two calls that differ only in such an argument are distinct calls. A destructured tuple keeps its form.
+function is_unreadable(name::Symbol)
+    text = string(name)
+    all(==('_'), text)
+end
+
+function named_argument(name::Symbol)
+    is_unreadable(name) || return name
+    gensym(:argument)
+end
+
+named_argument(argument::Any) = argument
+
+function named_argument(argument::Expr)
+    head = argument.head
+    if head === :(::) && length(argument.args) == 1
+        fresh = gensym(:argument)
+        return Expr(:(::), fresh, argument.args[1])
+    end
+    if head === :(::) || head === :kw || head === :...
+        inner = named_argument(argument.args[1])
+        rest = argument.args[2:end]
+        return Expr(head, inner, rest...)
+    end
+    if head === :macrocall
+        inner = named_argument(last(argument.args))
+        leading = argument.args[1:(end - 1)]
+        return Expr(:macrocall, leading..., inner)
+    end
+    argument
+end
+
+# A callable written `(::Foo)(x)` is an argument too; a function name is none.
+named_callable(head::Expr) = head.head === :(::) ? named_argument(head) : head
+named_callable(head::Any) = head
+
+function named_call(call::Expr)
+    callable = named_callable(call.args[1])
+    args = Any[callable]
+    for argument in call.args[2:end]
+        named = named_argument(argument)
+        push!(args, named)
+    end
+    Expr(:call, args...)
+end
+
+named_signature(node::Any) = node
+
+function named_signature(node::Expr)
+    if node.head === :where || node.head === :(::)
+        isempty(node.args) && return node
+        inner = named_signature(node.args[1])
+        rest = node.args[2:end]
+        return Expr(node.head, inner, rest...)
+    end
+    node.head === :call || return node
+    named_call(node)
+end
+
+# A type as source under a method's where-clause: a closed type is spliced as itself, and a type holding the
+# method's parameters is spelled out, so each parameter resolves to the binding the where-clause makes.
+type_expression(variable::TypeVar) = variable.name
+type_expression(value::Symbol) = QuoteNode(value)
+type_expression(value::Any) = value
+
+function type_expression(type::Type)
+    Base.has_free_typevars(type) || return type
+    spelled_type(type)
+end
+
+function type_expression(vararg::Core.TypeofVararg)
+    Base.has_free_typevars(vararg) || return vararg
+    element = type_expression(vararg.T)
+    isdefined(vararg, :N) || return Expr(:curly, Vararg, element)
+    count = type_expression(vararg.N)
+    Expr(:curly, Vararg, element, count)
+end
+
+function spelled_parameters(head, parameters)
+    args = Any[head]
+    for parameter in parameters
+        spelled = type_expression(parameter)
+        push!(args, spelled)
+    end
+    Expr(:curly, args...)
+end
+
+function spelled_type(type::DataType)
+    wrapper = type.name.wrapper
+    spelled_parameters(wrapper, type.parameters)
+end
+
+function spelled_type(type::Union)
+    members = Base.uniontypes(type)
+    spelled_parameters(Union, members)
+end
+
+function spelled_type(type::UnionAll)
+    body = type_expression(type.body)
+    bound = variable_bound(type.var)
+    Expr(:where, body, bound)
+end
+
+function variable_bound(variable::TypeVar)
+    name = variable.name
+    upper = type_expression(variable.ub)
+    if variable.lb !== Union{}
+        lower = type_expression(variable.lb)
+        return Expr(:comparison, lower, :<:, name, :<:, upper)
+    end
+    variable.ub === Any && return name
+    Expr(:<:, name, upper)
+end
+
+"""`call` under the where-clause binding every parameter of `signature`, outermost first."""
+function where_clause(call::Expr, signature::Type)
+    bounds = Any[]
+    node = signature
+    while node isa UnionAll
+        bound = variable_bound(node.var)
+        push!(bounds, bound)
+        node = node.body
+    end
+    isempty(bounds) && return call
+    Expr(:where, call, bounds...)
+end
+
+"""The parameter name at each slot lowering gives a method after its keywords: the callable, then each positional
+argument. `Symbol("")` marks a slot the source binds no name to."""
+function slot_names(signature::Expr)
+    call = unwrap_signature(signature)
+    slots = Symbol[]
+    callable = call.args[1]
+    is_bound = callable isa Expr && callable.head === :(::)
+    callable_name = is_bound ? parameter_symbol(callable) : nothing
+    push!(slots, something(callable_name, Symbol("")))
+    for argument in call.args[2:end]
+        argument isa Expr && argument.head === :parameters && continue
+        found = parameter_symbol(argument)
+        push!(slots, something(found, Symbol("")))
+    end
+    slots
 end
 
 function argument_shape(signature::Expr)
@@ -364,10 +507,10 @@ function rewrite_definition(definition::Expr, site::ProbeSite)
     long_form = definition.head === :function && length(definition.args) == 2
     short_form = is_short_method(definition)
     long_form || short_form || return nothing
-    signature = definition.args[1]
+    copied = deepcopy(definition.args[1])
+    signature = named_signature(copied)
     shape = argument_shape(signature)
     body = deepcopy(definition.args[2])
     probed = probe_body(site, shape, body)
-    copied = deepcopy(signature)
-    Expr(:function, copied, probed)
+    Expr(:function, signature, probed)
 end

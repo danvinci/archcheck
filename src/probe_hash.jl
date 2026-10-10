@@ -27,7 +27,11 @@ function hash_value(value, seed::UInt, memo, depth::Int)
     result
 end
 
-function hash_content(value::Union{Number,Symbol,String,Char,Nothing,Bool}, seed::UInt, memo, depth::Int)
+# Base's own leaf values, whose `hash` runs no package method. A package's number type is hashed by its content,
+# since its `hash` may call the probed code or rest on methods the type leaves undefined.
+const HASHED_LEAVES = Union{Base.BitInteger,Base.IEEEFloat,BigInt,BigFloat,Symbol,String,Char,Nothing,Bool}
+
+function hash_content(value::HASHED_LEAVES, seed::UInt, memo, depth::Int)
     hash(value, seed)
 end
 
@@ -67,7 +71,10 @@ function hash_content(value, seed::UInt, memo, depth::Int)
     if padded
         return hash_fields(value, seed, memo, depth)
     end
-    hash(value, seed)
+    width = sizeof(kind)
+    bytes = reinterpret(NTuple{width,UInt8}, value)
+    typed_bytes = (kind, bytes)
+    hash(typed_bytes, seed)
 end
 
 # The elements a container holds; an unassigned array slot holds none.

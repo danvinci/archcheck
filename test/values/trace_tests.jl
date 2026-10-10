@@ -18,6 +18,8 @@ const SHARED_REF = load_package("SharedRef", """
     function twin_b(x)
         x
     end
+
+    typed_zero(::Type{T}) where {T} = zero(T)
     """)
 
 const NESTED_REPEAT = load_package("NestedRepeat", """
@@ -99,6 +101,15 @@ const UNREAD_RESULT = load_package("UnreadResult", """
     end
     quiet = gate_findings(Probed; checks, probes, workload = distinct_call)
     @test isempty(quiet)
+
+    typed = SHARED_REF.pkg
+    distinct_type = function ()
+        typed.typed_zero(Int)
+        typed.typed_zero(Float64)
+    end
+    type_probes = Probes(; functions = (typed.typed_zero,), slow_s = 0.0)
+    type_quiet = gate_findings(typed; checks, probes = type_probes, workload = distinct_type)
+    @test isempty(type_quiet)
 end
 
 @testset "a repeat inside an ambient call is set apart, and a channel-fed call is set apart" begin

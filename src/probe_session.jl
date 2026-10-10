@@ -146,8 +146,26 @@ function probed_frame(session::ProbeSession)
     nearest_probed(frames)
 end
 
+"""The task-local mark of a record being taken for one session. The package code its hashes run, such as an
+argument's own `hash`, runs unrecorded while the mark is set, so a probed call inside it leaves no frame."""
+struct Recording
+    session::ProbeSession   # the session whose record is being taken
+end
+
+function is_recording(session::ProbeSession)
+    storage = task_local_storage()
+    marker = Recording(session)
+    haskey(storage, marker)
+end
+
+function unrecorded(take, session::ProbeSession)
+    marker = Recording(session)
+    task_local_storage(take, marker, true)
+end
+
 function probe_enter(session::ProbeSession, name::Symbol, file::String, line::Int, arguments::Tuple,
         key_hash::Union{Nothing,UInt}, is_probed::Bool)
+    is_recording(session) && return nothing
     frames = opened_frames(session)
     names = ancestor_names(frames)
     caller = caller_of(session, frames)
@@ -192,16 +210,20 @@ function push_wait(session::ProbeSession, record::WaitRecord)
 end
 
 function probe_leave(session::ProbeSession, result)
+    is_recording(session) && return nothing
     frame = close_frame(session)
     stopped = time()
     duration = stopped - frame.started
     duration >= session.slow_s || return nothing
-    record = make_record(frame, result, stopped)
+    record = unrecorded(session) do
+        make_record(frame, result, stopped)
+    end
     push_record(session, record)
     nothing
 end
 
 function probe_abort(session::ProbeSession)
+    is_recording(session) && return nothing
     close_frame(session)
     nothing
 end

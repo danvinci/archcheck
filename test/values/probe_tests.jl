@@ -4,6 +4,7 @@ const FLOAT_SAMPLE = 2.0
 const FLOAT_RESULT = 3.0
 const BOX_FROM_FLOAT = 2.4
 const BOX_RESTORED_FLOAT = 3.0
+const CONVERT_SAMPLE = 2.25
 
 function caught(f, args...; options...)
     try
@@ -82,8 +83,12 @@ const PARENT_LINK = load_package("ParentLink", """
 
 const SCALED_KEYWORD = load_package("ScaledKeyword", """
     function scaled(xs::Vector{T}; scale::T = one(T)) where {T<:Real}
-        xs .* scale
+        T.(xs .* scale)
     end
+
+    converted(x, ::Type{T} = Float64; digits::Int = 1) where {T} = round(T(x); digits)
+
+    shifted(x, by = 1) = x + by
     """)
 
 const BOXED_VALUE = load_package("BoxedValue", """
@@ -97,6 +102,23 @@ const BOXED_VALUE = load_package("BoxedValue", """
 
     "Twice the boxed value."
     twice(box::Boxed) = 2 * box.value
+
+    unboxed(box::Boxed) = box.value
+    Base.hash(box::Boxed, seed::UInt) = hash(unboxed(box), seed)
+
+    struct Reading <: Real
+        value::Float64
+    end
+
+    measured(reading::Reading) = reading.value
+
+    struct Ring <: AbstractVector{Int}
+        length::Int
+    end
+
+    Base.size(ring::Ring) = (ring.length,)
+    Base.getindex(ring::Ring, index::Int) = slot(ring, index)
+    slot(ring::Ring, index::Int) = index
     """)
 
 const SLOT_HOLDER = load_package("SlotHolder", """
@@ -345,14 +367,34 @@ end
     @test restored == 4
 end
 
-@testset "a parametric keyword method is armed and restored" begin
+@testset "keyword, where-bound and positional-default methods are armed and restored" begin
     pkg = SCALED_KEYWORD.pkg
     sample = [1.0]
     expected = sample .* FLOAT_SAMPLE
-    probes = Probes(; functions = (pkg.scaled,), slow_s = 0.0)
+    rounded = Base.invokelatest(pkg.converted, CONVERT_SAMPLE)
+    narrowed = Base.invokelatest(pkg.converted, CONVERT_SAMPLE, Float32; digits = 2)
+    defaulted = (pkg.converted, pkg.shifted)
+    method_files = function ()
+        files = String[]
+        for func in defaulted
+            listed = Base.invokelatest(methods, func)
+            for method in listed
+                push!(files, String(method.file))
+            end
+        end
+        files
+    end
+    files_before = method_files()
+    probes = Probes(; functions = (pkg.scaled, pkg.converted, pkg.shifted), slow_s = 0.0)
     returned = Ref{Any}(nothing)
+    converted = Ref{Any}(nothing)
     workload = function ()
         returned[] = pkg.scaled(sample; scale = FLOAT_SAMPLE)
+        default_type = pkg.converted(CONVERT_SAMPLE)
+        given_type = pkg.converted(CONVERT_SAMPLE, Float32; digits = 2)
+        default_shift = pkg.shifted(1)
+        given_shift = pkg.shifted(1, 2)
+        converted[] = (default_type, given_type, default_shift, given_shift)
     end
     warn_path = tempname()
     quiet_run = open(warn_path, "w") do warn_io
@@ -370,10 +412,14 @@ end
     @test !isnothing(quiet_run.body)
     records = quiet_run.seen.observed.records
     names = [record.name for record in records]
-    @test names == [:scaled]
+    @test names == [:scaled, :converted, :converted, :shifted, :shifted]
     @test returned[] == expected
+    @test converted[] === (rounded, narrowed, 2, 3)
+    @test method_files() == files_before
     restored = Base.invokelatest(pkg.scaled, sample; scale = FLOAT_SAMPLE)
     @test restored == expected
+    restored_type = Base.invokelatest(pkg.converted, CONVERT_SAMPLE, Float32; digits = 2)
+    @test restored_type === narrowed
     methods_of = Base.invokelatest(methods, pkg.scaled)
     method = only(methods_of)
     source_file = String(method.file)
@@ -395,6 +441,26 @@ end
     @test sort(names) == [:Boxed, :twice]
     restored = Base.invokelatest(pkg.Boxed, BOX_RESTORED_FLOAT)
     @test restored.value == 3
+end
+
+@testset "a call is recorded whatever its argument's own hash does" begin
+    pkg = BOXED_VALUE.pkg
+    probes = Probes(; functions = (pkg.unboxed, pkg.measured, pkg.slot), slow_s = 0.0)
+    returned = Ref{Any}(nothing)
+    workload = function ()
+        box = pkg.Boxed(2, 1)
+        unboxed = pkg.unboxed(box)
+        reading = pkg.Reading(1.5)
+        measured = pkg.measured(reading)
+        ring = pkg.Ring(2)
+        slotted = pkg.slot(ring, 2)
+        returned[] = (unboxed, measured, slotted)
+    end
+    seen = observed_gate(pkg; workload, probes)
+    @test returned[] == (2, 1.5, 2)
+    records = seen.observed.records
+    names = [record.name for record in records]
+    @test names == [:unboxed, :measured, :slot]
 end
 
 @testset "padding bytes stay out of an argument hash" begin

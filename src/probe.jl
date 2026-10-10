@@ -17,10 +17,10 @@ struct ProbeSkip
 end
 
 struct MethodSource
-    mod::Module         # where the statement evaluates
-    definition::Expr    # statement put back on the way out
-    name::Symbol        # function the method belongs to
-    signature::String   # printed signature of the wrapper
+    mod::Module                  # where the statement evaluates
+    definition::Expr             # statement put back on the way out
+    name::Symbol                 # function the methods belong to
+    signatures::Vector{String}   # printed signature of each method the probed statement defines
 end
 
 struct ProbeHandle{F<:Tuple}
@@ -112,12 +112,12 @@ function drop_method!(method)
 end
 
 # The evaluated wrapper keeps this signature. Its file and line are the probe source.
-function lookup_method(source)
+function lookup_method(source::MethodSource, signature::String)
     fn = getfield(source.mod, source.name)
     for method in methods(fn)
         method.module === source.mod || continue
         label = string(method.sig)
-        label == source.signature && return method
+        label == signature && return method
     end
     nothing
 end
@@ -150,19 +150,33 @@ function is_probed_method(method::Method)
     holds_session(rewritten)
 end
 
-function install_method!(method, located, session, is_probed::Bool, originals, skipped, key)
-    if is_probed_method(method)
-        note_skip!(skipped, method, "probed by a session still armed")
+# A keyword form's body runs for every method the form defines, so the method that names the body leads.
+function form_lead(group::Vector{Method})
+    for method in group
+        body = defined_body(method)
+        isnothing(body) || return method
+    end
+    first(group)
+end
+
+# Why a listed method cannot be rewritten; nothing when it can.
+function refusal(method::Method, located)
+    is_probed_method(method) && return "probed by a session still armed"
+    isdefined(method, :generator) && return "generated"
+    isnothing(located) && return "no source site in the index"
+    nothing
+end
+
+# One source form, rewritten once for every listed method it defines.
+function install_form!(group::Vector{Method}, located, session, is_probed::Bool, originals, skipped, derived)
+    for member in group
+        reason = refusal(member, located)
+        isnothing(reason) && continue
+        note_skip!(skipped, member, reason)
         return nothing
     end
-    if isdefined(method, :generator)
-        note_skip!(skipped, method, "generated")
-        return nothing
-    end
-    if isnothing(located)
-        note_skip!(skipped, method, "no source site in the index")
-        return nothing
-    end
+    method = form_lead(group)
+    key = key_for(derived, method)
     statement = definition_statement(located.form)
     saved = Expr(statement)
     retag_lines!(saved, method.file)
@@ -177,7 +191,7 @@ function install_method!(method, located, session, is_probed::Bool, originals, s
     home = method.module
     source = keyword_source(method, saved, probed, home)
     if isnothing(source)
-        source = replaced_source(method, saved, probed, home)
+        source = replaced_source(group, saved, probed, home)
     end
     push!(originals, source)
     nothing
@@ -190,18 +204,23 @@ function body_parameter(name::Symbol)
     name
 end
 
-function body_call(body::Function, method::Method)
-    names = Base.method_argnames(method)
+# The keyword body method's own signature: its declared types under its where-clause, lowering's names for the
+# keyword slots, and the probed source's names for the slots after them, which the probed body reads.
+function body_signature(body::Function, target::Method, slots::Vector{Symbol})
+    names = Base.method_argnames(target)
+    declared = Base.unwrap_unionall(target.sig)
+    types = declared.parameters
+    keyword_end = length(names) - length(slots)
     args = Any[]
-    last_index = length(names)
-    for index in 2:last_index
-        parameter = body_parameter(names[index])
-        if method.isva && index == last_index
-            parameter = Expr(:..., parameter)
-        end
-        push!(args, parameter)
+    for index in 2:length(names)
+        written = index > keyword_end ? slots[index - keyword_end] : names[index]
+        parameter = body_parameter(written)
+        annotation = type_expression(types[index])
+        typed = Expr(:(::), parameter, annotation)
+        push!(args, typed)
     end
-    Expr(:call, nameof(body), args...)
+    call = Expr(:call, nameof(body), args...)
+    where_clause(call, target.sig)
 end
 
 function defined_body(method::Method)
@@ -247,7 +266,9 @@ function keyword_source(method::Method, saved::Expr, probed::Expr, home::Module)
     isnothing(inner) && return nothing
     target = newest_method(body)
     isnothing(target) && return nothing
-    call = body_call(body, target)
+    probed_signature = probed.args[1]
+    slots = slot_names(probed_signature)
+    call = body_signature(body, target, slots)
     copied_call = deepcopy(call)
     copied_inner = deepcopy(inner)
     original = Expr(:function, copied_call, copied_inner)
@@ -256,14 +277,20 @@ function keyword_source(method::Method, saved::Expr, probed::Expr, home::Module)
     installed = install_keyword_body!(body, target, original, replacement, home)
     label = string(installed.sig)
     body_name = nameof(body)
-    MethodSource(home, original, body_name, label)
+    MethodSource(home, original, body_name, [label])
 end
 
-function replaced_source(method::Method, saved::Expr, probed::Expr, home::Module)
-    name = method.name
-    label = string(method.sig)
-    source = MethodSource(home, saved, name, label)
-    drop_method!(method)
+function replaced_source(group::Vector{Method}, saved::Expr, probed::Expr, home::Module)
+    lead = first(group)
+    labels = String[]
+    for method in group
+        label = string(method.sig)
+        push!(labels, label)
+    end
+    source = MethodSource(home, saved, lead.name, labels)
+    for method in group
+        drop_method!(method)
+    end
     try
         Core.eval(home, probed)
     catch
@@ -273,27 +300,58 @@ function replaced_source(method::Method, saved::Expr, probed::Expr, home::Module
     source
 end
 
-function install!(functions, session, is_probed::Bool, ctx, originals, skipped)
+function methods_of_form(listed, located, form)
+    group = Method[]
+    for index in eachindex(listed)
+        found = located[index]
+        isnothing(found) && continue
+        found.form === form && push!(group, listed[index])
+    end
+    group
+end
+
+# Positional defaults make several listed methods from one source form, and evaluating the form again defines
+# them all, so each form is installed once, for its whole group.
+function install_target!(target, session, is_probed::Bool, ctx, originals, skipped)
     modules = package_modules(ctx)
-    for target in functions
-        defined = methods(target)
-        for method in defined
-            home = method.module
-            home in modules || continue
-            located = method_form(ctx.index, method)
-            is_unprobed_constructor(target, located) && continue
-            key = key_for(ctx.derived, method)
-            install_method!(method, located, session, is_probed, originals, skipped, key)
+    listed = Method[]
+    located = Any[]
+    for method in methods(target)
+        method.module in modules || continue
+        found = method_form(ctx.index, method)
+        push!(listed, method)
+        push!(located, found)
+    end
+    installed = Base.IdSet{Any}()
+    for index in eachindex(listed)
+        method = listed[index]
+        found = located[index]
+        is_unprobed_constructor(target, found) && continue
+        if isnothing(found)
+            reason = refusal(method, found)
+            note_skip!(skipped, method, reason)
+            continue
         end
+        found.form in installed && continue
+        push!(installed, found.form)
+        group = methods_of_form(listed, located, found.form)
+        install_form!(group, found, session, is_probed, originals, skipped, ctx.derived)
+    end
+    nothing
+end
+
+function install!(functions, session, is_probed::Bool, ctx, originals, skipped)
+    for target in functions
+        install_target!(target, session, is_probed, ctx, originals, skipped)
     end
     nothing
 end
 
 function restore_originals(originals)
     for source in originals
-        current = lookup_method(source)
-        if !isnothing(current)
-            drop_method!(current)
+        for signature in source.signatures
+            current = lookup_method(source, signature)
+            isnothing(current) || drop_method!(current)
         end
         Core.eval(source.mod, source.definition)
     end
