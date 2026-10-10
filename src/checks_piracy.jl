@@ -1,5 +1,5 @@
-# A method whose function and every argument type sit outside its owner: the package, or the defining module.
-# An owner's subtree is every module whose full name starts with the owner's own.
+# A method whose function and every argument type sit outside its owner: the package, or the defining module, with
+# an extension owning what the root owns. An owner's subtree is every module whose full name starts with its own.
 
 # A value parameter stands for its type. A Symbol parameter belongs to nobody, so it counts as owned.
 is_foreign(@nospecialize(x), owns) = is_foreign(typeof(x), owns)
@@ -59,20 +59,48 @@ function is_in_scope(mod, scope, exact::Bool)
     prefix == scope
 end
 
-# module-piracy: the function is foreign to the owner, and every argument type to the owner's subtree. The owner
-# is the package, or with `strict` the defining module. A keyword method is judged by the function it wraps.
+function is_in_any_scope(mod, scopes, exact::Bool)
+    for scope in scopes
+        is_in_scope(mod, scope, exact) && return true
+    end
+    false
+end
+
+# The directory beside src/ that Julia's package loader reads extensions from.
+const EXTENSION_DIR = "ext"
+
+# Whether a module's `module` line sits in the package's extension directory.
+function is_extension(mod::Module, repo)
+    file, _ = module_site(mod, repo)
+    parts = splitpath(file)
+    first(parts) == EXTENSION_DIR
+end
+
+# The full module names whose functions and subtree types a method's module owns: the package's, or with `strict` its
+# own. An extension adds the root's methods to its own and other packages' types, so it owns both in either mode.
+function owner_scopes(home::Module, root::Module, strict::Bool, repo)
+    package_scope = fullname(root)
+    own_scope = fullname(home)
+    is_extension(home, repo) && return Tuple{Vararg{Symbol}}[own_scope, package_scope]
+    strict && return Tuple{Vararg{Symbol}}[own_scope]
+    Tuple{Vararg{Symbol}}[package_scope]
+end
+
+# module-piracy: the function is foreign to every owner scope, and every argument type to their subtrees. A keyword
+# method is judged by the function it wraps.
 function check_module_piracy(defined, root::Module; repo, strict::Bool)
     findings = Finding[]
-    package_scope = fullname(root)
+    homes = unique(method.module for method in defined)
+    scopes_by_home = Dict(home => owner_scopes(home, root, strict, repo) for home in homes)
     for method in defined
         home = method.module
-        scope = strict ? fullname(home) : package_scope
+        scopes = scopes_by_home[home]
         function_type, arguments = split_signature(method.sig)
         # A Union in the function slot is foreign when every member is foreign.
         members = Base.uniontypes(function_type)
-        owns_function = mod -> is_in_scope(mod, scope, strict)
+        owns_function = mod -> is_in_any_scope(mod, scopes, strict)
         all_members_foreign(members, owns_function) || continue
-        owns_argument = mod -> is_in_scope(mod, scope, false)
+        owns_argument = mod -> is_in_any_scope(mod, scopes, false)
         arguments_foreign = true
         for argument in arguments
             is_foreign(argument, owns_argument) && continue

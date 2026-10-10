@@ -97,7 +97,7 @@ struct OwnerUniqueness <: Check
     strict::Bool   # a module and one it encloses count as two owners
 end
 OwnerUniqueness(; strict::Bool = false) = OwnerUniqueness(strict)
-"""Runs in `CHECKS`. A method extends a function owned outside the package on argument types owned outside it. With `strict`, the defining module stands for the package: its own functions, its own subtree's types."""
+"""Runs in `CHECKS`. A method extends a function owned outside the package on argument types owned outside it. With `strict`, the defining module stands for the package: its own functions, its own subtree's types. A module in the package's `ext/` directory owns what it defines and what the root owns, in either mode."""
 struct ModulePiracy <: Check
     strict::Bool   # ownership is the defining module's rather than the package's
 end

@@ -1,4 +1,4 @@
-# A method on a foreign function needs an argument type its module owns.
+# A method on a foreign function needs an argument type its module owns. GlueExt sits in ext/, as an extension does.
 
 const METHOD_FAMILY = load_package("MethodFamily", """
 include("siba/SibA.jl")
@@ -7,7 +7,16 @@ include("sibb/SibB.jl")
 using .SibB
 Base.length(::SibB.Twig) = 2
 SibA.spread(x::String; pad = 0) = x
+glue(x::Int) = x
+include("../ext/GlueExt.jl")
 """, [
+    "../ext/GlueExt.jl" => """
+    module GlueExt
+    import ..MethodFamily: glue
+    glue(x::Char) = x
+    Base.:-(left::Base.RefValue{Symbol}, right::Base.RefValue{Symbol}) = right
+    end
+    """,
     "siba/SibA.jl" => """
     module SibA
     struct Leaf end
@@ -74,11 +83,17 @@ end
     reference = Base.RefValue{Symbol}
     on_base = method_signature(typeof(+), reference, reference)
     @test (sib_b, on_base) in flagged
-    @test length(found) == 8
+
+    extension = :GlueExt
+    on_glue = method_signature(typeof(pkg.glue), Char)
+    on_minus = method_signature(typeof(-), reference, reference)
+    @test !((extension, on_glue) in flagged)
+    @test (extension, on_minus) in flagged
+    @test length(found) == 9
 
     package_found = ArchCheck.run(ModulePiracy(), ctx)
     package_flagged = Set((finding.mod, ev(finding, :signature)) for finding in package_found)
-    @test package_flagged == Set([(sib_b, on_base)])
+    @test package_flagged == Set([(sib_b, on_base), (extension, on_minus)])
 
     by_signature = Dict(ev(finding, :signature) => finding for finding in found)
     leaf_finding = by_signature[on_leaf]
