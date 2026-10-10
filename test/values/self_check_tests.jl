@@ -82,21 +82,3 @@ end
     sort!(undocumented)
     @test undocumented == String[]
 end
-
-const SHARED_HUB = load_package("SharedHub", """
-    include("hub.jl")
-    include("c.jl")
-    include("b.jl")
-    include("a.jl")
-    """, [
-    "hub.jl" => "hub_fn() = 1\n",
-    "c.jl" => "leaf_fn() = 1\nfrom_c() = hub_fn()\n",
-    "b.jl" => "from_b() = hub_fn()\n",
-    "a.jl" => "from_a() = hub_fn()\nstray() = leaf_fn()\n",
-])
-
-@testset "a callee file more than half the module reaches is shared vocabulary" begin
-    ctx = case_context(SHARED_HUB)
-    found = ArchCheck.run(FileSinkable(), ctx)
-    @test evidence_rows(found, :callees_in, :files_using_it) == [(:file_sinkable, "stray", "c.jl", "1/4")]
-end

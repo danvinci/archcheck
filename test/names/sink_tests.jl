@@ -152,6 +152,52 @@ include("high.jl")
     """,
 ])
 
+const VOCABULARY_SINK = load_package("VocabularySink", """
+export published_fn
+include("hub.jl")
+include("side.jl")
+include("users.jl")
+""", [
+    "hub.jl" => """
+    struct Hub
+        value::Int
+    end
+    hub_fn() = 1
+    published_fn() = 2
+    shared_fn() = 3
+    """,
+    "side.jl" => "leaf_fn() = 1\nside_use() = shared_fn() + leaf_fn()\n",
+    "users.jl" => """
+    from_type() = Hub(1)
+    from_published() = published_fn()
+    from_shared() = shared_fn()
+    from_hub() = hub_fn()
+    stray() = leaf_fn()
+    """,
+])
+
+const FOREIGN_ITERATE = load_package("ForeignIterate", """
+include("low.jl")
+include("high.jl")
+""", [
+    "low.jl" => """
+    struct Walk
+        xs::Vector{Int}
+    end
+    next_item(walk, state) = state > length(walk.xs) ? nothing : (walk.xs[state], state + 1)
+    Base.iterate(walk::Walk, state = 1) = next_item(walk, state)
+    """,
+    "high.jl" => """
+    function total(items)
+        sum = 0
+        for item in items
+            sum += item
+        end
+        sum
+    end
+    """,
+])
+
 function module_sinkable(case)
     ctx = case_context(case)
     ArchCheck.run(Sinkable(), ctx)
@@ -216,7 +262,6 @@ end
     @test stray.symbol == "stray"
     @test stray.kind === :file_sinkable
     @test ev(stray, :callees_in) == "low.jl"
-    @test ev(stray, :files_using_it) == "1/2"
     @test ev(stray, :callers_in_own_file) == "0"
 
     up = file_sinkable(UPWARD_SINK)
@@ -227,6 +272,20 @@ end
 
     spread = file_sinkable(SPREAD_SINK)
     @test isempty(spread)
+end
+
+@testset "a type, a published name or a function two other files use places nothing, and a private function does" begin
+    found = file_sinkable(VOCABULARY_SINK)
+    rows = evidence_rows(found, :callees_in)
+    @test rows == [(:file_sinkable, "from_hub", "hub.jl"), (:file_sinkable, "stray", "side.jl")]
+end
+
+@testset "a method on a function the module does not own places nothing" begin
+    pkg = FOREIGN_ITERATE.pkg
+    entries = ((pkg.total, Tuple{Any}),)
+    ctx = Base.invokelatest(Context, pkg; entries)
+    found = ArchCheck.run(FileSinkable(), ctx)
+    @test isempty(found)
 end
 
 @testset "a parameter named like a callee is not a call and a constructor is" begin

@@ -104,7 +104,7 @@ end
 ModulePiracy(; strict::Bool = false) = ModulePiracy(strict)
 """Runs in `CHECKS`. A file calls into a file the wrapper includes later."""
 struct FileBackEdges <: Check end
-"""Runs in `CHECKS`. Every callee of a definition lives in one lower-ranked file, and at most half the module's files reach that file."""
+"""Runs in `CHECKS`. Every function a definition calls lives in one lower-ranked file. The module's types and the package's exported or public names are vocabulary and place nothing."""
 struct FileSinkable <: Check end
 """Runs in `CHECKS`. A definition touches only modules that rank below its own, or one file holds several such definitions."""
 struct Sinkable <: Check end
@@ -237,7 +237,11 @@ run(::FileBackEdges, ctx) = collect_modules(check_file_backedges, ctx)
 kinds(::FileBackEdges) = (:file_backedge => :advisory,)
 
 function run(::FileSinkable, ctx)
-    judge = cg -> check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.index.repo)
+    published = published_names(ctx.index)
+    judge = function (cg)
+        vocabulary = union(cg.types, cg.shared, published)
+        check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.index.repo, vocabulary)
+    end
     collect_modules(judge, ctx)
 end
 kinds(::FileSinkable) = (:file_sinkable => :advisory,)

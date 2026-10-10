@@ -26,21 +26,17 @@ const SINK_HUB = load_package("SinkHub", SINK_HUB_SPINE, [
     "b.jl" => "from_b(x::Int) = leaf(x)\n",
 ])
 
-const SINK_PASSED_SPINE = "include(\"low.jl\")\ninclude(\"wrap.jl\")\ninclude(\"pad_a.jl\")\ninclude(\"pad_b.jl\")\n"
+const SINK_PASSED_SPINE = "include(\"low.jl\")\ninclude(\"wrap.jl\")\n"
 const SINK_PASSED = load_package("SinkPassed", SINK_PASSED_SPINE, [
     "low.jl" => "helper(x::Int) = x\n",
     "wrap.jl" => "wrap(xs::Vector{Int}) = map(x -> helper(x), xs)\n",
-    "pad_a.jl" => "pad_a(x::Int) = x\n",
-    "pad_b.jl" => "pad_b(x::Int) = x\n",
 ])
 
-const SINK_PLACED_SPINE = "include(\"low.jl\")\ninclude(\"home.jl\")\ninclude(\"away.jl\")\ninclude(\"pad_a.jl\")\ninclude(\"pad_b.jl\")\n"
+const SINK_PLACED_SPINE = "include(\"low.jl\")\ninclude(\"home.jl\")\ninclude(\"away.jl\")\n"
 const SINK_PLACED = load_package("SinkPlaced", SINK_PLACED_SPINE, [
-    "low.jl" => "leaf(x::Int) = x\nleaf(x::String) = x\n",
-    "home.jl" => "place(x::Int) = leaf(x)\nuses(x::Int) = place(x)\n",
+    "low.jl" => "root(x::Int) = x\nleaf(x::String) = x\n",
+    "home.jl" => "place(x::Int) = root(x)\nuses(x::Int) = place(x)\n",
     "away.jl" => "place(x::String) = leaf(x)\n",
-    "pad_a.jl" => "pad_a(x::Int) = x\n",
-    "pad_b.jl" => "pad_b(x::Int) = x\n",
 ])
 
 @testset "method grain: two methods in two files keep their own callee files" begin
@@ -61,7 +57,7 @@ const SINK_PLACED = load_package("SinkPlaced", SINK_PLACED_SPINE, [
     @test left.kind === :file_sinkable
 end
 
-@testset "method grain: a callee file most files reach is shared vocabulary" begin
+@testset "method grain: a callee two other files call is shared vocabulary" begin
     named = sink_findings(SINK_HUB)
     @test isempty(named)
     entries = ((SINK_HUB.pkg.from_a, Tuple{Int}), (SINK_HUB.pkg.from_b, Tuple{Int}))

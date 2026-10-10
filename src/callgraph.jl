@@ -3,6 +3,8 @@
 struct CallGraph
     mod::Symbol
     funcs::Vector{Symbol}               # relocatable defs: functions, never types
+    types::Set{Symbol}                  # defs that are types: vocabulary a caller speaks, never a reason to move it
+    shared::Set{Symbol}                 # defs two or more other files reference: a caller of one says nothing of its place
     files::Dict{Symbol,String}          # def -> its file (repo-relative)
     calls::Dict{Symbol,Set{Symbol}}     # def -> the module's own defs it references
     refs::Dict{Symbol,Set{Symbol}}      # def -> every name it references; sinkable resolves these by reflection
@@ -46,5 +48,16 @@ function build_call_graph(index, mod::Symbol)
     end
     calls = Dict(n => Set(c for c in refs[n] if c in known && c != n) for n in known)
     funcs = [n for n in known if !(n in types)]
-    CallGraph(mod, funcs, files, calls, refs, rank, site_refs)
+    shared = shared_defs(files, site_refs)
+    CallGraph(mod, funcs, types, shared, files, calls, refs, rank, site_refs)
+end
+
+function shared_defs(files, site_refs)
+    users = Dict{Symbol,Set{String}}()
+    for ((_, file), used) in site_refs, callee in used
+        haskey(files, callee) || continue
+        files[callee] == file && continue
+        push!(get!(Set{String}, users, callee), file)
+    end
+    Set(name for (name, places) in users if length(places) > 1)
 end

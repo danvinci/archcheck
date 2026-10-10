@@ -51,18 +51,6 @@ function check_tuple_returns(index)
     findings
 end
 
-# How many module files reference each file at all.
-function file_reach(adj)
-    reach = Dict{String,Int}()
-    for pair in adj
-        targets = pair.second
-        for target in targets
-            reach[target] = get(reach, target, 0) + 1
-        end
-    end
-    reach
-end
-
 # Defs in a file that reference a name: (name, the file of the reference) -> count.
 function caller_counts(cg)
     callers = Dict{Tuple{Symbol,String},Int}()
@@ -76,53 +64,41 @@ function caller_counts(cg)
     callers
 end
 
-# A callee file more than half the module's files reach is shared vocabulary.
-function is_shared_vocabulary(reach, target, nfiles)
-    reached = get(reach, target, 0)
-    2 * reached > nfiles
-end
-
-function sink_finding(cg, home, name, line, target, reach, nfiles, athome)
-    reached = get(reach, target, 0)
-    using_it = "$reached/$nfiles"
+function sink_finding(cg, home, name, line, target, athome)
     evidence = [:callees_in => basename(target),
-                :files_using_it => using_it,
                 :callers_in_own_file => string(athome)]
     Finding(cg.mod, :file_sinkable, home, string(name), line,
             "every callee lives in one lower-ranked file", evidence)
 end
 
-function sink_verdict(cg, home, name, line, targets, reach, nfiles, callers)
+function sink_verdict(cg, home, name, line, targets, callers)
     length(targets) == 1 || return nothing
     target = only(targets)
     target == home && return nothing
     is_downrank(cg.rank, home, target) || return nothing
-    is_shared_vocabulary(reach, target, nfiles) && return nothing
     athome = get(callers, (name, home), 0)
     athome > 0 && return nothing
-    sink_finding(cg, home, name, line, target, reach, nfiles, athome)
+    sink_finding(cg, home, name, line, target, athome)
 end
 
-# file-sinkable: every intra-module callee lives in one lower-ranked file. The rank condition keeps this
-# disjoint from file-backedge, which owns the up-rank direction.
-function check_file_sinkable(cg::CallGraph, sites)
-    adj = file_adjacency(cg)
-    homes = unique(values(cg.files))
-    nfiles = length(homes)
-    reach = file_reach(adj)
+# file-sinkable: every intra-module function a def calls lives in one lower-ranked file. The vocabulary, the module's
+# types and the names the package exports or marks public, is shared by contract and places nothing. The rank
+# condition keeps this disjoint from file-backedge, which owns the up-rank direction.
+function check_file_sinkable(cg::CallGraph, sites, vocabulary)
     callers = caller_counts(cg)
     findings = Finding[]
     for name in cg.funcs
         callees = cg.calls[name]
         targets = String[]
         for callee in callees
+            callee in vocabulary && continue
             push!(targets, cg.files[callee])
         end
         unique!(targets)
         home = cg.files[name]
         located = site_of(sites, cg.mod, name, (home, 0))
         line = located[2]
-        finding = sink_verdict(cg, home, name, line, targets, reach, nfiles, callers)
+        finding = sink_verdict(cg, home, name, line, targets, callers)
         isnothing(finding) || push!(findings, finding)
     end
     findings
@@ -152,41 +128,49 @@ function covered_names(judged)
     names
 end
 
-# A callee with no top-level name is a closure. Its body's callee files belong to the caller.
-function add_callee_target!(targets, cg, caller_name, callee, methods, repo, seen)
+# A closure's body callee files belong to the caller. A method on a function the module does not own, such as
+# `Base.iterate`, has no file here and places nothing.
+function add_callee_target!(targets, cg, caller_name, callee, walk)
     if !haskey(cg.files, callee.name)
-        add_body_targets!(targets, cg, caller_name, callee, methods, repo, seen)
+        is_closure = startswith(string(callee.name), "#")
+        is_closure && add_body_targets!(targets, cg, caller_name, callee, walk)
         return
     end
-    located = method_site(callee, repo)
+    callee.name in walk.vocabulary && return
+    located = method_site(callee, walk.repo)
     path = located[1]
     haskey(cg.rank, path) || return
     callee.name === caller_name && return
     push!(targets, path)
 end
 
-function add_body_targets!(targets, cg, caller_name, method, methods, repo, seen)
-    method in seen && return
-    push!(seen, method)
-    callees = get(methods.edges, method, nothing)
+function add_body_targets!(targets, cg, caller_name, method, walk)
+    method in walk.seen && return
+    push!(walk.seen, method)
+    callees = get(walk.methods.edges, method, nothing)
     isnothing(callees) && return
     for callee in callees
-        add_callee_target!(targets, cg, caller_name, callee, methods, repo, seen)
+        add_callee_target!(targets, cg, caller_name, callee, walk)
     end
 end
 
-function add_method_targets!(targets, cg, method, methods, repo)
-    caller_name = method.name
-    seen = Set{Method}()
-    add_body_targets!(targets, cg, caller_name, method, methods, repo, seen)
+# What one method's target walk reads: the graph, the repository its sites are relative to, the vocabulary that
+# places nothing, and the methods already walked.
+struct TargetWalk
+    methods::MethodGraph        # calls between methods
+    repo::String                # root the method sites are relative to
+    vocabulary::Set{Symbol}     # names a call to which places nothing
+    seen::Set{Method}           # methods this walk has expanded
 end
 
-function method_findings(cg, methods, judged, repo)
-    adj = file_adjacency(cg)
-    home_files = collect(values(cg.files))
-    distinct = unique(home_files)
-    nfiles = length(distinct)
-    reach = file_reach(adj)
+function add_method_targets!(targets, cg, method, methods, repo, vocabulary)
+    caller_name = method.name
+    seen = Set{Method}()
+    walk = TargetWalk(methods, repo, vocabulary, seen)
+    add_body_targets!(targets, cg, caller_name, method, walk)
+end
+
+function method_findings(cg, methods, judged, repo, vocabulary)
     callers = caller_counts(cg)
     findings = Finding[]
     for placed in judged
@@ -194,8 +178,8 @@ function method_findings(cg, methods, judged, repo)
         home = placed[2]
         line = placed[3]
         targets = Set{String}()
-        add_method_targets!(targets, cg, caller, methods, repo)
-        finding = sink_verdict(cg, home, caller.name, line, targets, reach, nfiles, callers)
+        add_method_targets!(targets, cg, caller, methods, repo, vocabulary)
+        finding = sink_verdict(cg, home, caller.name, line, targets, callers)
         isnothing(finding) || push!(findings, finding)
     end
     findings
@@ -203,10 +187,10 @@ end
 
 # With a method graph, each method is judged on the methods its calls can land on.
 # A function with no method in the graph keeps the name-level verdict.
-function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, repo)
+function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, repo, vocabulary)
     judged = judged_methods(cg, methods, repo)
-    named = check_file_sinkable(cg, sites)
-    per_method = method_findings(cg, methods, judged, repo)
+    named = check_file_sinkable(cg, sites, vocabulary)
+    per_method = method_findings(cg, methods, judged, repo, vocabulary)
     covered = covered_names(judged)
     kept = Finding[]
     for finding in named
@@ -218,7 +202,7 @@ function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, repo)
     kept
 end
 
-check_file_sinkable(cg::CallGraph, sites, ::Nothing, repo) = check_file_sinkable(cg, sites)
+check_file_sinkable(cg::CallGraph, sites, ::Nothing, repo, vocabulary) = check_file_sinkable(cg, sites, vocabulary)
 
 # extract-candidate: the density view of sinkable - a file holding several such defs.
 const EXTRACT_DEFS_MIN = 3
