@@ -2,9 +2,11 @@
 
 const SECOND_DIGITS = 6
 
-"""Configured through `gate(...; checks)` beside a workload and probes. The same arguments of one probed function were evaluated again."""
+"""Configured through `gate(...; checks)` beside a workload and probes. Within one call of a probed function, a
+probed function was evaluated again on the same arguments."""
 struct Rebuilds <: Check end
-"""Configured through `gate(...; checks)` beside a workload and probes. Two probed functions returned one value."""
+"""Configured through `gate(...; checks)` beside a workload and probes. Within one call of a probed function, two
+probed functions each produced one value; a function that returns one of its own arguments produced none."""
 struct TwoNames <: Check end
 """Configured through `gate(...; checks)` beside a workload and probes. A wait finished and a later call left the result unread."""
 struct Waits <: Check end
@@ -57,10 +59,12 @@ function elapsed_s(record)
     record.stop_s - record.start_s
 end
 
-function is_plain_call(record)
+# A call is judged within one invocation of its caller. A call at the workload's root is the workload's own choice,
+# as a test suite's repeated call is.
+function is_judged_call(record)
     record.is_fed && return false
     record.is_ambient && return false
-    true
+    record.caller_invocation != ROOT_INVOCATION.id
 end
 
 function call_encloses(outer, inner)
@@ -83,22 +87,22 @@ function enclosed_by(records, slot, others)
     false
 end
 
-function plain_ordered(records)
+function judged_ordered(records)
     kept = ProbeRecord[]
     ordered = sort(records; by = record -> record.start_s)
     for record in ordered
-        is_plain_call(record) || continue
+        is_judged_call(record) || continue
         push!(kept, record)
     end
     kept
 end
 
 function repeat_slots(records)
-    seen = Dict{Tuple{Symbol,UInt},Int}()
+    seen = Dict{Tuple{UInt,Symbol,UInt},Int}()
     slots = Int[]
     for slot in eachindex(records)
         record = records[slot]
-        key = (record.name, record.arguments)
+        key = (record.caller_invocation, record.name, record.arguments)
         if haskey(seen, key)
             push!(slots, slot)
         else
@@ -115,13 +119,8 @@ function repeat_key(record)
 end
 
 function group_repeats(records, slots)
-    kept = ProbeRecord[]
-    for slot in slots
-        enclosed_by(records, slot, slots) && continue
-        record = records[slot]
-        push!(kept, record)
-    end
-    group_by(kept, RepeatKey, repeat_key)
+    repeated = records[slots]
+    group_by(repeated, RepeatKey, repeat_key)
 end
 
 function total_seconds(records)
@@ -146,12 +145,12 @@ function rebuild_finding(index, key, records)
         :repeats => repeat_count,
         :seconds => seconds,
     ]
-    detail = "the same arguments were evaluated again"
+    detail = "the same arguments were evaluated again within one call of the caller"
     Finding(mod, :rebuild, key.file, function_name, key.line, detail, evidence)
 end
 
 function rebuild_findings(index, records)
-    kept = plain_ordered(records)
+    kept = judged_ordered(records)
     slots = repeat_slots(kept)
     grouped = group_repeats(kept, slots)
     found = Finding[]
@@ -182,28 +181,19 @@ function joined_names(names)
     join(labels, " ")
 end
 
-function outermost_records(records)
-    kept = ProbeRecord[]
-    for slot in eachindex(records)
-        covered = eachindex(records)
-        enclosed_by(records, slot, covered) && continue
-        record = records[slot]
-        push!(kept, record)
-    end
-    kept
-end
-
+# Two calls in one invocation of their caller hand it one value.
 function result_key(record)
-    record.result
+    (record.caller_invocation, record.result)
 end
 
 function result_groups(records)
     kept = ProbeRecord[]
     for record in records
         record.result_id == UInt(0) && continue
+        record.is_argument_returned && continue
         push!(kept, record)
     end
-    group_by(kept, UInt, result_key)
+    group_by(kept, Tuple{UInt,UInt}, result_key)
 end
 
 function two_name_finding(index, record, functions, values)
@@ -215,21 +205,20 @@ function two_name_finding(index, record, functions, values)
         :functions => functions,
         :values => values,
     ]
-    detail = "two functions returned one value"
+    detail = "two functions produced one value within one call of the caller"
     Finding(mod, :two_names, file, symbol, line, detail, evidence)
 end
 
 function two_name_findings(index, records)
-    kept = plain_ordered(records)
+    kept = judged_ordered(records)
     grouped = result_groups(kept)
     found = Finding[]
     for group in values(grouped)
-        outer = outermost_records(group)
-        names = distinct_names(outer)
+        names = distinct_names(group)
         length(names) < 2 && continue
         functions = joined_names(names)
-        values_text = string(length(outer))
-        for record in outer
+        values_text = string(length(group))
+        for record in group
             finding = two_name_finding(index, record, functions, values_text)
             push!(found, finding)
         end

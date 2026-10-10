@@ -270,7 +270,8 @@ function keyword_source(method::Method, saved::Expr, probed::Expr, home::Module)
     slots = slot_names(probed_signature)
     call = body_signature(body, target, slots)
     copied_call = deepcopy(call)
-    copied_inner = deepcopy(inner)
+    saved_signature = saved.args[1]
+    copied_inner = unpacked_body(saved_signature, inner)
     original = Expr(:function, copied_call, copied_inner)
     probed_inner = probed.args[2]
     replacement = Expr(:function, call, probed_inner)

@@ -43,8 +43,10 @@ function exhibit_entries()
     ((Exhibits.exercise, Tuple{}),)
 end
 
+# `exercise` is the call within which the probed calls' repeats are judged.
 function exhibit_probes()
     watched = (
+        Exhibits.Shape.exercise,
         Exhibits.Shape.make_span,
         Exhibits.Shape.left_name,
         Exhibits.Shape.right_name,
@@ -200,10 +202,10 @@ function workload_checks()
     (UnreachedMethods(), Rebuilds(), TwoNames(), Waits())
 end
 
-# The derivations several readers share, each evaluated once per piece of code. Named by path: the tests reach
-# only public names.
+# The derivations several readers share, each evaluated once per piece of code within one gate run, the call that
+# judges their repeats. Named by path: the tests reach only public names.
 function self_probes()
-    producers = (:parse_file, :scan_tree, :method_bodies, :load_events)
+    producers = (:gate, :parse_file, :scan_tree, :method_bodies, :load_events)
     Probes(functions = producers, slow_s = 0.0)
 end
 

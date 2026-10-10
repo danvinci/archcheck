@@ -6,6 +6,7 @@ struct ProbeRecord
     name::Symbol                 # the probed function
     site::Tuple{String,Int}      # its method's file, repo-relative, and line
     caller::Symbol               # the nearest probed function open on the task; Symbol("") at a task's root
+    caller_invocation::UInt      # that caller's call, numbered as `Invocation` says; 0 at a task's root
     enclosing::Vector{Symbol}    # every function open on the task when the call began, outermost first
     task::UInt                   # objectid of the task that ran the call
     start_s::Float64             # time() at entry (s)
@@ -16,6 +17,7 @@ struct ProbeRecord
     reads::Vector{UInt}          # objectids of the non-bits objects the arguments reach within three container levels
     is_fed::Bool                 # an argument is a Channel: workers fed from one share their arguments by design
     is_ambient::Bool             # this call is a non-probed function, or one encloses it
+    is_argument_returned::Bool   # the non-bits result is one of the call's arguments, the same object
 end
 
 """One wait a probed method made on a task or another waitable value. Identities are `objectid`s, so each matches
@@ -39,12 +41,22 @@ end
 
 const ROOT_CALLER = Symbol("")
 
+"""One call of a probed function. Each call takes its session's next number on entry, so each number of a session
+names one call, on one task or many, recursive or not; number 0 is a root, the call of no probed function."""
+struct Invocation
+    name::Symbol   # the function called; `ROOT_CALLER` at a root
+    id::UInt       # the call's number in its session
+end
+
+const ROOT_INVOCATION = Invocation(ROOT_CALLER, UInt(0))
+
 struct OpenFrame{A<:Tuple}
     name::Symbol                 # function running
     file::String                 # repo-relative path
     line::Int                    # source line
     started::Float64             # entry time (s)
-    caller::Symbol               # nearest recorded caller at entry
+    invocation::UInt             # this call's number in its session
+    caller::Invocation           # nearest probed call open at entry, or the one that spawned the task
     enclosing::Vector{Symbol}    # calls already open, outermost first
     arguments::A                 # the call's arguments, hashed when it leaves
     is_probed::Bool                    # true when this call was asked for
@@ -59,16 +71,25 @@ mutable struct ProbeSession
     records::Vector{ProbeRecord}    # calls that met the duration
     waits::Vector{WaitRecord}       # waits logged while armed
     lock::ReentrantLock             # guards the record list and the wait list
-    parent::Base.ScopedValues.ScopedValue{Symbol}   # the probed call open where a task was spawned
+    parent::Base.ScopedValues.ScopedValue{Invocation}   # the probed call open where a task was spawned
+    @atomic calls::UInt             # the number the latest call took
 end
 
 function ProbeSession(slow_s::Float64)
-    parent = Base.ScopedValues.ScopedValue{Symbol}(ROOT_CALLER)
-    ProbeSession(slow_s, ProbeRecord[], WaitRecord[], ReentrantLock(), parent)
+    parent = Base.ScopedValues.ScopedValue{Invocation}(ROOT_INVOCATION)
+    ProbeSession(slow_s, ProbeRecord[], WaitRecord[], ReentrantLock(), parent, ROOT_INVOCATION.id)
 end
 
 is_channel(::Channel) = true
 is_channel(::Any) = false
+
+function is_argument_result(result, arguments)
+    isbits(result) && return false
+    for argument in arguments
+        argument === result && return true
+    end
+    false
+end
 
 function arguments_fed(arguments)
     for argument in arguments
@@ -131,13 +152,8 @@ end
 
 function caller_of(session::ProbeSession, frames)
     frame = nearest_probed(frames)
-    if !isnothing(frame)
-        name = frame.name
-        if name !== ROOT_CALLER
-            return name
-        end
-    end
-    session.parent[]
+    isnothing(frame) && return session.parent[]
+    Invocation(frame.name, frame.invocation)
 end
 
 function probed_frame(session::ProbeSession)
@@ -163,17 +179,34 @@ function unrecorded(take, session::ProbeSession)
     task_local_storage(take, marker, true)
 end
 
+# A declared key runs under the recording mark, as the hashes do: a probed call it makes belongs to taking a record.
+function declared_key_hash(compute, session::ProbeSession, key_name::String, producer_name::String)
+    is_recording(session) && return nothing
+    try
+        unrecorded(session) do
+            value = compute()
+            hash(value)
+        end
+    catch cause
+        shown = sprint(showerror, cause)
+        message = "key " * key_name * " of producer " * producer_name * " failed: " * shown
+        throw(ArgumentError(message))
+    end
+end
+
+# Returns this call's invocation, which a task the call spawns takes as its parent.
 function probe_enter(session::ProbeSession, name::Symbol, file::String, line::Int, arguments::Tuple,
         key_hash::Union{Nothing,UInt}, is_probed::Bool)
-    is_recording(session) && return nothing
+    is_recording(session) && return session.parent[]
     frames = opened_frames(session)
     names = ancestor_names(frames)
     caller = caller_of(session, frames)
     covered = ambient_call(frames, is_probed)
+    number = @atomic session.calls += 1
     started = time()
-    entered = OpenFrame(name, file, line, started, caller, names, arguments, is_probed, covered, key_hash)
+    entered = OpenFrame(name, file, line, started, number, caller, names, arguments, is_probed, covered, key_hash)
     push!(frames, entered)
-    nothing
+    Invocation(name, number)
 end
 
 function make_record(frame::OpenFrame, result, stopped::Float64)
@@ -190,9 +223,11 @@ function make_record(frame::OpenFrame, result, stopped::Float64)
     task_id = objectid(current_task())
     site = (frame.file, frame.line)
     names = copy(frame.enclosing)
-    ProbeRecord(frame.name, site, frame.caller, names, task_id,
+    caller = frame.caller
+    returned = is_argument_result(result, arguments)
+    ProbeRecord(frame.name, site, caller.name, caller.id, names, task_id,
                 frame.started, stopped, argument_hash, result_hash, identity, reached, fed,
-                frame.is_ambient)
+                frame.is_ambient, returned)
 end
 
 function push_record(session::ProbeSession, record::ProbeRecord)

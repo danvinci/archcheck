@@ -24,8 +24,15 @@ const KEYED_HANDLE = load_package("KeyedHandle", """
         xs
     end
 
+    function build_pair(left::Handle, right::Handle, scale::Float64)
+        build(left; scale)
+        build(right; scale)
+        nothing
+    end
+
     function geometry_key(handle::Handle; scale::Float64 = 1.0)
-        (handle.width * scale, handle.height)
+        width = other(handle.width * scale)
+        (width, handle.height)
     end
 
     function separating_key(handle::Handle; scale::Float64 = 1.0)
@@ -87,14 +94,14 @@ end
     @test plain_built[1].arguments != plain_built[2].arguments
 end
 
-@testset "a key over the geometry numbers fires, and a different keyword stays quiet" begin
+@testset "a key over the geometry numbers fires, a different keyword stays quiet, and the key's own calls leave no record" begin
     mod = KEYED_HANDLE.pkg
     handles = handle_pair(mod)
     declared = (Derived(mod.build; key = mod.geometry_key),)
-    probes = Probes(; functions = (mod.other,), slow_s = 0.0)
+    probes = Probes(; functions = (mod.other, mod.build_pair), slow_s = 0.0)
     mixed_calls = function ()
-        call_builds(mod, handles, SCALE_MATCHED)
-        call_builds(mod, handles, SCALE_OTHER)
+        mod.build_pair(handles.left, handles.right, SCALE_MATCHED)
+        mod.build_pair(handles.left, handles.right, SCALE_OTHER)
         mod.other(OTHER_SAMPLE)
         mod.other([1, 2, 3])
     end
@@ -111,11 +118,8 @@ end
     others = records_named(fired_run.observed.records, :other)
     @test length(others) == 2
     @test others[1].arguments == others[2].arguments
-    rows = evidence_rows(fired_run.findings, :function, :repeats)
-    @test rows == [
-        (:rebuild, "build", "build", "2"),
-        (:rebuild, "other", "other", "1"),
-    ]
+    rows = evidence_rows(fired_run.findings, :function, :caller, :repeats)
+    @test rows == [(:rebuild, "build", "build", "build_pair", "2")]
 end
 
 @testset "a keyed producer the workload ran is reached, though no probe lists it" begin

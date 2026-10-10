@@ -62,7 +62,7 @@ ArchCheck.gate(MyPackage;
     probes = Probes(functions = (MyPackage.solve, MyPackage.load)))
 ```
 
-`Rebuilds` reports a function evaluated again on equal arguments, `TwoNames` two functions returning one value, `Waits` a waited result nobody reads, and `UnreachedMethods` the methods the run never compiled.
+`Rebuilds` reports a function evaluated again on equal arguments, and `TwoNames` two functions producing one value (a function returning its own argument produces none), each within one call of a probed caller; calls the workload makes itself are its own choice and stay unjudged. `Waits` reports a waited result nobody reads, and `UnreachedMethods` the methods the run never compiled.
 
 ## Writing a check
 

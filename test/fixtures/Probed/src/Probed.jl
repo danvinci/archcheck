@@ -54,6 +54,14 @@ function echo(value)
     value
 end
 
+function call_both(f, g, x, y)
+    (f(x), g(y))
+end
+
+function pair_sum((a, b))
+    a + b
+end
+
 struct Sealed
     value::Int              # the integer the constructor stores
     Sealed(value::Int) = new(value)

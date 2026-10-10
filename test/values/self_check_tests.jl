@@ -27,16 +27,19 @@ end
     end
 end
 
-@testset "self-check: the self-gate's probes report a second parse of the same files" begin
-    parse_twice = function ()
-        Context(Nested)
-        Context(Nested)
+@testset "self-check: the self-gate's probes judge each parse within its gate run, and a second run is no repeat" begin
+    gate_twice = function ()
+        gate_findings(Nested; checks = ())
+        gate_findings(Nested; checks = ())
     end
     checks = (Rebuilds(),)
     probes = self_probes()
-    found = gate_findings(ArchCheck; checks, probes, workload = parse_twice)
-    rebuilt = Set(finding.symbol for finding in found)
-    @test "parse_file" in rebuilt
+    seen = observed_gate(ArchCheck; checks, probes, workload = gate_twice)
+    parses = [record for record in seen.observed.records if record.name === :parse_file]
+    @test !isempty(parses)
+    callers = Set(record.caller for record in parses)
+    @test callers == Set([:gate])
+    @test isempty(seen.findings)
 end
 
 @testset "self-check: every exported check is run or named inapplicable" begin

@@ -178,6 +178,19 @@ const NEST_INNER = load_package("NestInner", """
     @test matched.arguments == repeated.arguments
     @test matched.result == repeated.result
     @test differed.arguments != matched.arguments
+
+    sums = Ref{Any}(nothing)
+    destructured = function ()
+        low = Probed.pair_sum((1, 2))
+        high = Probed.pair_sum((3, 4))
+        sums[] = (low, high)
+    end
+    pair_probes = Probes(; functions = (Probed.pair_sum,), slow_s = 0.0)
+    pair_seen = observed_gate(Probed; workload = destructured, probes = pair_probes)
+    @test sums[] == (3, 7)
+    pairs = pair_seen.observed.records
+    @test length(pairs) == 2
+    @test pairs[1].arguments != pairs[2].arguments
 end
 
 @testset "an armed method keeps its result and the restored method keeps its body" begin
@@ -274,8 +287,10 @@ end
     inner_record = only(inner)
     outer_record = only(outer)
     @test inner_record.caller === :outer
+    @test inner_record.caller_invocation != 0
     @test inner_record.enclosing == [:outer]
     @test outer_record.caller === Symbol("")
+    @test outer_record.caller_invocation == 0
     @test isempty(outer_record.enclosing)
 end
 
@@ -363,6 +378,7 @@ end
     children = [record for record in records if record.name === :child]
     child_record = only(children)
     @test child_record.caller === :parent
+    @test child_record.caller_invocation != 0
     restored = Base.invokelatest(pkg.parent, 3)
     @test restored == 4
 end

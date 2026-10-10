@@ -125,32 +125,42 @@ function collect_call!(positional_names, positional_forms, keyword_names, keywor
 end
 
 # An argument the source leaves unnamed (`::Type{T}`) or names `_` takes a fresh name, so the probe hashes it:
-# two calls that differ only in such an argument are distinct calls. A destructured tuple keeps its form.
+# two calls that differ only in such an argument are distinct calls.
 function is_unreadable(name::Symbol)
     text = string(name)
     all(==('_'), text)
 end
 
-function named_argument(name::Symbol)
+# A destructured argument `(a, b)` takes the name of its slot and is unpacked as the method's first statement, the
+# way lowering unpacks it; the name is fixed by the slot, so a second naming of the same signature agrees.
+destructured_name(slot::Int) = Symbol("#destructured#", slot)
+
+function named_argument(name::Symbol, slot::Int, unpacking)
     is_unreadable(name) || return name
     gensym(:argument)
 end
 
-named_argument(argument::Any) = argument
+named_argument(argument::Any, slot::Int, unpacking) = argument
 
-function named_argument(argument::Expr)
+function named_argument(argument::Expr, slot::Int, unpacking)
     head = argument.head
+    if head === :tuple
+        name = destructured_name(slot)
+        assignment = Expr(:(=), argument, name)
+        push!(unpacking, assignment)
+        return name
+    end
     if head === :(::) && length(argument.args) == 1
         fresh = gensym(:argument)
         return Expr(:(::), fresh, argument.args[1])
     end
     if head === :(::) || head === :kw || head === :...
-        inner = named_argument(argument.args[1])
+        inner = named_argument(argument.args[1], slot, unpacking)
         rest = argument.args[2:end]
         return Expr(head, inner, rest...)
     end
     if head === :macrocall
-        inner = named_argument(last(argument.args))
+        inner = named_argument(last(argument.args), slot, unpacking)
         leading = argument.args[1:(end - 1)]
         return Expr(:macrocall, leading..., inner)
     end
@@ -158,30 +168,41 @@ function named_argument(argument::Expr)
 end
 
 # A callable written `(::Foo)(x)` is an argument too; a function name is none.
-named_callable(head::Expr) = head.head === :(::) ? named_argument(head) : head
-named_callable(head::Any) = head
+named_callable(head::Expr, unpacking) = head.head === :(::) ? named_argument(head, 1, unpacking) : head
+named_callable(head::Any, unpacking) = head
 
-function named_call(call::Expr)
-    callable = named_callable(call.args[1])
+function named_call(call::Expr, unpacking)
+    callable = named_callable(call.args[1], unpacking)
     args = Any[callable]
-    for argument in call.args[2:end]
-        named = named_argument(argument)
+    for slot in 2:length(call.args)
+        argument = call.args[slot]
+        named = named_argument(argument, slot, unpacking)
         push!(args, named)
     end
     Expr(:call, args...)
 end
 
-named_signature(node::Any) = node
+"""`signature` with every argument named, and the statements that unpack its destructured arguments pushed to
+`unpacking`."""
+named_signature(node::Any, unpacking) = node
 
-function named_signature(node::Expr)
+function named_signature(node::Expr, unpacking)
     if node.head === :where || node.head === :(::)
         isempty(node.args) && return node
-        inner = named_signature(node.args[1])
+        inner = named_signature(node.args[1], unpacking)
         rest = node.args[2:end]
         return Expr(node.head, inner, rest...)
     end
     node.head === :call || return node
-    named_call(node)
+    named_call(node, unpacking)
+end
+
+"""`body` after the statements that unpack the destructured arguments of `signature`."""
+function unpacked_body(signature, body)
+    unpacking = Any[]
+    copied = deepcopy(signature)
+    named_signature(copied, unpacking)
+    Expr(:block, unpacking..., body)
 end
 
 # A type as source under a method's where-clause: a closed type is spliced as itself, and a type holding the
@@ -402,26 +423,19 @@ rewrite_head(::Val{:.}, node::Expr, site) = rewrite_dot(node, site)
 rewrite_head(::Val{:call}, node::Expr, site) = rewrite_call(node, site)
 rewrite_head(::Val, node::Expr, site) = rewrite_children(node, site)
 
-function key_hash_expr(key, positional, keywords, producer::Symbol)
+function key_hash_expr(session::ProbeSession, key, positional, keywords, producer::Symbol)
     isnothing(key) && return nothing
     key_name = string(nameof(key))
     producer_name = string(producer)
-    quote
-        try
-            value = $key($positional...; $keywords...)
-            hash(value)
-        catch cause
-            shown = sprint(showerror, cause)
-            message = "key " * $key_name * " of producer " * $producer_name * " failed: " * shown
-            throw(ArgumentError(message))
-        end
-    end
+    hashed = GlobalRef(@__MODULE__, :declared_key_hash)
+    compute = :(() -> $key($positional...; $keywords...))
+    :($hashed($compute, $session, $key_name, $producer_name))
 end
 
-function scoped_run(is_probed::Bool, parent_pair, scope, parent, quoted_name, rewritten)
+function scoped_run(is_probed::Bool, parent_pair, scope, parent, invocation, rewritten)
     if is_probed
         return quote
-            $parent_pair = $parent => $quoted_name
+            $parent_pair = $parent => $invocation
             $scope($parent_pair) do
                 (() -> $rewritten)()
             end
@@ -447,8 +461,9 @@ function probe_body(site::ProbeSite, shape::ArgumentShape, body)
     session = site.session
     name = site.name
     result = gensym(:probe_result)
+    invocation = gensym(:invocation)
     arguments = shape.arguments
-    hashed = key_hash_expr(site.key, shape.positional, shape.keywords, name)
+    hashed = key_hash_expr(session, site.key, shape.positional, shape.keywords, name)
     rewritten = rewrite_waits(body, site)
     enter = GlobalRef(@__MODULE__, :probe_enter)
     leave = GlobalRef(@__MODULE__, :probe_leave)
@@ -458,9 +473,9 @@ function probe_body(site::ProbeSite, shape::ArgumentShape, body)
     parent = session.parent
     parent_pair = gensym(:parent_pair)
     entered = :($enter($session, $quoted_name, $(site.file), $(site.line), $arguments, $hashed, $(site.is_probed)))
-    run = scoped_run(site.is_probed, parent_pair, scope, parent, quoted_name, rewritten)
+    run = scoped_run(site.is_probed, parent_pair, scope, parent, invocation, rewritten)
     quote
-        $entered
+        $invocation = $entered
         local $result
         try
             $result = $run
@@ -508,9 +523,11 @@ function rewrite_definition(definition::Expr, site::ProbeSite)
     short_form = is_short_method(definition)
     long_form || short_form || return nothing
     copied = deepcopy(definition.args[1])
-    signature = named_signature(copied)
+    unpacking = Any[]
+    signature = named_signature(copied, unpacking)
     shape = argument_shape(signature)
-    body = deepcopy(definition.args[2])
+    written = deepcopy(definition.args[2])
+    body = Expr(:block, unpacking..., written)
     probed = probe_body(site, shape, body)
     Expr(:function, signature, probed)
 end
