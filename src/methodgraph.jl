@@ -57,8 +57,10 @@ function entry_instance(@nospecialize(entry))
 end
 
 function expand_instance!(edges, pending, instance, module_set, values, interp)
-    frame = inference_frame(instance, interp)
-    if is_kwcall_method(instance.def)
+    is_keyword = is_kwcall_method(instance.def)
+    frame = inference_frame(instance, interp; optimize = !is_keyword)
+    isnothing(frame) && return
+    if is_keyword
         body = keyword_body_from(frame)
         isnothing(body) || push!(pending, body)
         return
@@ -66,17 +68,13 @@ function expand_instance!(edges, pending, instance, module_set, values, interp)
     caller = written_method(instance.def)
     get!(edges, caller, Set{Method}())
     record_resolved!(edges, pending, frame, caller, module_set)
-    code = inferred_code(instance, interp)
-    isnothing(code) && return
-    record_dispatched!(edges, pending, code, instance, caller, module_set, values)
+    record_dispatched!(edges, pending, frame.src, instance, caller, module_set, values)
 end
 
-function inference_frame(instance::Core.MethodInstance, interp)
-    result = Core.Compiler.InferenceResult(instance)
-    # `:no` leaves this inference's resolved calls on the frame.
-    frame = Core.Compiler.InferenceState(result, :no, interp)
-    Core.Compiler.typeinf(interp, frame)
-    frame
+# One inference for both readers: the frame keeps its resolved calls, and `optimize` makes `src` the code `code_typed`
+# returns. Nothing when inference fails.
+function inference_frame(instance::Core.MethodInstance, interp; optimize::Bool)
+    Core.Compiler.typeinf_frame(interp, instance, optimize)
 end
 
 function keyword_body_from(frame)
@@ -155,15 +153,6 @@ function package_matches(call, module_set, values)
 end
 
 can_be_value(method::Method, values) = startswith(string(method.name), "#") || method.name in values
-
-function inferred_code(instance::Core.MethodInstance, interp)
-    asts = Base.code_typed_by_type(instance.specTypes; interp)
-    for pair in asts
-        code = pair.first
-        code isa Core.CodeInfo && return code
-    end
-    nothing
-end
 
 called_instance(target::Core.CodeInstance) = target.def
 called_instance(target::Core.MethodInstance) = target

@@ -89,6 +89,22 @@ const OVERLOAD_PAIR = load_package("OverloadPair", """
     f(x::String) = h(x)
     """)
 
+# Every `holds` method matches the wide method's signature, and the more specific ones call `holds` dynamically.
+const SHARED_SIGNATURE = load_package("SharedSignature", """
+    holds(@nospecialize(type), wrapper) = type === wrapper
+    holds(type::Union, wrapper) = holds(type.a, wrapper) || holds(type.b, wrapper)
+    function holds(@nospecialize(type::Type), wrapper)
+        type === wrapper && return true
+        body = Base.unwrap_unionall(type)
+        body isa DataType || return false
+        for param in body.parameters
+            holds(param, wrapper) && return true
+        end
+        false
+    end
+    scan(types::Vector{Any}, wrapper::DataType) = any(t -> holds(t, wrapper), types)
+    """)
+
 const PASSED_HELPER = load_package("PassedHelper", """
     helper(x::Int) = x
     wrap(xs::Vector{Int}) = map(x -> helper(x), xs)
@@ -392,6 +408,19 @@ end
     named_graph = graph_of(PASSED_HELPER, named_entries)
     named = only(methods(pkg.named))
     @test helper in get(named_graph.edges, named, Set{Method}())
+end
+
+@testset "a method whose signature other methods match keeps only its own calls" begin
+    pkg = SHARED_SIGNATURE.pkg
+    entry = (pkg.scan, Tuple{Vector{Any},DataType})
+    entries = (entry,)
+    graph = graph_of(SHARED_SIGNATURE, entries)
+    every_holds = Set(methods(pkg.holds))
+    wide = only(method for method in every_holds if method.sig == Tuple{typeof(pkg.holds),Any,Any})
+    on_union = only(method for method in every_holds if method.sig == Tuple{typeof(pkg.holds),Union,Any})
+    owned = edges_in(graph, pkg)
+    @test get(owned, wide, Set{Method}()) == Set{Method}()
+    @test owned[on_union] == every_holds
 end
 
 @testset "methods of one function stay distinct nodes" begin
