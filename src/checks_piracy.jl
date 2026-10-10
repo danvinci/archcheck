@@ -26,13 +26,6 @@ function is_foreign(@nospecialize(union_type::Union), owns)
     any_member_foreign(members, owns)
 end
 
-function parameters_foreign(datatype, owns)
-    for param in datatype.parameters
-        is_foreign(param, owns) || return false
-    end
-    true
-end
-
 # Type{T} belongs where T does. Any other type is foreign when its module and its parameters are.
 function is_foreign(@nospecialize(datatype::DataType), owns)
     if Base.isType(datatype)
@@ -40,12 +33,12 @@ function is_foreign(@nospecialize(datatype::DataType), owns)
         return is_foreign(held, owns)
     end
     owns(parentmodule(datatype)) && return false
-    parameters_foreign(datatype, owns)
+    all_foreign(datatype.parameters, owns)
 end
 
-function all_members_foreign(members, owns)
-    for member in members
-        is_foreign(member, owns) || return false
+function all_foreign(types, owns)
+    for type in types
+        is_foreign(type, owns) || return false
     end
     true
 end
@@ -73,14 +66,17 @@ function is_extension(mod::Module, repo)
     first(parts) == EXTENSION_DIR
 end
 
+# A module's full name, `fullname(mod)`: the root's name, then each enclosing module's, then its own.
+const ModulePath = Tuple{Vararg{Symbol}}
+
 # The full module names whose functions and subtree types a method's module owns: the package's, or with `strict` its
 # own. An extension adds the root's methods to its own and other packages' types, so it owns both in either mode.
 function owner_scopes(home::Module, root::Module, strict::Bool, repo)
     package_scope = fullname(root)
     own_scope = fullname(home)
-    is_extension(home, repo) && return Tuple{Vararg{Symbol}}[own_scope, package_scope]
-    strict && return Tuple{Vararg{Symbol}}[own_scope]
-    Tuple{Vararg{Symbol}}[package_scope]
+    is_extension(home, repo) && return ModulePath[own_scope, package_scope]
+    strict && return ModulePath[own_scope]
+    ModulePath[package_scope]
 end
 
 # module-piracy: the function is foreign to every owner scope, and every argument type to their subtrees. A keyword
@@ -96,15 +92,9 @@ function check_module_piracy(defined, root::Module; repo, strict::Bool)
         # A Union in the function slot is foreign when every member is foreign.
         members = Base.uniontypes(function_type)
         owns_function = mod -> is_in_any_scope(mod, scopes, strict)
-        all_members_foreign(members, owns_function) || continue
+        all_foreign(members, owns_function) || continue
         owns_argument = mod -> is_in_any_scope(mod, scopes, false)
-        arguments_foreign = true
-        for argument in arguments
-            is_foreign(argument, owns_argument) && continue
-            arguments_foreign = false
-            break
-        end
-        arguments_foreign || continue
+        all_foreign(arguments, owns_argument) || continue
         file, line = method_site(method, repo)
         owner = type_module(function_type)
         if isnothing(owner)
