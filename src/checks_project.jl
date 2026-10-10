@@ -1,7 +1,7 @@
 # Parameterized checks a package configures: who may call a name, which public functions return a
 # sentinel, and where a string-keyed dictionary carries a value with no single layout.
 
-"""Configured through `gate(...; checks)` with the names, the definitions allowed to call them, and directories to skip. A call from outside that list is a finding, and so is a reference in load-time code outside every definition."""
+"""Configured through `gate(...; checks)` with the names, the definitions allowed to reference them, and directories to skip. A reference from any other definition is a finding, and so is one in load-time code outside every definition."""
 struct CallerWhitelist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
     callees::C       # function names a body may reference only from an allowed def
     allowed::A       # (repo-relative path, def name) pairs that may reference them
@@ -212,16 +212,16 @@ function load_time_reads(scan::FileScan, names)
     found
 end
 
-# Load-time code is no definition, so no allowed pair covers it; one finding names the file.
-function load_time_finding(file, loaded)
-    called_names = collect(keys(loaded))
-    ordered = sort!(called_names; by = string)
+# The check judges a reference, a call or a bound value alike. Load-time code is the empty symbol: no definition, so
+# no allowed pair covers it.
+function unlisted_finding(file, symbol, line, referenced)
+    ordered = sort!(collect(referenced); by = string)
     listed = join(ordered, " ")
     prose = join(ordered, ", ")
-    detail = "load-time code references " * prose
-    line = minimum(values(loaded))
-    evidence = [:calls => listed]
-    Finding(file.mod, :unlisted_caller, file.path, "", line, detail, evidence)
+    place = isempty(symbol) ? "load-time code" : symbol
+    detail = place * " references " * prose
+    evidence = [:references => listed]
+    Finding(file.mod, :unlisted_caller, file.path, symbol, line, detail, evidence)
 end
 
 function run(check::CallerWhitelist, ctx)
@@ -235,23 +235,19 @@ function run(check::CallerWhitelist, ctx)
         any(prefix -> is_under(file.path, prefix), check.exempt_dirs) && continue
         written = written_names(file.scan)
         for (def, used) in written
-            called = intersect(used, names)
-            isempty(called) && continue
+            referenced = intersect(used, names)
+            isempty(referenced) && continue
             pair = (file.path, def)
             pair in allowed && continue
-            called_names = collect(called)
-            ordered = sort!(called_names; by = string)
-            listed = join(ordered, " ")
-            prose = join(ordered, ", ")
-            detail = "calls " * prose
             line = Int(get(file.scan.line, def, 0))
-            evidence = [:calls => listed]
-            symbol = string(def)
-            finding = Finding(file.mod, :unlisted_caller, file.path, symbol, line, detail, evidence)
+            finding = unlisted_finding(file, string(def), line, referenced)
             push!(findings, finding)
         end
         loaded = load_time_reads(file.scan, names)
-        isempty(loaded) || push!(findings, load_time_finding(file, loaded))
+        isempty(loaded) && continue
+        first_line = minimum(values(loaded))
+        finding = unlisted_finding(file, "", first_line, keys(loaded))
+        push!(findings, finding)
     end
     findings
 end
