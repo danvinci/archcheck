@@ -29,12 +29,16 @@ struct CloneGroup
     sites::Vector{CloneSite}    # places this subtree text occurs
 end
 
+# Each node's local names along the scopes down from its method body.
+const ChainBounds = IdDict{JS.SyntaxNode,Set{Symbol}}
+
 mutable struct MixState
     primary::UInt64            # running first mix
     secondary::UInt64          # running second mix
     nodes::Int                 # nodes visited so far
     next_local::Int            # count of distinct locals seen so far
     renames::Dict{Symbol,Int}  # local name to its first-appearance number
+    const chained::ChainBounds # local names of every node in the method body, read until a quote
 end
 
 function absorb!(state, token)
@@ -42,9 +46,21 @@ function absorb!(state, token)
     state.secondary = hash(token, state.secondary)
 end
 
-function empty_mix()
+function empty_mix(chained)
     renames = Dict{Symbol,Int}()
-    MixState(zero(UInt64), MIX_SALT, 0, 0, renames)
+    MixState(zero(UInt64), MIX_SALT, 0, 0, renames, chained)
+end
+
+# One scope computation per node of a method body, shared by every subtree digested inside it.
+function chain_bounds!(chained, node, bound)
+    chained[node] = bound
+    children = child_nodes(node)
+    isnothing(children) && return chained
+    for index in eachindex(children)
+        inner = child_locals(node, index, bound)
+        chain_bounds!(chained, children[index], inner)
+    end
+    chained
 end
 
 function local_slot!(state, name)
@@ -99,9 +115,11 @@ function emit_leaf!(state, node, bound, place)
     absorb!(state, value)
 end
 
-# A quote hides the surrounding names. Interpolation reads them.
-function scoped_bound(node, index, bound, child)
+# A quote hides the surrounding names. Interpolation reads them. Outside quotes inside the digested subtree, a child's
+# names are the ones its method body's scopes give it.
+function scoped_bound(state, node, index, bound, child, quoted)
     if JS.kind(node) != K"quote"
+        quoted || return state.chained[child]
         return child_locals(node, index, bound)
     end
     if JS.kind(child) == K"$"
@@ -110,17 +128,18 @@ function scoped_bound(node, index, bound, child)
     Set{Symbol}()
 end
 
-function absorb_children!(state, node, children, bound)
+function absorb_children!(state, node, children, bound, quoted)
+    inside = quoted || JS.kind(node) == K"quote"
     for index in eachindex(children)
         child = children[index]
         place = name_place(node, index)
         absorb!(state, place)
-        inner = scoped_bound(node, index, bound, child)
-        absorb_tree!(state, child, inner, place)
+        inner = scoped_bound(state, node, index, bound, child, quoted)
+        absorb_tree!(state, child, inner, place, inside)
     end
 end
 
-function absorb_tree!(state, node, bound, place)
+function absorb_tree!(state, node, bound, place, quoted)
     state.nodes += 1
     kind = JS.kind(node)
     absorb!(state, kind)
@@ -129,12 +148,13 @@ function absorb_tree!(state, node, bound, place)
         emit_leaf!(state, node, bound, place)
         return
     end
-    absorb_children!(state, node, children, bound)
+    absorb_children!(state, node, children, bound, quoted)
 end
 
-function digest_of(node, bound)
-    state = empty_mix()
-    absorb_tree!(state, node, bound, :value)
+function digest_of(node, chained)
+    state = empty_mix(chained)
+    bound = chained[node]
+    absorb_tree!(state, node, bound, :value, false)
     CloneDigest(state.primary, state.secondary, state.nodes)
 end
 
@@ -158,21 +178,20 @@ function push_site!(grouped, digest, method, node, path)
     push!(get!(Vector{CloneSite}, grouped, digest), site)
 end
 
-function walk_sites!(grouped, counts, node, method, path, min_nodes, bound)
+function walk_sites!(grouped, counts, node, method, path, min_nodes, chained)
     counted = get(counts, node, 0)
     if counted < min_nodes
         return
     end
-    digest = digest_of(node, bound)
+    digest = digest_of(node, chained)
     push_site!(grouped, digest, method, node, path)
     children = child_nodes(node)
     isnothing(children) && return
     for index in eachindex(children)
         child = children[index]
         is_method_form(child) && continue
-        inner = child_locals(node, index, bound)
         child_path = vcat(path, index)
-        walk_sites!(grouped, counts, child, method, child_path, min_nodes, inner)
+        walk_sites!(grouped, counts, child, method, child_path, min_nodes, chained)
     end
 end
 
@@ -275,7 +294,8 @@ function expression_clone_findings(index, min_nodes)
         count_nodes!(counts, file.tree)
         for method in file.bodies
             root_path = Int[]
-            walk_sites!(grouped, counts, method.body, method, root_path, min_nodes, method.bound)
+            chained = chain_bounds!(ChainBounds(), method.body, method.bound)
+            walk_sites!(grouped, counts, method.body, method, root_path, min_nodes, chained)
         end
     end
     kept = keep_groups(grouped)
