@@ -86,6 +86,7 @@ function walk_dotted_def!(scan, node, depth, current)
     children = child_nodes(node)
     member = children[2].val
     member isa Symbol || return true
+    is_module_path(children[1], ()) || return true
     push!(ref_set(scan, current), member)
     true
 end

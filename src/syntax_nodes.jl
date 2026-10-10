@@ -146,6 +146,21 @@ function walk_dot_base!(walk, node)
     true
 end
 
+# Whether a dotted name's qualifier can name a module: a free name, a value spliced into quoted code, a macro's
+# result, or a dotted path rooted at one. Any other qualifier holds a value, so its member is a field read.
+function is_module_path(node, bound)
+    name = node_symbol(node)
+    isnothing(name) || return !(name in bound)
+    kind = JS.kind(node)
+    kind == K"$" && return true
+    kind == K"macrocall" && return true
+    kind == K"." || return false
+    children = child_nodes(node)
+    isnothing(children) && return false
+    length(children) == 2 || return false
+    is_module_path(children[1], bound)
+end
+
 # A value child: the right-hand side of an assignment, otherwise the child itself.
 function value_child(node)
     children = child_nodes(node)

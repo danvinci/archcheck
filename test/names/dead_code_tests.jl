@@ -236,6 +236,46 @@ end
     @test "user" in dead
 end
 
+const FIELD_READS = load_package("FieldReads", """
+include("aa/Aa.jl")
+using .Aa
+include("body.jl")
+""", [
+    "aa/Aa.jl" => "module Aa\npos_qualified() = 1\nend\n",
+    "body.jl" => """
+    argument_owner(x) = x.neg_argument_field
+    neg_argument_field() = 1
+    nested_owner(x) = x.inner.neg_nested_field
+    neg_nested_field() = 1
+    call_owner() = Ref(1).neg_call_field
+    neg_call_field() = 1
+    function loop_owner(items)
+        for item in items
+            item.neg_loop_field
+        end
+    end
+    neg_loop_field() = 1
+    const TOP_VALUE = (; neg_top_field = 1).neg_top_field
+    neg_top_field() = 1
+    qualified_owner() = Aa.pos_qualified()
+    const SELF = @__MODULE__
+    spliced_owner() = :(\$SELF.pos_spliced())
+    pos_spliced() = 1
+    macro_owner() = (@__MODULE__).pos_macro_qualified()
+    pos_macro_qualified() = 1
+    """,
+])
+
+@testset "a field read is not a reference to the function it shares a name with" begin
+    dead = dead_symbols(FIELD_READS)
+    for name in ("neg_argument_field", "neg_nested_field", "neg_call_field", "neg_loop_field", "neg_top_field")
+        @test name in dead
+    end
+    for name in ("pos_qualified", "pos_spliced", "pos_macro_qualified")
+        @test !(name in dead)
+    end
+end
+
 @testset "a local binding is not a call and a real call of another name still counts" begin
     dead = dead_symbols(LOCAL_BINDINGS)
     for name in LOCAL_BINDING_DEAD

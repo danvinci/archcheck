@@ -172,7 +172,9 @@ function scope_dot!(scan, node, scope, on_qualified)
     children = child_nodes(node)
     member = children[2].val
     member isa Symbol || return
-    push!(scan.refs[scope.target], member)
+    if is_module_path(children[1], scope.bound)
+        push!(scan.refs[scope.target], member)
+    end
     isnothing(on_qualified) && return
     line = source_line(node)
     on_qualified(children[1], member, line, scope.bound)
