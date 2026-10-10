@@ -168,7 +168,7 @@ end
 function value_child(node)
     children = child_nodes(node)
     kind = JS.kind(node)
-    if kind == K"=" && !isnothing(children) && length(children) == 2
+    if kind == K"=" && child_count(children) == 2
         return children[2]
     end
     node

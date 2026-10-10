@@ -122,7 +122,7 @@ function iteration_names!(bound, node)
     kind = JS.kind(node)
     children = child_nodes(node)
     is_binding = kind == K"in" || kind == K"="
-    has_target = !isnothing(children) && !isempty(children)
+    has_target = child_count(children) > 0
     if is_binding && has_target
         _argname!(bound, children[1])
         return

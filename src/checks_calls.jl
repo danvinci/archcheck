@@ -176,7 +176,7 @@ function carried_name(flow, argument)
     value isa Symbol && return value
     JS.kind(argument) == K"tuple" || return nothing
     items = child_nodes(argument)
-    (isnothing(items) || length(items) != 1) && return nothing
+    child_count(items) != 1 && return nothing
     element = only(items).val
     element isa Symbol || return nothing
     get(flow.elements, element, nothing)

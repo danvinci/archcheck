@@ -125,7 +125,7 @@ function absorb_tree!(state, node, bound, place)
     kind = JS.kind(node)
     absorb!(state, kind)
     children = child_nodes(node)
-    if isnothing(children) || isempty(children)
+    if child_count(children) == 0
         emit_leaf!(state, node, bound, place)
         return
     end

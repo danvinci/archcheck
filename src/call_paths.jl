@@ -397,7 +397,7 @@ end
 
 function visit_kind!(walk, node, ::WalkOf{:dot}, inside, exits, is_dead)
     children = child_nodes(node)
-    has_pair = !isnothing(children) && length(children) == 2
+    has_pair = child_count(children) == 2
     has_pair && return visit_node!(walk, children[1], inside, exits, is_dead)
     visit_children!(walk, node, inside, exits, is_dead)
 end

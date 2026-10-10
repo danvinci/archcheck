@@ -349,7 +349,7 @@ function absorb_argument!(scan, argument, prefix, noted, valued, on_qualified)
     end
     if JS.kind(argument) == K"="
         children = child_nodes(argument)
-        if !isnothing(children) && length(children) >= 2
+        if child_count(children) >= 2
             walk_scoped!(scan, children[2], valued, on_qualified)
         end
     end
