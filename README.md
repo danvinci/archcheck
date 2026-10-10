@@ -77,4 +77,4 @@ ArchCheck.gate(MyPackage;
 
 ## Writing a check
 
-A check is a `Check` subtype with `ArchCheck.kinds` and `ArchCheck.run` methods, passed through `checks`. `run` reads a `Context`: the one parse of the package (`ctx.index`), its loaded modules, and what the workload did. `ArchCheck.run(check, Context(MyPackage))` runs one check alone.
+A check is a `Check` subtype with `ArchCheck.kinds` and `ArchCheck.run` methods, passed through `checks`. `run` reads a `Context`: the one parse of the package (`ctx.index`), its loaded modules, and what the workload did. `ArchCheck.run(check, Context(MyPackage))` runs one check alone. A `Context`'s fields are ArchCheck's internal records and change between versions.
