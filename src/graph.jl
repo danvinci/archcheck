@@ -179,13 +179,23 @@ function walk_code!(build::IndexBuild, unit::LoadUnit, code, file)
 end
 
 # A directory module's entry opens that module where it is included. A file inside another directory module's
-# directory is that module's to place; any other file joins the including module.
+# directory is that module's to place; any other file joins the including module. An include of an expression or
+# of a file absent on disk is noted where the walk meets it.
 function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
     argument = first(call_args(call))
     spec = static_string(argument)
-    isnothing(spec) && return
+    line = source_line(call)
+    rel = relpath(file, build.repo)
+    if isnothing(spec)
+        push!(build.nonliteral, (unit.owner, rel, line))
+        return
+    end
     joined = joinpath(dirname(file), spec)
     target = normpath(joined)
+    if !isfile(target)
+        push!(build.missing, (unit.owner, rel, spec, line))
+        return
+    end
     if haskey(build.openers, target)
         target in build.visited && return
         key, moddir = build.openers[target]
@@ -197,7 +207,6 @@ function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
         return
     end
     skips_nested(target, unit.nested) && return
-    isfile(target) || return
     key = (unit.owner, target)
     key in build.placed && return
     push!(build.placed, key)
@@ -245,6 +254,7 @@ end
 # A module's rank; empty for the unranked root of a package with directory modules, the prefix its modules extend.
 module_rank(build::IndexBuild, owner::Symbol) = get(build.ranks, owner, Int[])
 
+# The includes of code no load walk reached: an expression, or a file absent on disk.
 function note_includes!(build::IndexBuild, owner::Symbol, path, rel, tree)
     for (arg, line) in include_calls(tree)
         spec = static_string(arg)
@@ -268,7 +278,6 @@ function add_node!(build::IndexBuild, owner::Symbol, path, filerank, iswrapper, 
     scan = scan_tree(code)
     node = FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code)
     push!(build.nodes, node)
-    note_includes!(build, owner, path, rel, code)
 end
 
 # Loaded code in load order. Position 0 is a module's own code: a directory module's entry, or an inline block.
@@ -336,6 +345,8 @@ function add_loose_files!(build::IndexBuild)
             continue
         end
         add_node!(build, owner, full, 0, false, tree)
+        rel = relpath(full, build.repo)
+        note_includes!(build, owner, full, rel, tree)
     end
 end
 
