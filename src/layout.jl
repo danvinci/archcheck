@@ -155,21 +155,6 @@ function loaded_extensions(pkg::Module, repo::AbstractString)
     unique!(found)
 end
 
-# The packages the project lists under [deps]: all the package's code outside its extensions can load.
-function project_dependencies(repo)
-    dependencies = Set{Base.UUID}()
-    project = Base.env_project_file(repo)
-    project isa String || return dependencies
-    parsed = Base.parsed_toml(project)
-    listed = get(parsed, "deps", nothing)
-    isnothing(listed) && return dependencies
-    for uuid in values(listed)
-        text = uuid::String
-        push!(dependencies, Base.UUID(text))
-    end
-    dependencies
-end
-
 # The package's directory modules. A spine that declares none makes the package one module: the root, keyed by
 # its own name, owning src/.
 function package_layout(parses::Parses, spine_path::AbstractString, root::Symbol)

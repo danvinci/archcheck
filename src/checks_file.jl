@@ -93,7 +93,7 @@ end
 # `Base.iterate`, has no file here and places nothing.
 function add_callee_target!(targets, cg, caller_name, callee, walk)
     if !haskey(cg.files, callee.name)
-        is_closure = startswith(string(callee.name), "#")
+        is_closure = is_generated_name(callee.name)
         is_closure && add_body_targets!(targets, cg, caller_name, callee, walk)
         return
     end

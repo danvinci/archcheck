@@ -104,13 +104,12 @@ const MACRO_BUILT = load_package("MacroBuilt", """
     @test_throws ArgumentError gate_findings(pkg; checks, workload = PriorRun(), probes)
     found = gate_findings(pkg; checks, workload = PriorRun(), entries)
     uncalled = only(methods(pkg.uncalled))
-    route = only(methods(pkg.route))
     hit = only(finding for finding in found if finding.symbol == "uncalled")
     @test hit.mod === :LeftUncalled
     @test hit.line == Int(uncalled.line)
     rows = evidence_rows(found, :module, :signature)
-    route_row = (:unreached_method, "route", "LeftUncalled", string(route.sig))
-    uncalled_row = (:unreached_method, "uncalled", "LeftUncalled", string(uncalled.sig))
+    route_row = (:unreached_method, "route", "LeftUncalled", "Tuple{typeof(LeftUncalled.route), Int64, Any}")
+    uncalled_row = (:unreached_method, "uncalled", "LeftUncalled", "Tuple{typeof(LeftUncalled.uncalled), Int64}")
     @test rows == [route_row, uncalled_row]
 end
 
@@ -127,11 +126,9 @@ end
     entries = (entry,)
     workload = () -> pkg.ready()
     found = gate_findings(pkg; checks = (UnreachedMethods(),), workload, entries)
-    unmatched = which(pkg.place, Tuple{String,String})
-    route = only(methods(pkg.route))
     rows = evidence_rows(found, :signature)
-    place_row = (:unreached_method, "place", string(unmatched.sig))
-    route_row = (:unreached_method, "route", string(route.sig))
+    place_row = (:unreached_method, "place", "Tuple{typeof(DynamicPlace.place), String, String}")
+    route_row = (:unreached_method, "route", "Tuple{typeof(DynamicPlace.route), Array{Any, 1}}")
     @test rows == [place_row, route_row]
 end
 
@@ -141,11 +138,9 @@ end
     entries = (entry,)
     workload = () -> pkg.ready()
     found = gate_findings(pkg; checks = (UnreachedMethods(),), workload, entries)
-    unmatched = which(pkg.kind, Tuple{String})
-    route = only(methods(pkg.route))
     rows = evidence_rows(found, :signature)
-    kind_row = (:unreached_method, "kind", string(unmatched.sig))
-    route_row = (:unreached_method, "route", string(route.sig))
+    kind_row = (:unreached_method, "kind", "Tuple{typeof(DynamicRelay.kind), String}")
+    route_row = (:unreached_method, "route", "Tuple{typeof(DynamicRelay.route), Int64}")
     @test rows == [kind_row, route_row]
 end
 

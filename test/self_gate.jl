@@ -172,6 +172,38 @@ function inference_sites()
     CallerWhitelist(callees, allowed)
 end
 
+# Julia internals with no public form in 1.13.1, each read only by an operation of the boundary file that states
+# its contract. The method graph, the workload and three name checks read some still; their lanes move them there.
+function internal_sites()
+    callees = (:visit, :kwarg_decl, :bodyfunction, :delete_method, :method_argnames, :fixup_stdlib_path, :moduleloc,
+               :meta, :Binding, :datatype_haspadding, :loaded_modules, :env_project_file, :parsed_toml, :PkgId,
+               :sync_varname, :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module)
+    boundary = "src/julia_internals.jl"
+    operations = (:project_dependencies, :argument_names, :loaded_package, :recorded_docs, :each_loaded_method,
+                  :sync_binding, :drop_method!, :declares_keywords, :package_uuid, :body_function, :has_padding,
+                  :module_site, :recorded_path)
+    allowed = Tuple{String,Symbol}[]
+    for operation in operations
+        push!(allowed, (boundary, operation))
+    end
+    pending = (
+        ("src/methodgraph.jl", :known_matches),
+        ("src/methodgraph.jl", :instance_at),
+        ("src/methodgraph.jl", :held_matches),
+        ("src/methodgraph.jl", :passed_methods),
+        ("src/methodgraph.jl", :statement_site),
+        ("src/methodgraph.jl", :is_inlined_package_call),
+        ("src/workload.jl", :existing_specializations),
+        ("src/workload.jl", :compiled_methods),
+        ("src/workload.jl", :keyword_body),
+        ("src/checks_load_order.jl", :resolves_through_using),
+        ("src/checks_interface.jl", :top_modules),
+        ("src/checks_imports.jl", :imported_module),
+    )
+    append!(allowed, pending)
+    CallerWhitelist(callees, allowed)
+end
+
 # The internals ArchCheck reads on purpose: Base's reflection, loading and parser, Core's method types, inference and
 # its inlining record, recorded docstrings, and the exhibit modules whose planted internals the gate names.
 const READ_INTERNALS = (Base, Core, Base.Compiler, Base.IRShow, Base.Docs, Exhibits, Exhibits.Low, Exhibits.Shape,
@@ -185,6 +217,7 @@ function static_checks()
     push!(active, ReachesInternal(allowed = READ_INTERNALS))
     push!(active, parse_sites())
     push!(active, inference_sites())
+    push!(active, internal_sites())
     waits = UnreadWaits(allowed = (:probe_wait, :wait_synced))
     push!(active, waits)
     push!(active, OverlappingCalls())

@@ -46,8 +46,8 @@ const OPEN_FIELD_NAMES = Set([
     @test symbols == OPEN_FIELD_NAMES
     @test length(found) == length(OPEN_FIELD_NAMES)
     rows = evidence_rows(found, :declared)
-    @test (:abstract_field, "Open.xs", "Vector") in rows
-    @test (:abstract_field, "AnyParam.zs", "Vector{Any}") in rows
+    @test (:abstract_field, "Open.xs", "Array{T, 1} where T") in rows
+    @test (:abstract_field, "AnyParam.zs", "Array{Any, 1}") in rows
     alias_lines = Set(finding.line for finding in found if startswith(finding.symbol, "AnyParam."))
     @test alias_lines == Set([30])
     @test all(finding -> finding.line > 0, found)

@@ -121,7 +121,7 @@ function unreached_finding(method, repo, graph)
     file, line = method_site(method, repo)
     owner = module_key(method.module)
     name = string(method.name)
-    signature = string(method.sig)
+    signature = type_text(method.sig)
     module_name = string(owner)
     detail = unreached_detail(graph)
     evidence = Pair{Symbol,String}[

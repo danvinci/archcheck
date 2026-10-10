@@ -98,13 +98,12 @@ function check_module_piracy(defined, root::Module; repo, strict::Bool)
         file, line = method_site(method, repo)
         owner = type_module(function_type)
         if isnothing(owner)
-            owner_path = string(function_type)
+            owner_path = type_text(function_type)
         else
             full_owner = fullname(owner)
             owner_path = join(full_owner, ".")
         end
-        # Without `:compact`, `show` spells the declared type out and skips its search of every module for an alias.
-        signature = sprint(show, method.sig; context = :compact => false)
+        signature = type_text(method.sig)
         evidence = [:owner => owner_path, :signature => signature]
         key = module_key(home)
         name = string(method.name)

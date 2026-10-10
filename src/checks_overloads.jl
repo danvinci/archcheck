@@ -44,10 +44,10 @@ function is_storage_argument(@nospecialize(earlier), @nospecialize(later), earli
     earlier <: Array || later <: Array
 end
 
-# Printing a type searches its module for an alias. Repeated types share one print.
-function type_text(@nospecialize(slot), texts)
+# Repeated types share one print.
+function cached_type_text(@nospecialize(slot), texts)
     haskey(texts, slot) && return texts[slot]
-    text = string(slot)
+    text = type_text(slot)
     texts[slot] = text
     text
 end
@@ -65,8 +65,8 @@ function storage_labels(earlier::Method, later::Method, texts)
         later_bound = bound_type(later_params[index])
         earlier_bound == later_bound && continue
         is_storage_argument(earlier_bound, later_bound, earlier, later) || return nothing
-        earlier_text = type_text(earlier_bound, texts)
-        later_text = type_text(later_bound, texts)
+        earlier_text = cached_type_text(earlier_bound, texts)
+        later_text = cached_type_text(later_bound, texts)
         push!(labels, earlier_text)
         push!(labels, later_text)
     end
@@ -104,8 +104,8 @@ end
 # A function one of the package's modules defines under a written name; a keyword body or closure is generated.
 function is_owned_function(value::Function, project)
     parentmodule(value) in project || return false
-    name = string(nameof(value))
-    !startswith(name, "#")
+    name = nameof(value)
+    !is_generated_name(name)
 end
 
 function push_pair!(findings, earlier::Method, later::Method, labels, repo)

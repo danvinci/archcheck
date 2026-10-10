@@ -20,7 +20,7 @@ struct MethodSource
     mod::Module                  # where the statement evaluates
     definition::Expr             # statement put back on the way out
     name::Symbol                 # function the methods belong to
-    signatures::Vector{String}   # printed signature of each method the probed statement defines
+    probed::Vector{Method}       # each method the probed statement defines, whose signature its restore replaces
 end
 
 struct ProbeHandle{F<:Tuple}
@@ -88,36 +88,12 @@ function retag_lines!(node::Expr, file::Symbol)
     node
 end
 
-function keyword_method(method)
-    decls = Base.kwarg_decl(method)
-    isempty(decls) && return nothing
-    body = Base.unwrap_unionall(method.sig)
-    params = body.parameters
-    tail = params[2:end]
-    owner = params[1]
-    bare = Tuple{NamedTuple, owner, tail...}
-    # The method's where-clause binds the parameters of the query.
-    query = Base.rewrap_unionall(bare, method.sig)
-    which(Core.kwcall, query)
-end
-
-# Deleting first makes the following definition a fresh method.
-function drop_method!(method)
-    keyword = keyword_method(method)
-    if !isnothing(keyword)
-        Base.delete_method(keyword)
-    end
-    Base.delete_method(method)
-    nothing
-end
-
-# The evaluated wrapper keeps this signature. Its file and line are the probe source.
-function lookup_method(source::MethodSource, signature::String)
+# The method the table holds now for a probed method's signature. Julia keeps one method per signature, equal as types.
+function lookup_method(source::MethodSource, probed::Method)
     fn = getfield(source.mod, source.name)
     for method in methods(fn)
         method.module === source.mod || continue
-        label = string(method.sig)
-        label == signature && return method
+        method.sig == probed.sig && return method
     end
     nothing
 end
@@ -143,7 +119,7 @@ end
 # A keyword method's body is rewritten in place of the method the table lists for it.
 function is_probed_method(method::Method)
     holds_session(method) && return true
-    body = defined_body(method)
+    body = body_function(method)
     isnothing(body) && return false
     rewritten = newest_method(body)
     isnothing(rewritten) && return false
@@ -153,7 +129,7 @@ end
 # A keyword form's body runs for every method the form defines, so the method that names the body leads.
 function form_lead(group::Vector{Method})
     for method in group
-        body = defined_body(method)
+        body = body_function(method)
         isnothing(body) || return method
     end
     first(group)
@@ -207,7 +183,7 @@ end
 # The keyword body method's own signature: its declared types under its where-clause, lowering's names for the
 # keyword slots, and the probed source's names for the slots after them, which the probed body reads.
 function body_signature(body::Function, target::Method, slots::Vector{Symbol})
-    names = Base.method_argnames(target)
+    names = argument_names(target)
     declared = Base.unwrap_unionall(target.sig)
     types = declared.parameters
     keyword_end = length(names) - length(slots)
@@ -221,12 +197,6 @@ function body_signature(body::Function, target::Method, slots::Vector{Symbol})
     end
     call = Expr(:call, nameof(body), args...)
     where_clause(call, target.sig)
-end
-
-function defined_body(method::Method)
-    decls = Base.kwarg_decl(method)
-    isempty(decls) && return nothing
-    Base.bodyfunction(method)
 end
 
 function newest_method(body::Function)
@@ -248,7 +218,7 @@ end
 
 # The body method that exists after the replacement is evaluated. The table changed, so the earlier read does not name it.
 function install_keyword_body!(body::Function, target::Method, original::Expr, replacement::Expr, home::Module)
-    Base.delete_method(target)
+    drop_method!(target)
     try
         Core.eval(home, replacement)
     catch
@@ -260,7 +230,7 @@ end
 
 function keyword_source(method::Method, saved::Expr, probed::Expr, home::Module)
     probed.head === :function || return nothing
-    body = defined_body(method)
+    body = body_function(method)
     isnothing(body) && return nothing
     inner = function_body(saved)
     isnothing(inner) && return nothing
@@ -276,19 +246,14 @@ function keyword_source(method::Method, saved::Expr, probed::Expr, home::Module)
     probed_inner = probed.args[2]
     replacement = Expr(:function, call, probed_inner)
     installed = install_keyword_body!(body, target, original, replacement, home)
-    label = string(installed.sig)
     body_name = nameof(body)
-    MethodSource(home, original, body_name, [label])
+    MethodSource(home, original, body_name, [installed])
 end
 
 function replaced_source(group::Vector{Method}, saved::Expr, probed::Expr, home::Module)
     lead = first(group)
-    labels = String[]
-    for method in group
-        label = string(method.sig)
-        push!(labels, label)
-    end
-    source = MethodSource(home, saved, lead.name, labels)
+    listed = copy(group)
+    source = MethodSource(home, saved, lead.name, listed)
     for method in group
         drop_method!(method)
     end
@@ -350,8 +315,8 @@ end
 
 function restore_originals(originals)
     for source in originals
-        for signature in source.signatures
-            current = lookup_method(source, signature)
+        for probed in source.probed
+            current = lookup_method(source, probed)
             isnothing(current) || drop_method!(current)
         end
         Core.eval(source.mod, source.definition)

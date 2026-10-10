@@ -8,7 +8,7 @@ struct OptEntry{F, A<:Tuple}
 end
 
 function entry_symbol(f, ::Type{T}) where {T <: Tuple}
-    args = join(("::" * string(p) for p in T.parameters), ", ")
+    args = join(("::" * type_text(p) for p in T.parameters), ", ")
     "$(nameof(f))($args)"
 end
 
@@ -23,12 +23,7 @@ struct OptAnalysis{E} <: Check
 end
 OptAnalysis() = OptAnalysis(OptEntry[])
 
-function jet_loaded()
-    for (id, mod) in Base.loaded_modules
-        id.name == "JET" && return mod
-    end
-    nothing
-end
+jet_loaded() = loaded_package("JET")
 
 function entry_location(entry::OptEntry, repo)
     m = which(entry.f, entry.argtypes)

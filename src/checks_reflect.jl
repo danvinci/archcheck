@@ -1,23 +1,6 @@
 # Reflection checks (duplicate-owner, sinkable): the method table is dispatch-aware, so these
 # read the loaded modules, not source text.
 
-# `jl_method_t.dispatch_status` bit set while a method is the one `which` returns for its own signature (julia.h);
-# a method overwritten by a later definition of the same signature loses it.
-const METHOD_SIG_LATEST_WHICH = 0x01
-
-is_latest(method::Method) = method.dispatch_status & METHOD_SIG_LATEST_WHICH != 0
-
-# Every live method a checked module defines, on any function, in source order. A context reads the table once.
-function project_methods(mods)
-    project = Set(mods)
-    defined = Method[]
-    Base.visit(Core.methodtable) do method
-        method.module in project || return
-        is_latest(method) && push!(defined, method)
-    end
-    sort!(defined, by = method -> (string(method.file), method.line))
-end
-
 # The function a method belongs to; nothing for a keyword method, a callable struct, or an abstract callee.
 function method_function(method::Method)
     signature = Base.unwrap_unionall(method.sig)
@@ -136,15 +119,6 @@ function check_stale_exports(mods; repo)
     findings
 end
 
-# The docstrings `home` records for its binding `name`; nothing when it records none. The lookup leaves a module
-# with no docs uninitialised.
-function recorded_docs(home::Module, name::Symbol)
-    docs = Base.Docs.meta(home; autoinit = false)
-    isnothing(docs) && return nothing
-    binding = Base.Docs.Binding(home, name)
-    get(docs, binding, nothing)
-end
-
 # unranked-module: a loaded submodule no wrapper declares by the spine rule, so the index files it under its
 # parent and no rank rule reaches it.
 function check_module_corpus(mods, rank; repo)
@@ -178,7 +152,7 @@ function owned_defs(mod::Module)
     for name in names(mod; all = true)
         is_self = name === nameof(mod)
         is_builtin = name in (:eval, :include)
-        is_generated = startswith(string(name), "#")
+        is_generated = is_generated_name(name)
         (is_self || is_builtin || is_generated) && continue
         isdefined(mod, name) || continue
         value = getproperty(mod, name)
@@ -199,14 +173,6 @@ function type_module(@nospecialize(declared))
     parentmodule(unwrapped)
 end
 
-# A keyword-argument body is its own generic named #f#N; the written name is the first segment.
-function written_name(name::Symbol)
-    text = string(name)
-    startswith(text, "#") || return text
-    parts = split(text, "#"; keepempty = false)
-    isempty(parts) ? text : String(first(parts))
-end
-
 # A keyword method is a method of kwcall. Its third slot holds the function it wraps.
 is_kwcall_signature(@nospecialize(sig)) = sig <: Tuple{typeof(Core.kwcall),Any,Any,Vararg}
 
@@ -218,22 +184,7 @@ function split_signature(@nospecialize(sig))
     (params[slot], params[slot + 1:end])
 end
 
-# A path loaded code recorded, repo-relative like an indexed site. A system image records a stdlib's files at the
-# build machine's path; the fixup maps them to this installation.
-function recorded_path(file, repo)
-    local_path = Base.fixup_stdlib_path(string(file))
-    # Code evaluated without line information records `none`, which names no file.
-    isabspath(local_path) || return local_path
-    relpath(local_path, repo)
-end
-
 method_site(method::Method, repo) = (recorded_path(method.file, repo), Int(method.line))
-
-# Where a module's `module` line sits.
-function module_site(mod::Module, repo)
-    location = Base.moduleloc(mod)
-    (recorded_path(location.file, repo), location.line)
-end
 
 # A scan site names a method by its own name, or by a qualified name ending in it (`Base.show`).
 function site_names_method(site::MethodSite, method::Method)
@@ -388,9 +339,9 @@ end
 function root_loads(mod::Module, root::Module, dependencies)
     package = Base.moduleroot(mod)
     package === Base.moduleroot(root) && return true
-    id = Base.PkgId(package)
-    isnothing(id.uuid) && return true
-    id.uuid in dependencies
+    uuid = package_uuid(package)
+    isnothing(uuid) && return true
+    uuid in dependencies
 end
 
 # Each module a body writes a path through, `Dep` in `Dep.f(x)`.

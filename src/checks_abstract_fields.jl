@@ -157,7 +157,7 @@ function push_fields!(findings, owner, name, site, detail, fields)
     file, line = site
     for (field, declared) in fields
         symbol = string(name, ".", field)
-        evidence = [:declared => string(declared)]
+        evidence = [:declared => type_text(declared)]
         finding = Finding(owner, :abstract_field, file, symbol, line, detail, evidence)
         push!(findings, finding)
     end
@@ -190,7 +190,7 @@ function check_abstract_fields(mods, sites, index::SourceIndex)
         owner = module_key(mod)
         for name in names(mod; all = true)
             is_self = name === nameof(mod)
-            is_internal = startswith(string(name), "#")
+            is_internal = is_generated_name(name)
             (is_self || is_internal) && continue
             isdefined(mod, name) || continue
             declared_type = getproperty(mod, name)

@@ -396,7 +396,7 @@ function rewrite_sync(node, site)
     rewritten = rewrite_waits(body, site)
     channel = GlobalRef(Base, :Channel)
     finish = GlobalRef(@__MODULE__, :log_sync_end)
-    bound = Base.sync_varname
+    bound = sync_binding()
     opened = Expr(:call, channel, Inf)
     binding = Expr(:(=), bound, opened)
     value = gensym(:sync_value)

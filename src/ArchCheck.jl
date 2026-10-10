@@ -2,6 +2,7 @@
 module ArchCheck
 
 include("finding.jl")
+include("julia_internals.jl")
 include("syntax_nodes.jl")
 include("syntax_sig.jl")
 include("syntax.jl")
