@@ -302,7 +302,9 @@ end
     @test isempty(ArchCheck.run(ModuleBackEdges(strict = true), ctx))
     found = ArchCheck.run(ReachesInternal(), ctx)
     imports = Set((finding.mod, finding.symbol) for finding in found)
-    @test imports == Set([(:HostedRandomExt, "Hosted._inner"), (:HostedTestExt, "Hosted._inner")])
+    expected = Set([(:HostedRandomExt, "Hosted._inner"), (:HostedTestExt, "Hosted._inner"),
+                    (:HostedAbsentExt, "Hosted._inner"), (:HostedAbsentExt, "Hosted._absent_only")])
+    @test imports == expected
     @test isempty(ArchCheck.run(ModulePiracy(), ctx))
 end
 

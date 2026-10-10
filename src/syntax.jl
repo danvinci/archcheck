@@ -28,26 +28,19 @@ struct NameRead
     method::Union{Nothing,JS.SyntaxNode}      # outermost method, macro or closure form holding it; nothing in load-time code
     line::Int                                 # source line of the read
     in_signature::Bool                        # in a signature's annotations, which run where the method is defined
+    in_export::Bool                           # listed by an `export` or `public` line, which publishes the binding
+    is_quoted::Bool                           # a quoted symbol, which names a binding without reading it
 end
 
 is_member(read::NameRead) = !isnothing(read.qualifier)
 
-"""A member read through a qualifier that can name a module: `g` in `M.g`. It joins its def's `refs` once the index
-resolves the qualifier to one of the package's modules."""
-struct QualifiedRead
-    target::Union{Nothing,Symbol}   # refs key of the def whose code reads it; nothing for code outside any def
-    qualifier::JS.SyntaxNode        # the code before the dot
-    member::Symbol                  # the name after it
-end
-
-# One file's top-level defs and, per def, the names its body references. Closures are included.
+# One file's top-level defs and every name its code reads; `refs` and `modrefs` file the reads by definition.
 struct FileScan
     funcs::Vector{Symbol}                                        # top-level function names, source order
     constructors::Set{Symbol}                                    # type names a top-level curly head (`T{P}(x) = ...`) adds methods to
     types::Vector{Symbol}                                        # top-level struct and abstract type names
     refs::Dict{Symbol,Set{Symbol}}                               # definition or qualified method -> bare names it reads, and members read through a package module
-    modrefs::Set{Symbol}                                         # names referenced outside any function
-    members::Vector{QualifiedRead}                               # every member read through a qualifier, source order
+    modrefs::Set{Symbol}                                         # names read outside any definition
     line::Dict{Symbol,Int}                                       # def name -> source line
     argtypes::Dict{Symbol,Vector{Union{Symbol,Nothing}}}         # function -> positional declared types; last method wins
     tupletail::Dict{Symbol,Int}                                  # function -> slot count when its body ends in a bare tuple
@@ -63,7 +56,6 @@ function empty_scan()
     types = Symbol[]
     refs = Dict{Symbol,Set{Symbol}}()
     modrefs = Set{Symbol}()
-    members = QualifiedRead[]
     line = Dict{Symbol,Int}()
     argtypes = Dict{Symbol,Vector{Union{Symbol,Nothing}}}()
     tupletail = Dict{Symbol,Int}()
@@ -71,8 +63,7 @@ function empty_scan()
     callsites = Dict{MethodSite,Vector{CallSite}}()
     forms = Dict{MethodSite,JS.SyntaxNode}()
     reads = NameRead[]
-    FileScan(funcs, constructors, types, refs, modrefs, members, line, argtypes, tupletail, imports, callsites, forms,
-             reads)
+    FileScan(funcs, constructors, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms, reads)
 end
 
 # `nothing` on failure, so a caller accounts for it.

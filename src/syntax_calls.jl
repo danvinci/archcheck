@@ -150,13 +150,13 @@ function push_call!(callsites, site, call)
     push!(calls, call)
 end
 
-function record_written!(scan, callee::Symbol, qualifier::String, node, scope)
+function record_written!(walk, callee::Symbol, qualifier::String, node, scope)
     arguments = arguments_text(node)
     keywords = keywords_text(node)
     line = source_line(node)
     is_used = !scope.discarded
     call = CallSite(callee, qualifier, arguments, keywords, line, scope.loop_depth, is_used)
-    push_call!(scan.callsites, scope.site, call)
+    push_call!(walk.scan.callsites, scope.site, call)
 end
 
 # The name a call calls: its operator, or the callee its head writes.
@@ -171,9 +171,9 @@ function called_name(call)
     name_of_head(children[1])
 end
 
-function record_call!(scan, node, scope)
+function record_call!(walk, node, scope)
     isnothing(scope.site) && return
     naming = called_name(node)
     isnothing(naming) && return
-    record_written!(scan, naming.callee, naming.qualifier, node, scope)
+    record_written!(walk, naming.callee, naming.qualifier, node, scope)
 end

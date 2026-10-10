@@ -4,13 +4,10 @@
 # Code no loaded module holds binds no module by name.
 bound_module(::Nothing, name::Symbol) = nothing
 
-# The recorder files reads in a flat list, so no def opens a set.
-open_target!(::ReadRecorder, target) = nothing
-
 is_type_form(kind) = kind == K"struct" || kind == K"abstract" || kind == K"primitive"
 
-# The name an identifier reads, as Julia binds it: a macro's with its `@`, a string macro's with its suffix.
-# A name an import clause writes and a lone quoted symbol read nothing.
+# The name an identifier names, as Julia binds it: a macro's with its `@`, a string macro's with its suffix.
+# A name an import clause writes names nothing.
 function read_name(node)::Union{Nothing,Symbol}
     name = node_symbol(node)
     isnothing(name) && return nothing
@@ -22,10 +19,6 @@ function read_name(node)::Union{Nothing,Symbol}
     parent_kind = JS.kind(parent)
     parent_kind == K"importpath" && return nothing
     parent_kind == K"as" && return nothing
-    if parent_kind == K"quote"
-        quoted = child_nodes(parent)
-        child_count(quoted) == 1 && return nothing
-    end
     parent_kind == K"macro_name" || return name
     holder = parent.parent
     !isnothing(holder) && JS.kind(holder) == K"importpath" && return nothing
@@ -79,8 +72,15 @@ function type_parameters(definition)
     parameters
 end
 
-# Whether `node` declares `name` where the scoped walk meets it: a struct field, a type's parameter, or a `where`
-# variable outside a signature. The walk binds a macro's arguments and locals itself.
+# The name a type definition's head declares: `S` in `struct S{T} <: A{T}`, its supertype left out.
+function declared_type_head(definition)
+    head = first(child_nodes(definition))
+    JS.kind(head) == K"<:" || return head
+    first(child_nodes(head))
+end
+
+# Whether `node` declares `name` where the scoped walk meets it: a struct field, a type's own name or parameter, or a
+# `where` variable outside a signature. The walk binds a macro's arguments and locals itself.
 function is_declared_name(node, name)
     is_field_name(node) && return true
     current = node.parent
@@ -92,42 +92,55 @@ function is_declared_name(node, name)
             name in variables && return true
         elseif is_type_form(kind)
             name in type_parameters(current) && return true
+            head = declared_type_head(current)
+            is_own_name = type_name(head) === name && node_inside(node, head)
+            is_own_name && return true
         end
         current = current.parent
     end
     false
 end
 
-function note_free_name!(recorder::ReadRecorder, node, scope)
+function note_free_name!(walk::CodeWalk, node, scope, in_export = false)
     name = read_name(node)
     isnothing(name) && return
     name in scope.bound && return
     is_declared_name(node, name) && return
     line = source_line(node)
-    read = NameRead(name, nothing, nothing, scope.target, scope.method, line, scope.in_signature)
-    push!(recorder.reads, read)
+    is_quoted = is_lone_quote(node)
+    read = NameRead(name, nothing, nothing, scope.target, scope.method, line, scope.in_signature, in_export, is_quoted)
+    push!(walk.scan.reads, read)
+end
+
+# A symbol quoted alone, `:name`.
+function is_lone_quote(node)
+    parent = node.parent
+    isnothing(parent) && return false
+    JS.kind(parent) == K"quote" || return false
+    quoted = child_nodes(parent)
+    child_count(quoted) == 1
 end
 
 # The loaded module a qualifier names: a bare name's binding where the code sits, or the module a dotted qualifier
 # met earlier in the walk named.
-function qualifier_module(recorder::ReadRecorder, qualifier)
+function qualifier_module(walk::CodeWalk, qualifier)
     name = node_symbol(qualifier)
-    isnothing(name) || return bound_module(recorder.names, name)
-    get(recorder.named, qualifier, nothing)
+    isnothing(name) || return bound_module(walk.names, name)
+    get(walk.named, qualifier, nothing)
 end
 
 # A member read through a qualifier that can name a module, with the module it names; a module the member itself
 # names is kept for the dotted path around it.
-function note_member!(recorder::ReadRecorder, scope, dot, qualifier, member)
+function note_member!(walk::CodeWalk, scope, dot, qualifier, member)
     is_module_path(qualifier, scope.bound) || return
-    through = qualifier_module(recorder, qualifier)
+    through = qualifier_module(walk, qualifier)
     if !isnothing(through)
         reached = bound_module(through, member)
         if !isnothing(reached)
-            recorder.named[dot] = reached
+            walk.named[dot] = reached
         end
     end
     line = source_line(dot)
-    read = NameRead(member, qualifier, through, scope.target, scope.method, line, scope.in_signature)
-    push!(recorder.reads, read)
+    read = NameRead(member, qualifier, through, scope.target, scope.method, line, scope.in_signature, false, false)
+    push!(walk.scan.reads, read)
 end

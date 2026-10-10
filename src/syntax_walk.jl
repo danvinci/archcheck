@@ -152,17 +152,22 @@ function walk_gen_spec!(scan, node, scope, interior_depth)
     end
 end
 
-# The index reads a def's bare names from its body and defaults; a signature's annotations run where it is defined.
-function note_free_name!(scan::FileScan, node, scope)
-    scope.in_signature && return
-    name = node_symbol(node)
-    isnothing(name) && return
-    name in scope.bound && return
-    names = open_target!(scan, scope.target)
-    push!(names, name)
+"""The one scoped walk over a piece of code: the scan it fills, and what a qualifier resolves against."""
+struct CodeWalk{N}
+    scan::FileScan                        # the defs, calls and reads the walk records
+    names::N                              # what a bare name binds where the code sits: a loaded module, a script's names, or nothing
+    named::IdDict{JS.SyntaxNode,Module}   # each dotted qualifier already met -> the loaded module it names
 end
 
-open_target!(scan::FileScan, target) = get!(Set{Symbol}, scan.refs, target)
+# The walk's two read recorders, defined beside the module lookup they resolve qualifiers with.
+function note_free_name! end
+function note_member! end
+
+# A definition's refs set exists once the walk opens it, read or not.
+function open_target!(walk::CodeWalk, target)
+    isnothing(target) && return
+    get!(Set{Symbol}, walk.scan.refs, target)
+end
 
 function scope_children!(scan, node, scope)
     children = child_nodes(node)
@@ -171,14 +176,6 @@ function scope_children!(scan, node, scope)
         child_scope = entered_scope(scope, node, index)
         walk_scoped!(scan, children[index], child_scope)
     end
-end
-
-# A member read through a qualifier that can name a module, kept for the index to resolve against the loaded modules.
-function note_member!(scan::FileScan, scope, dot, qualifier, member)
-    scope.in_signature && return
-    is_module_path(qualifier, scope.bound) || return
-    read = QualifiedRead(scope.target, qualifier, member)
-    push!(scan.members, read)
 end
 
 function scope_plain!(scan, node, scope)
@@ -200,7 +197,7 @@ end
 
 # A method nested in a method already on `scope.site` gets its own form.
 # Calls inside it stay on the enclosing site.
-function record_nested_form!(scan, node, scope)
+function record_nested_form!(walk::CodeWalk, node, scope)
     isnothing(scope.site) && return
     children = child_nodes(node)
     child_count(children) == 0 && return
@@ -208,30 +205,139 @@ function record_nested_form!(scan, node, scope)
     isnothing(name) && return
     line = source_line(node)
     site = MethodSite(name, line)
-    haskey(scan.forms, site) && return
-    scan.forms[site] = node
+    forms = walk.scan.forms
+    haskey(forms, site) && return
+    forms[site] = node
 end
 
-# A callable's method files under its receiver type; a method outside any def opens one under the name it defines.
-function scope_method!(scan, node, scope)
-    record_nested_form!(scan, node, scope)
+# Slot count when a body's final expression is a bare tuple. A named tuple names its slots, so 0.
+function tuple_tail_slots(body)
+    tail = body
+    if JS.kind(tail) == K"block"
+        children = child_nodes(tail)
+        child_count(children) == 0 && return 0
+        tail = last(children)
+    end
+    if JS.kind(tail) == K"return"
+        children = child_nodes(tail)
+        child_count(children) == 0 && return 0
+        tail = first(children)
+    end
+    JS.kind(tail) == K"tuple" || return 0
+    slots = child_nodes(tail)
+    isnothing(slots) && return 0
+    for slot in slots
+        kind = JS.kind(slot)
+        if kind == K"=" || kind == K"parameters"
+            return 0
+        end
+    end
+    length(slots)
+end
+
+# A function the code defines outside any other: its name, line, declared argument types and tuple tail.
+function record_top_method!(scan::FileScan, name, line, children)
+    push!(scan.funcs, name)
+    scan.line[name] = line
+    get!(Set{Symbol}, scan.refs, name)
+    scan.argtypes[name] = read_positionals(argtype_of, children[1])
+    if is_type_constructor(children[1])
+        push!(scan.constructors, name)
+    end
+    slots = tuple_tail_slots(children[2])
+    slots > 0 || return
+    scan.tupletail[name] = slots
+end
+
+# The name a method's calls are filed under: a top-level function's, a qualified generic's, a callable's receiver
+# type, or the type whose block holds an inner constructor. A method that is none of these has no site of its own.
+function method_owner(signature, name, top, current)
+    top && return name
+    qualified = qualified_method_name(signature)
+    isnothing(qualified) || return qualified
+    receiver = callable_receiver(signature)
+    isnothing(receiver) || return receiver
+    current
+end
+
+# Inside a method already on a site: the calls stay there, and a callable's method files its reads under its type.
+function nested_method_scope(walk::CodeWalk, scope, signature, form)
+    receiver = callable_receiver(signature)
+    isnothing(receiver) && return retarget(scope, scope.target, scope.bound, form)
+    open_target!(walk, receiver)
+    retarget(scope, receiver, Set{Symbol}(), form)
+end
+
+# A method outside any other opens a site under its owner, where its calls and forms are filed.
+function method_scope(walk::CodeWalk, scope, node, children)
+    signature = children[1]
+    name = sig_name(signature)
+    top = scope.depth == 0 && !isnothing(name)
+    line = source_line(node)
+    if top
+        record_top_method!(walk.scan, name, line, children)
+    end
+    owner = method_owner(signature, name, top, scope.target)
+    isnothing(owner) && return retarget(scope, scope.target, scope.bound, node)
+    site = MethodSite(owner, line)
+    walk.scan.forms[site] = node
+    open_target!(walk, owner)
+    receiver = callable_receiver(signature)
+    bound = isnothing(receiver) ? scope.bound : Set{Symbol}()
+    method = isnothing(scope.method) ? node : scope.method
+    ScanScope(owner, bound, scope.depth + 1, 0, site, false, method, scope.in_signature)
+end
+
+function scope_method!(walk::CodeWalk, node, scope)
+    record_nested_form!(walk, node, scope)
     children = child_nodes(node)
     child_count(children) < 2 && return
     signature = children[1]
     body = children[2]
-    receiver = callable_receiver(signature)
-    if !isnothing(receiver)
-        inner = retarget(scope, receiver, Set{Symbol}(), node)
-        absorb_method!(scan, signature, body, inner)
-        return
+    if isnothing(scope.site)
+        inner = method_scope(walk, scope, node, children)
+    else
+        inner = nested_method_scope(walk, scope, signature, node)
     end
+    absorb_method!(walk, signature, body, inner)
+end
+
+# A type definition: at the top it records the type and files its supertype, field and constructor reads under it.
+function scope_type!(walk::CodeWalk, node, scope)
+    children = child_nodes(node)
+    child_count(children) == 0 && return
+    name = type_name(first(children))
     target = scope.target
-    if isnothing(target)
-        named = sig_name(signature)
-        target = isnothing(named) ? qualified_method_name(signature) : named
+    if scope.depth == 0 && !isnothing(name)
+        scan = walk.scan
+        push!(scan.types, name)
+        scan.line[name] = source_line(node)
+        open_target!(walk, name)
+        target = name
     end
-    inner = retarget(scope, target, scope.bound, node)
-    absorb_method!(scan, signature, body, inner)
+    inner = ScanScope(target, scope.bound, scope.depth + 1, scope.loop_depth, scope.site, false, scope.method,
+                      scope.in_signature)
+    for child in children
+        walk_scoped!(walk, child, inner)
+    end
+end
+
+# A using or import line reads nothing; it binds the last name of each item it lists.
+function scope_import!(walk::CodeWalk, node)
+    for clause in child_nodes(node)
+        items = import_items(clause)
+        for item in items
+            parts = child_nodes(item)
+            bound = node_symbol(last(parts))
+            isnothing(bound) || push!(walk.scan.imports, bound)
+        end
+    end
+end
+
+function import_items(clause)
+    JS.kind(clause) == K":" || return [clause]
+    children = child_nodes(clause)
+    children[2:end]
 end
 
 # A macro's arguments and the names its body assigns are its own; its name is no read.
@@ -361,6 +467,12 @@ function walk_scoped!(scan, node, scope)
         scope_generator!(scan, node, scope)
     elseif kind == K"global" || kind == K"local"
         scope_declaration!(scan, node, scope)
+    elseif kind == K"struct" || kind == K"abstract"
+        scope_type!(scan, node, scope)
+    elseif kind == K"using" || kind == K"import"
+        scope_import!(scan, node)
+    elseif kind == K"export" || kind == K"public"
+        scope_export!(scan, node, scope)
     elseif kind == K"="
         scope_assign!(scan, node, scope)
     elseif kind == K"call" || kind == K"dotcall" || kind == K"parameters" || kind == K"tuple"
@@ -426,25 +538,31 @@ function absorb_defaults!(scan, signature, scope)
     end
 end
 
-"""The scoped walk's recorder over one piece of code: the reads so far, and what a qualifier resolves against."""
-struct ReadRecorder{N}
-    reads::Vector{NameRead}               # every read, in walk order
-    names::N                              # what a bare name binds where the code sits; nothing when unloaded
-    named::IdDict{JS.SyntaxNode,Module}   # each dotted qualifier already met -> the loaded module it names
+# An export or public line lists names it publishes, each a use of the binding it names.
+function scope_export!(walk::CodeWalk, node, scope)
+    for listed in child_nodes(node)
+        named = listed
+        kind = JS.kind(listed)
+        if kind == K"macro_name" || kind == K"var"
+            named = first(child_nodes(listed))
+        end
+        note_free_name!(walk, named, scope, true)
+    end
 end
 
-# Every name `code` reads, each qualifier resolved against `names`: the loaded module the code sits in, or nothing.
-function code_reads(code, names)
+# Every definition `code` makes and every name it reads, each qualifier resolved against `names`: the loaded module
+# the code sits in, an entry script's names, or nothing.
+function scan_tree(code, names)
+    scan = empty_scan()
     named = IdDict{JS.SyntaxNode,Module}()
-    recorder = ReadRecorder(NameRead[], names, named)
+    walk = CodeWalk(scan, names, named)
     scope = opening_scope(nothing, 0, nothing)
-    walk_scoped!(recorder, code, scope)
-    recorder.reads
+    walk_scoped!(walk, code, scope)
+    scan
 end
 
 # Body references minus this method's bindings, plus the references in its defaults.
 function absorb_method!(scan, signature, body, scope)
-    open_target!(scan, scope.target)
     opened = read_scope(scope, scope.bound)
     absorb_defaults!(scan, signature, opened)
     bound = body_locals(signature, body, scope.bound)

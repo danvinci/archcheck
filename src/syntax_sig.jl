@@ -33,20 +33,6 @@ function call_parts(signature)
     (head = children[1], arguments = children[2:end])
 end
 
-# A struct body allows inner constructors only: a `function` form, or a short-form method.
-# A typed field default (`x::T = v`) is a signature-shaped assignment and stays a field.
-function is_inner_constructor(node)
-    kind = JS.kind(node)
-    kind == K"function" && return true
-    kind == K"=" || return false
-    children = child_nodes(node)
-    child_count(children) == 0 && return false
-    signature = children[1]
-    is_sig(signature) || return false
-    named = sig_name(signature)
-    !isnothing(named)
-end
-
 # A type name, unwrapping `<:` and `{}` to the bare identifier.
 function type_name(node)::Union{Nothing,Symbol}
     named = node_symbol(node)

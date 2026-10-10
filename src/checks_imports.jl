@@ -8,11 +8,13 @@ kinds(::ImportedNames) = (:implicit_import => :advisory, :stale_import => :advis
 
 run(::ImportedNames, ctx) = check_imported_names(ctx.index, ctx.mods, ctx.root)
 
-# Every bare name one module's code reads, across the files and blocks that hold it.
+# Every bare name one module's code reads or exports, across the files and blocks that hold it.
 function module_reads(files)
     names = Set{Symbol}()
     for file in files, read in file.scan.reads
-        is_member(read) || push!(names, read.name)
+        is_member(read) && continue
+        read.is_quoted && continue
+        push!(names, read.name)
     end
     names
 end

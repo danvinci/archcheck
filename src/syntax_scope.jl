@@ -14,8 +14,20 @@ function is_nested_scope(node)
     is_method_form(node)
 end
 
-# Assignments and nested method names in this scope. A nested scope keeps its own names.
+# `@eval`, bare or qualified: its code runs at the module's global scope.
+function is_eval_macro(node)
+    JS.kind(node) == K"macrocall" || return false
+    head = first(child_nodes(node))
+    if JS.kind(head) == K"."
+        head = last(child_nodes(head))
+    end
+    named_symbol(head) === Symbol("@eval")
+end
+
+# Assignments and nested method names in this scope. A nested scope keeps its own names, and code `@eval` runs
+# binds globals.
 function collect_scope_assigns!(bound, node)
+    is_eval_macro(node) && return
     if is_method_form(node)
         children = child_nodes(node)
         name = sig_name(children[1])

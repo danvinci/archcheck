@@ -188,11 +188,12 @@ end
 
 # Each name a def's code writes, a member read through any module included: `JS.parseall` calls `parseall`.
 function written_names(scan::FileScan)
-    written = Dict(def => copy(used) for (def, used) in scan.refs)
-    for read in scan.members
-        isnothing(read.target) && continue
-        names = get!(Set{Symbol}, written, read.target)
-        push!(names, read.member)
+    written = Dict{Symbol,Set{Symbol}}()
+    for read in scan.reads
+        read.in_signature && continue
+        isnothing(read.def) && continue
+        names = get!(Set{Symbol}, written, read.def)
+        push!(names, read.name)
     end
     written
 end

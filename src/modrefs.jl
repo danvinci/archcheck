@@ -345,3 +345,192 @@ function walk_modrefs!(refs, from, scope, file, modules, node)
         walk_modrefs!(refs, from, scope, file, modules, child)
     end
 end
+
+# The loaded modules a reference resolves against, and the outside ones whose internals the package reads on purpose.
+struct ReachModules
+    by_key::Dict{Symbol,Module}   # each package module by its dotted key
+    tracked::Set{Module}          # the package's own modules, which a finding names by key
+    package::Module               # the package root, which an entry script knows by its name
+    allowed::Set{Module}          # outside modules whose internal names the package reads on purpose
+    top::Dict{Symbol,Module}      # each loaded top-level module by name, where a path with no leading dot opens
+end
+
+# Every top-level module this Julia has loaded, by name. A name two loaded packages share names neither.
+function top_modules()
+    by_name = Dict{Symbol,Module}()
+    shared = Set{Symbol}()
+    for loaded in values(Base.loaded_modules)
+        name = nameof(loaded)
+        held = get(by_name, name, loaded)
+        held === loaded || push!(shared, name)
+        by_name[name] = loaded
+    end
+    for name in shared
+        delete!(by_name, name)
+    end
+    by_name
+end
+
+
+# Where an import path opens, and the names after its opening. With no leading dot it opens at the loaded top-level
+# module its first name names; with dots, at the module its first name binds in `home` or a parent per further dot.
+function path_opening(modules::ReachModules, home, dots, path)
+    rest = path[2:end]
+    if dots == 0
+        opened = get(modules.top, first(path), nothing)
+        return opened, rest
+    end
+    isnothing(home) && return nothing, rest
+    enclosing = home
+    for _ in 2:dots
+        enclosing = parentmodule(enclosing)
+    end
+    opened = bound_module(enclosing, first(path))
+    isnothing(opened) && return enclosing, path   # a name such as `..f`, read through the enclosing module
+    opened, rest
+end
+
+# What an import path reads from `home`: each name after its opening, through the module before it, and the module
+# the path names whole, if it does; nothing when the path opens at no loaded module.
+function path_target(modules::ReachModules, home, dots, path)
+    isempty(path) && return nothing
+    current, rest = path_opening(modules, home, dots, path)
+    isnothing(current) && return nothing
+    reads = Tuple{Module,Symbol}[]
+    for name in rest
+        push!(reads, (current, name))
+        member = bound_module(current, name)
+        isnothing(member) && return (; reads, named = nothing)
+        current = member
+    end
+    (; reads, named = current)
+end
+
+# The modules an entry script binds by name. A script runs where the package is loaded, so it knows the package by
+# its name; every other name comes from its own using, import and `const` lines.
+struct ScriptNames
+    bound::Dict{Symbol,Module}   # name -> the loaded module it binds
+    used::Vector{Module}         # modules a `using` line brings in whole, whose exported modules the script sees
+    home::Union{Nothing,Module}  # the loaded module a script's module block stands for; nothing at a file's top level
+end
+
+function bound_module(script::ScriptNames, name::Symbol)
+    named = get(script.bound, name, nothing)
+    isnothing(named) || return named
+    for used in script.used
+        Base.isexported(used, name) || continue
+        exported = bound_module(used, name)
+        isnothing(exported) || return exported
+    end
+    nothing
+end
+
+function collect_const_alias!(script::ScriptNames, assignment)
+    JS.kind(assignment) == K"=" || return
+    sides = child_nodes(assignment)
+    child_count(sides) < 2 && return
+    alias = node_symbol(sides[1])
+    isnothing(alias) && return
+    no_locals = Set{Symbol}()
+    aliased = resolve_loaded_module(sides[2], script, no_locals)
+    isnothing(aliased) && return
+    script.bound[alias] = aliased
+end
+
+# Each `const` binding of a loaded module, outside quoted code and nested scopes.
+function collect_const_aliases!(script::ScriptNames, node)
+    kind = JS.kind(node)
+    kind == K"quote" && return
+    is_nested_scope(node) && return
+    children = child_nodes(node)
+    isnothing(children) && return
+    if kind == K"const"
+        for declaration in children
+            collect_const_alias!(script, declaration)
+        end
+        return
+    end
+    for child in children
+        collect_const_aliases!(script, child)
+    end
+end
+
+# The loaded module an entry script's import path names whole; nothing for a path to a name inside a module.
+function script_path_module(modules::ReachModules, path_node)
+    dots, path = importpath_parts(path_node)
+    target = path_target(modules, nothing, dots, path)
+    isnothing(target) && return nothing
+    target.named
+end
+
+# A listed name's path in a `:` clause and the name it binds in the script: itself, or the name after its `as`.
+function listed_source_binding(item)
+    if JS.kind(item) == K"as"
+        renamed = renamed_parts(item)
+        return renamed.path, renamed.bound
+    end
+    _, path = importpath_parts(item)
+    bound = length(path) == 1 ? only(path) : nothing
+    path, bound
+end
+
+# The modules one clause binds in a script: a path naming a module whole binds its last name, or the name after
+# `as`, and `using` it brings its exports; a listed name binds when it names a module.
+function script_clause!(script::ScriptNames, modules::ReachModules, clause, line_kind)
+    kind = JS.kind(clause)
+    if kind == K"as"
+        renamed = renamed_parts(clause)
+        target = path_target(modules, nothing, renamed.dots, renamed.path)
+        isnothing(target) && return
+        named = target.named
+        isnothing(named) && return
+        isnothing(renamed.bound) && return
+        script.bound[renamed.bound] = named
+        return
+    end
+    if kind == K"importpath"
+        loaded = script_path_module(modules, clause)
+        isnothing(loaded) && return
+        _, path = importpath_parts(clause)
+        script.bound[last(path)] = loaded
+        if line_kind == K"using"
+            push!(script.used, loaded)
+        end
+        return
+    end
+    kind == K":" || return
+    children = child_nodes(clause)
+    base = script_path_module(modules, first(children))
+    isnothing(base) && return
+    for item in children[2:end]
+        path, bound = listed_source_binding(item)
+        length(path) == 1 || continue
+        isnothing(bound) && continue
+        member = bound_module(base, only(path))
+        if !isnothing(member)
+            script.bound[bound] = member
+        end
+    end
+end
+
+# The loaded top-level module a script's module block names, as a fixture package's spine read as a script does.
+function script_home(modules::ReachModules, tree)
+    block = tree.parent
+    isnothing(block) && return nothing
+    is_module_block(block) || return nothing
+    name = module_name(block)
+    isnothing(name) && return nothing
+    get(modules.top, name, nothing)
+end
+
+# The modules a script binds by name: Core and Base, as every module does, the package, and its own clauses.
+function script_names(tree, modules::ReachModules, home)
+    package = modules.package
+    bound = Dict{Symbol,Module}(:Core => Core, :Base => Base)
+    bound[nameof(package)] = package
+    script = ScriptNames(bound, Module[], home)
+    each_clause((clause, line_kind) -> script_clause!(script, modules, clause, line_kind), tree)
+    collect_const_aliases!(script, tree)
+    script
+end
+

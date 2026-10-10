@@ -20,6 +20,14 @@ struct FileNode
     bodies::Vector{MethodBody}   # every method this code writes, nested ones included, with the names each binds
 end
 
+# One piece of code outside the loaded modules: an entry script, or an extension Julia has not loaded.
+struct EntryCode
+    path::String          # an entry script's walked path, or an extension file's repo-relative path
+    owner::Symbol         # :Entry for an entry script; the extension's name for an unloaded extension
+    tree::JS.SyntaxNode   # the code
+    scan::FileScan        # what the one walk recorded over it, each qualifier resolved as the code binds it
+end
+
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
 struct SourceIndex
     repo::String                            # the root every path below is relative to
@@ -28,7 +36,7 @@ struct SourceIndex
     files::Vector{FileNode}                 # every module-owned source file
     refs::Vector{ModRef}                    # cross-module references, from the same parse
     external::Set{Symbol}                   # names referenced from entry dirs other than test/ and unloaded extensions
-    scripts::Vector{Pair{String,JS.SyntaxNode}}   # entry-dir files outside src/, by walked path: each code root
+    scripts::Vector{EntryCode}              # each code root of the entry-dir files outside src/ and of unloaded extensions
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
     missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
     nonliteral::Vector{Tuple{Symbol,String,Int}}      # include whose argument is not a string literal: owner, file, line
@@ -67,7 +75,7 @@ struct IndexBuild
     placed::Set{Tuple{Symbol,String}}                         # module and absolute path placed there: the revisit guard
     visited::Set{String}                                      # absolute paths any walk placed or the index took
     external::Set{Symbol}                                     # names referenced from entry dirs other than test/ and unloaded extensions
-    scripts::Vector{Pair{String,JS.SyntaxNode}}               # entry-dir files outside src/, by walked path: each code root
+    scripts::Vector{EntryCode}                                # code roots outside src/: entry dirs and unloaded extensions
 end
 
 # One module's load walk: the module, its rank, the directories its nested directory modules own, and how many of
@@ -136,7 +144,7 @@ function start_index(parses::Parses, src_root::AbstractString, dir2mod, package:
         Set{Tuple{Symbol,String}}(),
         Set{String}(),
         Set{Symbol}(),
-        Pair{String,JS.SyntaxNode}[],
+        EntryCode[],
     )
     for (dir, key) in dirs
         key === root && continue
@@ -300,27 +308,32 @@ end
 
 # A member read through a qualifier naming one of the package's modules, from where the code sits. Code this Julia
 # did not load, a splice, a macro's result or a head name its module does not bind may name one, so it counts.
-function reads_package_name(build::IndexBuild, home, read::QualifiedRead, no_locals)
+function reads_package_name(build::IndexBuild, home, read::NameRead)
+    isnothing(read.through) || return read.through in values(build.loaded)
     isnothing(home) && return true
     path = dotted_names(read.qualifier)
     isnothing(path) && return true
     head = first(path)
-    isdefined(home, head) || return true
-    through = resolve_loaded_module(read.qualifier, home, no_locals)
-    isnothing(through) && return false
-    through in values(build.loaded)
+    !isdefined(home, head)
 end
 
-# Each member read the package's own module qualifies joins the refs of the def that reads it.
-function file_member_reads!(build::IndexBuild, owner::Symbol, scan::FileScan)
-    home = get(build.loaded, owner, nothing)
-    # The walk filed only qualifiers whose head is no local, so resolution binds none.
-    no_locals = Set{Symbol}()
-    for read in scan.members
-        reads_package_name(build, home, read, no_locals) || continue
-        names = ref_set(scan, read.target)
-        push!(names, read.member)
+# Each name written joins its definition's refs, or modrefs outside any; signatures and export lists stay out. An
+# imported name and a type's own name root in modrefs: a method on either extends what dispatch reaches.
+function file_refs!(build::IndexBuild, home, scan::FileScan)
+    for read in scan.reads
+        read.in_signature && continue
+        read.in_export && continue
+        if is_member(read)
+            reads_package_name(build, home, read) || continue
+        end
+        names = scan.modrefs
+        if !isnothing(read.def)
+            names = get!(Set{Symbol}, scan.refs, read.def)
+        end
+        push!(names, read.name)
     end
+    union!(scan.modrefs, scan.imports)
+    union!(scan.modrefs, scan.types)
     scan
 end
 
@@ -328,11 +341,9 @@ function add_node!(build::IndexBuild, owner::Symbol, path, filerank, iswrapper, 
     rel = relpath(path, build.repo)
     name = basename(rel)
     modrank = module_rank(build, owner)
-    parsed = scan_tree(code)
-    scan = file_member_reads!(build, owner, parsed)
     home = get(build.loaded, owner, nothing)
-    reads = code_reads(code, home)
-    append!(scan.reads, reads)
+    walked = scan_tree(code, home)
+    scan = file_refs!(build, home, walked)
     bodies = method_bodies(code, rel, owner)
     node = FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code, bodies)
     push!(build.nodes, node)
@@ -417,7 +428,7 @@ end
 
 # An entry-dir file joins `scripts` unless the index holds it as source. Outside test/ its names join `external`, and
 # a parse failure is reported: it shrinks `external`, so a def used only from a script looks like dead code.
-function read_entry_file!(build::IndexBuild, path, is_test, scripted)
+function read_entry_file!(build::IndexBuild, modules::ReachModules, path, is_test, scripted)
     joined = isabspath(path) ? path : joinpath(build.repo, path)
     absolute = normpath(joined)
     tree = parsed_tree(build.parses, absolute)
@@ -426,22 +437,48 @@ function read_entry_file!(build::IndexBuild, path, is_test, scripted)
         is_test || push!(build.unparsed, (:Entry, rel))
         return
     end
-    roots = code_roots(tree)
+    codes = outside_codes(modules, path, :Entry, tree)
     if !is_test
-        for root in roots
-            all_symbols!(build.external, root)
+        for code in codes
+            add_external!(build, code)
         end
     end
     absolute in build.visited && return
     absolute in scripted && return
     push!(scripted, absolute)
-    for root in roots
-        push!(build.scripts, path => root)
+    append!(build.scripts, codes)
+end
+
+# Each code root of a file outside the loaded modules, walked once with the names the code itself binds.
+function outside_codes(modules::ReachModules, path, owner::Symbol, tree)
+    codes = EntryCode[]
+    for root in code_roots(tree)
+        home = script_home(modules, root)
+        names = script_names(root, modules, home)
+        scan = scan_tree(root, names)
+        push!(codes, EntryCode(path, owner, root, scan))
+    end
+    codes
+end
+
+# Every name outside code reads, a member's included, keeps a definition it names alive.
+function add_external!(build::IndexBuild, code::EntryCode)
+    for read in code.scan.reads
+        push!(build.external, read.name)
     end
 end
 
+# The loaded modules outside code resolves against: the package's, and every top-level module this Julia loaded.
+function outside_modules(build::IndexBuild)
+    loaded = collect(values(build.loaded))
+    tracked = Set{Module}(loaded)
+    by_key = copy(build.loaded)
+    top = top_modules()
+    ReachModules(by_key, tracked, build.package, Set{Module}(), top)
+end
+
 # Entry dirs stay unloaded and each file parses once; a file two listed dirs hold is one script.
-function read_entry_dirs!(build::IndexBuild, entry_dirs)
+function read_entry_dirs!(build::IndexBuild, modules::ReachModules, entry_dirs)
     scripted = Set{String}()
     for dir in entry_dirs
         isdir(dir) || continue
@@ -450,7 +487,7 @@ function read_entry_dirs!(build::IndexBuild, entry_dirs)
         for (folder, _, names) in walkdir(dir), name in names
             endswith(name, ".jl") || continue
             path = joinpath(folder, name)
-            read_entry_file!(build, path, is_test, scripted)
+            read_entry_file!(build, modules, path, is_test, scripted)
         end
     end
 end
@@ -464,9 +501,9 @@ function extension_of(path, directory)
     Symbol(stem)
 end
 
-# An extension Julia has not loaded is code outside the loaded modules, read as an entry script outside test/ is:
-# its names join `external`, so a definition only it reads stays live. What needs its module waits for the load.
-function read_unloaded_extensions!(build::IndexBuild)
+# An extension Julia has not loaded is code outside the loaded modules, read as an entry script outside test/ is,
+# under the extension's own name: its names join `external`, so a definition only it reads stays live.
+function read_unloaded_extensions!(build::IndexBuild, modules::ReachModules)
     joined = joinpath(build.repo, EXTENSION_DIR)
     directory = normpath(joined)
     isdir(directory) || return
@@ -475,16 +512,18 @@ function read_unloaded_extensions!(build::IndexBuild)
         found = joinpath(folder, name)
         path = normpath(found)
         path in build.visited && continue
+        owner = extension_of(path, directory)
+        rel = relpath(path, build.repo)
         tree = parsed_tree(build.parses, path)
         if isnothing(tree)
-            owner = extension_of(path, directory)
-            rel = relpath(path, build.repo)
             push!(build.unparsed, (owner, rel))
             continue
         end
-        for root in code_roots(tree)
-            all_symbols!(build.external, root)
+        codes = outside_codes(modules, rel, owner, tree)
+        for code in codes
+            add_external!(build, code)
         end
+        append!(build.scripts, codes)
     end
 end
 
@@ -512,8 +551,9 @@ function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; e
     index_placements!(build)
     add_loose_files!(build)
     add_refs!(build)
-    read_entry_dirs!(build, entry_dirs)
-    read_unloaded_extensions!(build)
+    modules = outside_modules(build)
+    read_entry_dirs!(build, modules, entry_dirs)
+    read_unloaded_extensions!(build, modules)
     source_index(build)
 end
 
