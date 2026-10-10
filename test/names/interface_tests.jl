@@ -260,5 +260,5 @@ end
     ])
     reached = ArchCheck.run(ReachesInternal(), ctx)
     reached_rows = Set((finding.symbol, finding.line) for finding in reached if finding.file == use_path)
-    @test reached_rows == Set([("Aa.g", 1), ("Aa.g", 2)])
+    @test reached_rows == Set([("PackagePath.Aa", 1), ("Aa.g", 1), ("Aa.g", 2)])
 end
