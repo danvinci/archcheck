@@ -2,7 +2,6 @@
 
 struct ModuleGraph
     rank::Dict{Symbol,Vector{Int}}  # module -> its load position in each enclosing module, outermost first
-    dir2mod::Dict{String,Symbol}    # src subdir -> module, nested modules by dotted key
     refs::Vector{ModRef}            # every cross-module reference in src/
 end
 
@@ -559,7 +558,7 @@ function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; e
     source_index(build)
 end
 
-build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.dir2mod, index.refs)
+build_module_graph(index::SourceIndex) = ModuleGraph(index.rank, index.refs)
 
 # The node naming what a call calls: its operator token, the member of a dotted name, a type application's type,
 # or the bare name. Every other identifier in the call is a value it passes.
