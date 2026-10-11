@@ -35,6 +35,14 @@ const SHARED_REF = load_package("SharedRef", """
     struct Sample
         amount::Float64
     end
+
+    # One caller per pair of bits values, so one workload holds every case apart.
+    same_struct(x, y) = (twin(x), twin(y))
+    signed_zeros(x, y) = (twin(x), twin(y))
+    payload_struct(x, y) = (twin(x), twin(y))
+    payload_floats(x, y) = (twin(x), twin(y))
+    copied_arrays(x, y) = (twin(x), twin(y))
+    swapped_arrays(x, y) = (twin(x), twin(y))
     """)
 
 const NESTED_REPEAT = load_package("NestedRepeat", """
@@ -240,36 +248,28 @@ end
 
 @testset "a bits value repeats when its bytes match, so signed zeros and NaN payloads stay apart" begin
     mod = SHARED_REF.pkg
-    checks = (Rebuilds(),)
-    probes = Probes(; functions = (mod.twin, mod.call_both), slow_s = 0.0)
+    callers = (mod.same_struct, mod.signed_zeros, mod.payload_struct, mod.payload_floats, mod.copied_arrays,
+               mod.swapped_arrays)
+    probes = Probes(; functions = (mod.twin, callers...), slow_s = 0.0)
     same = mod.Sample(1.0)
-    repeated = () -> mod.call_both(mod.twin, mod.twin, same, same)
-    fired = gate_findings(mod; checks, probes, workload = repeated)
-    rows = evidence_rows(fired, :function, :caller, :repeats)
-    @test rows == [(:rebuild, "twin", "twin", "call_both", "1")]
-
     negative = mod.Sample(-0.0)
     positive = mod.Sample(0.0)
-    signed = () -> mod.call_both(mod.twin, mod.twin, negative, positive)
-    signed_quiet = gate_findings(mod; checks, probes, workload = signed)
-    @test isempty(signed_quiet)
-
     low_payload = reinterpret(Float64, 0x7ff8000000000001)
     high_payload = reinterpret(Float64, 0x7ff8000000000002)
     low = mod.Sample(low_payload)
     high = mod.Sample(high_payload)
-    payloads = () -> mod.call_both(mod.twin, mod.twin, low, high)
-    payload_quiet = gate_findings(mod; checks, probes, workload = payloads)
-    @test isempty(payload_quiet)
-
     held = [same, negative]
     copied = [mod.Sample(1.0), mod.Sample(-0.0)]
     swapped = [negative, same]
-    matched = () -> mod.call_both(mod.twin, mod.twin, held, copied)
-    matched_fired = gate_findings(mod; checks, probes, workload = matched)
-    matched_rows = evidence_rows(matched_fired, :function, :caller, :repeats)
-    @test matched_rows == [(:rebuild, "twin", "twin", "call_both", "1")]
-    reordered = () -> mod.call_both(mod.twin, mod.twin, held, swapped)
-    reordered_quiet = gate_findings(mod; checks, probes, workload = reordered)
-    @test isempty(reordered_quiet)
+    pairs = function ()
+        mod.same_struct(same, same)
+        mod.signed_zeros(negative, positive)
+        mod.payload_struct(low, high)
+        mod.payload_floats([low_payload], [high_payload])
+        mod.copied_arrays(held, copied)
+        mod.swapped_arrays(held, swapped)
+    end
+    fired = gate_findings(mod; checks = (Rebuilds(),), probes, workload = pairs)
+    rows = evidence_rows(fired, :caller, :repeats)
+    @test rows == [(:rebuild, "twin", "copied_arrays", "1"), (:rebuild, "twin", "same_struct", "1")]
 end

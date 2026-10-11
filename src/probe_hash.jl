@@ -25,9 +25,9 @@ function hash_value(@nospecialize(value), seed::UInt, memo, depth::Int)
     result
 end
 
-# Base's own leaf values, whose `hash` runs no package method. A package's number type is hashed by its content,
-# since its `hash` may call the probed code or rest on methods the type leaves undefined.
-const HASHED_LEAVES = Union{Base.BitInteger,Base.IEEEFloat,BigInt,BigFloat,Symbol,String,Char,Nothing,Bool}
+# Base's own leaf values that hold no bits, whose `hash` runs no package method. A bits value hashes by its bytes
+# below, so a float's NaN payload and sign count; a package's number type is hashed by its content.
+const HASHED_LEAVES = Union{BigInt,BigFloat,Symbol,String}
 
 function hash_content(@nospecialize(value::HASHED_LEAVES), seed::UInt, _memo, _depth::Int)
     hash(value, seed)
