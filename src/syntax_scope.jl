@@ -20,6 +20,15 @@ function is_eval_macro(node)
     macro_call_name(node) === Symbol("@eval")
 end
 
+# A `name=value` child of a call or a broadcast is a keyword argument. The name binds nothing in the caller.
+function is_call_keyword(node)
+    JS.kind(node) == K"=" || return false
+    parent = node.parent
+    isnothing(parent) && return false
+    parent_kind = JS.kind(parent)
+    parent_kind == K"call" || parent_kind == K"dotcall"
+end
+
 # Assignments and nested method names in this scope. A nested scope keeps its own names, and code `@eval` runs
 # binds globals.
 function collect_scope_assigns!(bound, node)
@@ -34,6 +43,11 @@ function collect_scope_assigns!(bound, node)
     children = child_nodes(node)
     if kind == K"="
         child_count(children) == 0 && return
+        if is_call_keyword(node)
+            length(children) < 2 && return
+            collect_scope_assigns!(bound, children[2])
+            return
+        end
         _argname!(bound, children[1])
         if length(children) >= 2
             collect_scope_assigns!(bound, children[2])

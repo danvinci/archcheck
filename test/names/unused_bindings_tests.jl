@@ -66,6 +66,11 @@ const UNUSED_REACH = load_package("UnusedReach", """
         spare = 1
         :(@symbolic 1)
     end
+    function pretty(xs)
+        spare = 1
+        round.(xs, sigdigits=3)
+        round(xs, digits=2)
+    end
     module Sub
     macro void()
         nothing
@@ -96,9 +101,12 @@ const UNUSED_REACH = load_package("UnusedReach", """
         (:unused_local, "assigns:step", 9),
         (:unused_local, "bumps:counter", 51),
         (:unused_local, "picked:kind", 18),
+        (:unused_local, "pretty:spare", 67),
         (:unused_local, "quoted:spare", 63),
         (:unused_local, "shadows:kept", 45),
     ]
+    @test !any(finding -> endswith(finding.symbol, ":sigdigits"), found)
+    @test !any(finding -> endswith(finding.symbol, ":digits"), found)
     @test rows == expected
     picked = only(f for f in found if f.symbol == "picked:kind")
     @test ev(picked, :runs_at) == "compile time"
