@@ -20,6 +20,26 @@ const SECOND_PRODUCER = load_package("SecondProducer", """
     function mirror(knots)
         1 .- reverse(knots)
     end
+    struct Part
+        n::Int
+    end
+    struct Whole
+        part::Part
+    end
+    Whole(label::String) = throw(ArgumentError(label))
+    struct Oops <: Exception end
+    function make_whole(n::Int)
+        n < 0 && throw(Oops())
+        Whole(Part(n))
+    end
+    fresh_part(n::Int) = Part(n)
+    fail(n::Int) = throw(Oops())
+    module Other
+    struct Whole
+        label::String
+    end
+    named(label::String) = Whole(label)
+    end
     """)
 
 const QUIET_PRODUCER = load_package("QuietProducer", """
@@ -104,6 +124,20 @@ const KEY_CASES = load_package("KeyCases", """
     @memoize Dict function typed_cache(x::Int)
         x + 1
     end
+    struct Poly{T<:Integer}
+        sides::T
+    end
+    corners(poly::Poly) = poly.sides
+    corners_key(poly::Poly) = poly.sides
+    struct Ends
+        first::Int
+        last::Int
+    end
+    function spread(values::Vector{U}) where {U<:Integer}
+        ends = Ends(first(values), last(values))
+        ends.first + zero(U)
+    end
+    spread_key(values::Vector) = length(values)
     """)
 
 const HASHED_BOX = load_package("HashedBox", """
@@ -171,6 +205,12 @@ end
     end
 end
 
+@testset "only another builder of the returned type is a second producer" begin
+    declared = (Derived(SECOND_PRODUCER.pkg.make_whole),)
+    found = declared_findings(OneProducer(), SECOND_PRODUCER, declared)
+    @test isempty(found)
+end
+
 @testset "one producer, a bare formula, and a second method of the producer stay quiet" begin
     declared = (Derived(QUIET_PRODUCER.pkg.make_value),)
     found = declared_findings(OneProducer(), QUIET_PRODUCER, declared)
@@ -225,6 +265,21 @@ end
     hashed_declared = (Derived(HASHED_BOX.pkg.boxed; key = HASHED_BOX.pkg.box_key),)
     hashed_found = declared_findings(CacheKeys(), HASHED_BOX, hashed_declared)
     @test isempty(hashed_found)
+end
+
+@testset "a key whose every concrete call returns an isbits value is isbits" begin
+    mod = KEY_CASES.pkg
+    declared = (Derived(mod.corners; key = mod.corners_key),)
+    found = declared_findings(CacheKeys(), KEY_CASES, declared)
+    @test isempty(found)
+end
+
+@testset "a type parameter and a local's field are no input the key omits" begin
+    mod = KEY_CASES.pkg
+    declared = (Derived(mod.spread; key = mod.spread_key),)
+    found = declared_findings(CacheKeys(), KEY_CASES, declared)
+    omitted = [ev(f, :name) for f in found if ev(f, :problem) == "omitted_read"]
+    @test isempty(omitted)
 end
 
 @testset "a producer called outside the method that writes the store is unkept" begin

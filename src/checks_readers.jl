@@ -1,5 +1,5 @@
 # A declared derived value reaches only its readers and its converters: a wrapper struct on the typed code of the
-# method graph, a bare number on the parse inside one method, and the wrapper's fields and constructor on the parse.
+# method graph, any other value on the parse inside one method, and the wrapper's fields and constructor on the parse.
 
 """Runs in `CHECKS`. With no declared derived value it is quiet. A declared value reaches a function outside its readers and converters. A wrapper value needs `entries` on the gate."""
 struct DerivedReaders <: Check end
@@ -17,7 +17,7 @@ struct DerivedItem{P,R<:Tuple,V<:Tuple}
     producer::P                         # function that computes the value
     readers::R                          # functions allowed to receive the value
     converters::V                       # functions allowed to convert the value
-    wrapper::Union{Nothing,DataType}    # struct returned; nothing for a number
+    wrapper::Union{Nothing,DataType}    # package struct returned; nothing for a value the parse follows
     home::Symbol                        # module key of the producer's module
     label::String                       # producer name recorded in evidence
     findings::Vector{Finding}           # findings for this value
@@ -42,10 +42,9 @@ end
 
 function run(::DerivedReaders, ctx)
     findings = Finding[]
+    modules = Set{Module}(package_modules(ctx))
     for derived in ctx.derived
-        shape = producer_shape(derived.producer)
-        wrapper = shape.wrapper
-        isnothing(wrapper) && !shape.numeric && continue
+        wrapper = producer_wrapper(derived.producer, modules)
         if !isnothing(wrapper) && isnothing(ctx.methods)
             producer_name = nameof(derived.producer)
             throw(ArgumentError("DerivedReaders has no method graph entries for $producer_name"))
@@ -58,31 +57,16 @@ function run(::DerivedReaders, ctx)
     findings
 end
 
-function producer_shape(producer)
-    returns = inferred_return_types(producer)
-    numeric = false
-    for candidate in returns
-        for member in union_members(candidate)
-            body = declared_datatype(member)
-            if struct_body(body)
-                return (wrapper = body, numeric = false)
-            end
-            numeric = numeric || number_body(body)
-        end
+# A value of a type the package defines and only its producer builds names where it came from; a number or a foreign
+# type says nothing of that, so the parse follows the locals the producer's calls assign instead.
+function producer_wrapper(producer, modules)
+    for body in returned_structs(producer, modules)
+        isconcretetype(body) || continue
+        body <: Number && continue
+        return body
     end
-    (wrapper = nothing, numeric = numeric)
+    nothing
 end
-
-struct_body(@nospecialize(_body)) = false
-
-function struct_body(body::DataType)
-    isconcretetype(body) || return false
-    isstructtype(body) || return false
-    !(body <: Number)
-end
-
-number_body(@nospecialize(_body)) = false
-number_body(body::DataType) = body <: Number
 
 function derived_item(derived, wrapper)
     producer = derived.producer
@@ -216,21 +200,6 @@ function note_limit!(walk, node, callee)
     place!(walk, node, callee, "parse", detail, walk.limits)
 end
 
-# The value a written callee names where the code sits: its qualifier's module, then the callee bound there.
-function resolve_name(home, written)
-    isnothing(home) && return nothing
-    isnothing(written) && return nothing
-    holder = home
-    qualifier = written.qualifier
-    if !isempty(qualifier)
-        segments = key_segments(Symbol(qualifier))
-        holder = path_module(home, segments)
-    end
-    isnothing(holder) && return nothing
-    isdefined(holder, written.callee) || return nothing
-    getfield(holder, written.callee)
-end
-
 function read_source!(item, ctx)
     for file in ctx.index.files
         home = loaded_module(ctx.root, file.mod)
@@ -285,16 +254,10 @@ function symbol_held(walk, node, held::HeldLocals)
     !isnothing(binding) && binding in held
 end
 
-function callee_of(node)
-    children = child_nodes(node)
-    child_count(children) == 0 && return nothing
-    name_of_head(children[1])
-end
-
 function keeps_held(walk, rhs, held)
     rhs.val isa Symbol && return symbol_held(walk, rhs, held)
     JS.kind(rhs) == K"call" || return false
-    written = callee_of(rhs)
+    written = called_name(rhs)
     isnothing(written) && return false
     resolved = resolve_name(walk.home, written)
     resolved === walk.item.producer
@@ -402,7 +365,7 @@ function walk_broadcast(walk, node, children, held)
 end
 
 function walk_call(walk, node, held)
-    written = callee_of(node)
+    written = called_name(node)
     resolved = resolve_name(walk.home, written)
     handled = note_struct_call!(walk, node, written, held)
     bridged = false

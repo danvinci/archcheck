@@ -65,25 +65,23 @@ function function_forms(index, recorded, fn)
     found
 end
 
-function bare_name(node)
-    value = node.val
-    value isa Symbol && return value
-    children = child_nodes(node)
-    child_count(children) == 0 && return nothing
-    kind = JS.kind(node)
-    if kind == K"."
-        member = last(children)
-        member_name = member.val
-        member_name isa Symbol && return member_name
-        return bare_name(member)
+"""The structs a package module defines among the types inference gives the producer at each method's declared
+signature."""
+function returned_structs(producer, modules)
+    found = DataType[]
+    for result in inferred_return_types(producer)
+        for member in union_members(result)
+            body = declared_datatype(member)
+            isnothing(body) && continue
+            isstructtype(body) || continue
+            parentmodule(body) in modules || continue
+            push!(found, body)
+        end
     end
-    if kind == K"curly" || kind == K"<:" || kind == K"where"
-        head = first(children)
-        return bare_name(head)
-    end
-    nothing
+    found
 end
 
+# The type node a method's return annotation writes; nothing without one.
 function annotated_return(form)
     children = child_nodes(form)
     child_count(children) == 0 && return nothing
@@ -91,73 +89,90 @@ function annotated_return(form)
     JS.kind(signature) == K"::" || return nothing
     parts = child_nodes(signature)
     isnothing(parts) && return nothing
-    bare_name(last(parts))
+    last(parts)
 end
 
-# A return annotation names the type. With no annotation, the type is a package type the method constructs.
-function second_producer_findings(ctx)
-    forms = index_forms(ctx.index)
-    types = Set{Symbol}()
-    for file in ctx.index.files
-        union!(types, file.scan.types)
+# The name of the type a type node writes in `home`, its parameters left off; nothing when it names no type there.
+function written_type_name(home, node)
+    head = node
+    while JS.kind(head) == K"curly"
+        head = first(child_nodes(head))
     end
-    found = Finding[]
+    written = written_type(home, head)
+    body = declared_datatype(written)
+    isnothing(body) && return nothing
+    body.name
+end
+
+# The value a written callee names where the code sits: its qualifier's module, then the callee bound there.
+function resolve_name(home, written)
+    isnothing(home) && return nothing
+    isnothing(written) && return nothing
+    holder = home
+    qualifier = written.qualifier
+    if !isempty(qualifier)
+        segments = key_segments(Symbol(qualifier))
+        holder = path_module(home, segments)
+    end
+    isnothing(holder) && return nothing
+    isdefined(holder, written.callee) || return nothing
+    getfield(holder, written.callee)
+end
+
+# A method builds the value when its return annotation names a returned struct or it calls one's constructor. Each
+# name resolves in the module the method's file loads into, so a type of the same name elsewhere is another type.
+function builds_returned(file, site, form, home, returned)
+    annotation = annotated_return(form)
+    if !isnothing(annotation)
+        named = written_type_name(home, annotation)
+        !isnothing(named) && named in returned && return true
+    end
+    calls = get(file.scan.callsites, site, CallSite[])
+    for call in calls
+        called = resolve_name(home, call)
+        called isa Type || continue
+        body = declared_datatype(called)
+        isnothing(body) && continue
+        body.name in returned && return true
+    end
+    false
+end
+
+function second_producer(file, site, form, producer_name, owned_labels)
+    line = source_line(form)
+    label = string(site.name, "@", line)
+    labels = vcat(owned_labels, label)
+    sort!(labels)
+    unique!(labels)
+    joined = join(labels, " ")
+    symbol = string(site.name)
+    evidence = Pair{Symbol,String}[:derived => producer_name, :producers => joined]
     detail = "a second method constructs the derived value"
+    Finding(file.mod, :second_producer, file.path, symbol, line, detail, evidence)
+end
+
+# The derived value is each struct a package module defines that the producer returns; an exception it throws, a
+# part it builds and a foreign result are none.
+function second_producer_findings(ctx)
+    modules = Set{Module}(package_modules(ctx))
+    found = Finding[]
     for declared in ctx.derived
-        owned = function_forms(ctx.index, ctx.recorded, declared.producer)
-        annotated = Set{Symbol}()
-        constructed = Set{Symbol}()
-        for placed in owned
-            named = annotated_return(placed.form)
-            isnothing(named) || push!(annotated, named)
-            if placed.site.name in types
-                push!(constructed, placed.site.name)
-            end
-            calls = get(placed.file.scan.callsites, placed.site, CallSite[])
-            for call in calls
-                call.callee in types || continue
-                push!(constructed, call.callee)
-            end
-        end
-        returned = constructed
-        if !isempty(annotated)
-            returned = annotated
-        end
+        structs = returned_structs(declared.producer, modules)
+        returned = Set{Core.TypeName}(body.name for body in structs)
         isempty(returned) && continue
-        owned_nodes = Set(placed.form for placed in owned)
+        owned = function_forms(ctx.index, ctx.recorded, declared.producer)
+        owned_nodes = Base.IdSet{JS.SyntaxNode}(placed.form for placed in owned)
+        owned_labels = [string(placed.site.name, "@", source_line(placed.form)) for placed in owned]
         producer_name = string(nameof(declared.producer))
-        for placed in forms
-            placed.form in owned_nodes && continue
-            named = annotated_return(placed.form)
-            matched = false
-            if !isnothing(named) && named in returned
-                matched = true
-            elseif placed.site.name in returned
-                matched = true
-            else
-                calls = get(placed.file.scan.callsites, placed.site, CallSite[])
-                for call in calls
-                    call.callee in returned || continue
-                    matched = true
-                    break
-                end
+        for file in ctx.index.files
+            home = loaded_module(ctx.root, file.mod)
+            isnothing(home) && continue
+            for (site, form) in file.scan.forms
+                form in owned_nodes && continue
+                builds_returned(file, site, form, home, returned) || continue
+                finding = second_producer(file, site, form, producer_name, owned_labels)
+                push!(found, finding)
             end
-            matched || continue
-            labels = String[]
-            for producer in owned
-                label = string(producer.site.name, "@", source_line(producer.form))
-                push!(labels, label)
-            end
-            line = source_line(placed.form)
-            second_label = string(placed.site.name, "@", line)
-            push!(labels, second_label)
-            sort!(labels)
-            unique!(labels)
-            joined = join(labels, " ")
-            symbol = string(placed.site.name)
-            evidence = Pair{Symbol,String}[:derived => producer_name, :producers => joined]
-            finding = Finding(placed.file.mod, :second_producer, placed.file.path, symbol, line, detail, evidence)
-            push!(found, finding)
         end
     end
     found
@@ -246,18 +261,53 @@ function note_identity_cache!(problems, placed_forms, pkg)
     producer_memoized(placed_forms) && push!(problems, "identity_cache")
 end
 
-function collect_read_names!(names, args, root)
+function member_name(node)
+    JS.kind(node) == K"." || return nothing
+    children = child_nodes(node)
+    child_count(children) == 2 || return nothing
+    member = children[2].val
+    member isa Symbol ? member : nothing
+end
+
+function note_members!(names, root)
     for node in walk_nodes(root)
+        member = member_name(node)
+        isnothing(member) || push!(names, member)
+    end
+end
+
+# The declaring identifiers of the arguments a method's signature binds; its `where` variables are no argument.
+function argument_identifiers(form)
+    found = Base.IdSet{JS.SyntaxNode}()
+    children = child_nodes(form)
+    child_count(children) == 0 && return found
+    parts = call_parts(children[1])
+    isnothing(parts) && return found
+    bound = call_argnames!(Bindings(), parts)
+    union!(found, values(bound.declared))
+    found
+end
+
+function is_argument(scan, node, arguments)
+    binding = local_binding(scan, node)
+    !isnothing(binding) && binding in arguments
+end
+
+# The inputs a producer's method reads: each argument, and each member read along a path that starts at one.
+function note_inputs!(reads, placed)
+    body = method_body(placed.form)
+    isnothing(body) && return
+    arguments = argument_identifiers(placed.form)
+    scan = placed.file.scan
+    for node in walk_nodes(body)
         value = node.val
-        if !isnothing(args) && value isa Symbol && value in args
-            push!(names, value)
+        if value isa Symbol && is_argument(scan, node, arguments)
+            push!(reads, value)
         end
-        JS.kind(node) == K"." || continue
-        children = child_nodes(node)
-        child_count(children) == 2 || continue
-        member = children[2].val
-        member isa Symbol || continue
-        push!(names, member)
+        member = member_name(node)
+        isnothing(member) && continue
+        root = path_root(node)
+        is_argument(scan, root, arguments) && push!(reads, member)
     end
 end
 
@@ -270,11 +320,7 @@ end
 function omitted_names(producer_forms, key_forms)
     reads = Set{Symbol}()
     for placed in producer_forms
-        body = method_body(placed.form)
-        isnothing(body) && continue
-        args = signature_names(placed.form)
-        arg_set = Set(args)
-        collect_read_names!(reads, arg_set, body)
+        note_inputs!(reads, placed)
     end
     taken = Set{Symbol}()
     for placed in key_forms
@@ -282,20 +328,21 @@ function omitted_names(producer_forms, key_forms)
         union!(taken, args)
         body = method_body(placed.form)
         isnothing(body) && continue
-        collect_read_names!(taken, nothing, body)
+        note_members!(taken, body)
     end
     unread = setdiff(reads, taken)
     sort!(collect(unread))
 end
 
-# An isbits address still compares by identity. A content key is an isbits value other than an address.
+# An isbits address still compares by identity, so a content key returns an isbits value other than an address. Only
+# a concrete result names what the key returns: an abstract one, or the `Union{}` of a method that throws, names none.
 function key_returns_bits(key)
-    results = inferred_return_types(key)
-    isempty(results) && return true
-    for result in results
-        result isa DataType || return false
-        result <: Ptr && return false
-        isbitstype(result) || return false
+    for result in inferred_return_types(key)
+        for member in union_members(result)
+            isconcretetype(member) || continue
+            member <: Ptr && return false
+            isbitstype(member) || return false
+        end
     end
     true
 end

@@ -47,6 +47,15 @@ const WRAPPED_BOUND = load_package("WrappedBound", """
     using ..WrappedBound: Bound
     consume(x::Bound) = x.meters
     end
+    function lookup_table(n::Int)
+        table = IdDict{Any,Any}()
+        table[n] = n
+        table
+    end
+    function unrelated(n::Int)
+        other = IdDict{Any,Any}()
+        length(other) + n
+    end
     """)
 
 const BARE_BOUND = load_package("BareBound", """
@@ -92,6 +101,10 @@ const BARE_BOUND = load_package("BareBound", """
         bound = lower_bound(a, b)
         reader = bound -> solver(bound)
         return bound
+    end
+    function scaled(a::Float64, b::Float64)
+        bound = lower_bound(a, b)
+        bound * a
     end
     """)
 
@@ -198,6 +211,14 @@ end
     @test occursin("entries", caught.msg)
 end
 
+@testset "a value of a foreign type is not the producer's result" begin
+    pkg = WRAPPED_BOUND.pkg
+    declared = (Derived(pkg.lookup_table),)
+    entries = ((pkg.unrelated, Tuple{Int}),)
+    found = unlisted_findings(WRAPPED_BOUND; entries, derived = declared)
+    @test isempty(found)
+end
+
 @testset "typed code comes from the reached method, not a narrower one its signature admits" begin
     pkg = NARROW_METHOD.pkg
     declared = (Derived(pkg.distance; readers = (pkg.consume,)),)
@@ -218,6 +239,7 @@ end
         (:unlisted_reader, "broadcasted", "broadcast", "parse", "lower_bound"),
         (:unlisted_reader, "leaked", "solver", "parse", "lower_bound"),
         (:unlisted_reader, "returned", "return", "parse", "lower_bound"),
+        (:unlisted_reader, "scaled", "*", "parse", "lower_bound"),
         (:unlisted_reader, "shadowed", "return", "parse", "lower_bound"),
         (:unlisted_reader, "splatted", "splat", "parse", "lower_bound"),
         (:unlisted_reader, "stored", "field", "parse", "lower_bound"),
