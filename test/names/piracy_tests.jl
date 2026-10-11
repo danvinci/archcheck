@@ -8,6 +8,12 @@ using .SibB
 Base.length(::SibB.Twig) = 2
 SibA.spread(x::String; pad = 0) = x
 glue(x::Int) = x
+struct Span end
+Base.similar(xs::Array, ::Type{Union{Span, Missing}}) = xs
+Base.similar(::Type{T}, ::Base.RefValue{Symbol}) where {T<:Array{Union{Span, Missing}}} = T
+Base.similar(x::Union{Span, Int}, ::Base.RefValue{Symbol}) = x
+Base.similar(::Type{T}, ::Base.RefValue{Missing}) where {T<:Union{Span, Int}} = T
+Base.similar(::Type{Union{Int, Missing}}, ::Base.RefValue{Missing}) = Int
 include("../ext/GlueExt.jl")
 """, [
     "../ext/GlueExt.jl" => """
@@ -46,6 +52,15 @@ const FRESH_SCOPE = Module(:FreshScope)
 
 function method_signature(parts...)
     signature = Tuple{parts...}
+    context = (:module => FRESH_SCOPE, :compact => false)
+    sprint(show, signature; context)
+end
+
+# A where-bound signature, as the method table stores it: the variable outside the tuple.
+function where_signature(func, bound, argument)
+    var = TypeVar(:T, bound)
+    body = Tuple{typeof(func), Type{var}, argument}
+    signature = UnionAll(var, body)
     context = (:module => FRESH_SCOPE, :compact => false)
     sprint(show, signature; context)
 end
@@ -94,11 +109,28 @@ end
     on_minus = method_signature(typeof(-), reference, reference)
     @test !((extension, on_glue) in flagged)
     @test (extension, on_minus) in flagged
-    @test length(found) == 9
+
+    span = pkg.Span
+    on_type_union = method_signature(typeof(similar), Array, Type{Union{span, Missing}})
+    on_bare_union = method_signature(typeof(similar), Union{span, Int}, Base.RefValue{Symbol})
+    on_foreign_type = method_signature(typeof(similar), Type{Union{Int, Missing}}, Base.RefValue{Missing})
+    array_bound = Array{Union{span, Missing}}
+    on_array_bound = where_signature(similar, array_bound, Base.RefValue{Symbol})
+    union_bound = Union{span, Int}
+    on_union_bound = where_signature(similar, union_bound, Base.RefValue{Missing})
+    @test !((root, on_type_union) in flagged)
+    @test !((root, on_array_bound) in flagged)
+    @test (root, on_bare_union) in flagged
+    @test (root, on_union_bound) in flagged
+    @test (root, on_foreign_type) in flagged
+    @test length(found) == 12
 
     package_found = ArchCheck.run(ModulePiracy(), ctx)
     package_flagged = Set((finding.mod, ev(finding, :signature)) for finding in package_found)
-    @test package_flagged == Set([(sib_b, on_base), (extension, on_minus)])
+    @test package_flagged == Set([
+        (sib_b, on_base), (extension, on_minus),
+        (root, on_bare_union), (root, on_union_bound), (root, on_foreign_type),
+    ])
 
     by_signature = Dict(ev(finding, :signature) => finding for finding in found)
     leaf_finding = by_signature[on_leaf]

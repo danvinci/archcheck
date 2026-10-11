@@ -1,42 +1,51 @@
 # A method whose function and every argument type sit outside its owner: the package, or the defining module, with
 # an extension owning what the root owns. An owner's subtree is every module whose full name starts with its own.
 
+# How a union counts. A value may hold any member, so one foreign member claims it: Union{Owned,Int} claims Int as
+# well. A type object names one type, foreign only when every member is.
+struct ValueUnion end
+struct TypeObjectUnion end
+
 # A value parameter stands for its type. A Symbol parameter belongs to nobody, so it counts as owned.
-is_foreign(@nospecialize(x), owns) = is_foreign(typeof(x), owns)
-is_foreign(::Symbol, _owns) = false
-is_foreign(@nospecialize(typevar::TypeVar), owns) = is_foreign(typevar.ub, owns)
-is_foreign(@nospecialize(vararg::Core.TypeofVararg), owns) = is_foreign(vararg.T, owns)
+is_foreign(@nospecialize(x), owns, rule = ValueUnion()) = is_foreign(typeof(x), owns, rule)
+is_foreign(::Symbol, _owns, _rule) = false
+is_foreign(@nospecialize(vararg::Core.TypeofVararg), owns, rule) = is_foreign(vararg.T, owns, rule)
+
+# A variable may stand for any type below its bound, so its bound is judged as a value.
+is_foreign(@nospecialize(typevar::TypeVar), owns, _rule) = is_foreign(typevar.ub, owns, ValueUnion())
 
 # A UnionAll is foreign when its body and its bound variable are both foreign.
-function is_foreign(@nospecialize(unionall::UnionAll), owns)
-    body_foreign = is_foreign(unionall.body, owns)
-    body_foreign && is_foreign(unionall.var, owns)
+function is_foreign(@nospecialize(unionall::UnionAll), owns, rule)
+    body_foreign = is_foreign(unionall.body, owns, rule)
+    body_foreign && is_foreign(unionall.var, owns, rule)
 end
 
-function any_member_foreign(members, owns)
-    for member in members
-        is_foreign(member, owns) && return true
+function is_foreign(@nospecialize(union_type::Union), owns, rule)
+    members = union_members(union_type)
+    union_foreign(members, owns, rule)
+end
+
+union_foreign(members, owns, rule::ValueUnion) = any_foreign(members, owns, rule)
+union_foreign(members, owns, rule::TypeObjectUnion) = all_foreign(members, owns, rule)
+
+# Type{T} belongs where T does, and names one type. Any other type is foreign when its module and its parameters are.
+function is_foreign(@nospecialize(datatype::DataType), owns, rule)
+    held = type_object_held(datatype)
+    isnothing(held) || return is_foreign(held, owns, TypeObjectUnion())
+    owns(parentmodule(datatype)) && return false
+    all_foreign(datatype.parameters, owns, rule)
+end
+
+function any_foreign(types, owns, rule)
+    for type in types
+        is_foreign(type, owns, rule) && return true
     end
     false
 end
 
-# One foreign member makes a Union foreign: Union{Owned,Int} claims Int as well.
-function is_foreign(@nospecialize(union_type::Union), owns)
-    members = union_members(union_type)
-    any_member_foreign(members, owns)
-end
-
-# Type{T} belongs where T does. Any other type is foreign when its module and its parameters are.
-function is_foreign(@nospecialize(datatype::DataType), owns)
-    held = type_object_held(datatype)
-    isnothing(held) || return is_foreign(held, owns)
-    owns(parentmodule(datatype)) && return false
-    all_foreign(datatype.parameters, owns)
-end
-
-function all_foreign(types, owns)
+function all_foreign(types, owns, rule = ValueUnion())
     for type in types
-        is_foreign(type, owns) || return false
+        is_foreign(type, owns, rule) || return false
     end
     true
 end
