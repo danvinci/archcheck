@@ -104,15 +104,20 @@ function foreign_macro_calls!(calls, node)
     calls
 end
 
+# The process's stdout and stderr are one pair every task shares, so one expansion at a time swaps them.
+const EXPANSION_LOCK = ReentrantLock()
+
 # The code `macroexpand` makes of a call in `home`, as `Some`, since a macro may expand to `nothing`; nothing when the
 # package's macro throws. What it prints is discarded.
 function macro_expansion(home::Module, call)
     expression = Expr(call)
     try
-        redirect_stdout(devnull) do
-            redirect_stderr(devnull) do
-                expanded = macroexpand(home, expression)
-                Some(expanded)
+        lock(EXPANSION_LOCK) do
+            redirect_stdout(devnull) do
+                redirect_stderr(devnull) do
+                    expanded = macroexpand(home, expression)
+                    Some(expanded)
+                end
             end
         end
     catch failure

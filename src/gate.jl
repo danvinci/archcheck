@@ -50,7 +50,7 @@ Base.@nospecializeinfer function run_gate(pkg::Module, src::String, entry_dirs::
         throw(ArgumentError("probes record the calls a workload makes, and $(typeof(workload)) ran before they were armed"))
     end
     parsed = Context(pkg; src, entry_dirs, derived)   # the one parse, src/ and entry dirs
-    findings = run_checks(parsed, static)
+    findings = run_static_checks(parsed, static)
     # The walk makes a specialization of each method it walks, so it waits until the workload's reach is read.
     # Restored probes define methods after this call's world began.
     unwalked = parsed

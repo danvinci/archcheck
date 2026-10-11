@@ -90,17 +90,34 @@ function run end
 phase(::Check) = :static
 
 # A finding's kind must be one its check declares, or the gate has no severity for it.
+function declared_findings(check, found)
+    declared = Set(first(pair) for pair in kinds(check))
+    stray = Set(f.kind for f in found if !(f.kind in declared))
+    if !isempty(stray)
+        listed = sort!(collect(stray))
+        throw(ArgumentError("$(typeof(check)) emits undeclared kinds $listed"))
+    end
+    found
+end
+
 function run_checks(ctx, checks)
     findings = Finding[]
     for check in checks
         found = run(check, ctx)
-        declared = Set(first(pair) for pair in kinds(check))
-        stray = Set(f.kind for f in found if !(f.kind in declared))
-        if !isempty(stray)
-            listed = sort!(collect(stray))
-            throw(ArgumentError("$(typeof(check)) emits undeclared kinds $listed"))
-        end
-        append!(findings, found)
+        declared = declared_findings(check, found)
+        append!(findings, declared)
+    end
+    findings
+end
+
+# The static checks only read the finished `Context`, so with more than one thread each runs as its own task; their
+# findings join in the checks' order.
+function run_static_checks(ctx, checks)
+    results = ordered_results(run, Any, checks, ctx)
+    findings = Finding[]
+    for (check, found) in zip(checks, results)
+        declared = declared_findings(check, found)
+        append!(findings, declared)
     end
     findings
 end
