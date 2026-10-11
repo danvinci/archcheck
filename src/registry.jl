@@ -187,10 +187,10 @@ struct ForeignFields <: Check end
 """Runs in `CHECKS`. A runtime type test on a method's own parameter picks a path."""
 struct TypeBranches <: Check end
 
-# Repo-relative path of each file a method in `defined` records. Julia records the file because loading included it.
-function loaded_source_files(defined, repo)
+# Repo-relative path of each file a method in `loaded` records. Julia records the file because loading included it.
+function loaded_source_files(loaded, repo)
     paths = Set{String}()
-    for method in defined
+    for method in loaded
         site = method_site(method, repo)
         path = first(site)
         push!(paths, normpath(path))
@@ -200,7 +200,8 @@ end
 
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.
 function run(::Corpus, ctx)
-    recorded = loaded_source_files(ctx.defined, ctx.index.repo)
+    recording = vcat(ctx.defined, ctx.nested)
+    recorded = loaded_source_files(recording, ctx.index.repo)
     files = check_corpus(ctx.index, recorded)
     included = loose_included_files(ctx.index, recorded)
     modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested, included; repo = ctx.index.repo)
