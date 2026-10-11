@@ -1,10 +1,5 @@
 # Two calls in one method that ask one question.
 
-const LOOP_HEADS = (K"for", K"while", K"comprehension", K"generator")
-const LOOP_CALLS = (:map, :map!, :sum, :maximum, :minimum, :foreach, :reduce, :mapreduce,
-                    :filter, :any, :all, :count, :findfirst, :findall, :extrema)
-const LOOP_HOPS = 2   # callee distance at which a loop still makes the repeated call costly
-
 """Configured through `gate(...; checks)`, and the gate needs `entries`. Two calls on one path ask one question."""
 struct OverlappingCalls <: Check end
 
@@ -34,70 +29,6 @@ function method_before(left, right)
     left_order < right_order
 end
 
-function is_loop_call(node)
-    JS.kind(node) == K"call" || return false
-    children = child_nodes(node)
-    child_count(children) == 0 && return false
-    naming = name_of_head(children[1])
-    isnothing(naming) && return false
-    isempty(naming.qualifier) || return false
-    naming.callee in LOOP_CALLS
-end
-
-function node_holds_loop(node)
-    for child in walk_nodes(node)
-        kind = JS.kind(child)
-        kind in LOOP_HEADS && return true
-        is_loop_call(child) && return true
-    end
-    false
-end
-
-function body_loops(ctx, method)
-    method.name in LOOP_CALLS && return true
-    located = method_form(ctx.index, ctx.recorded, method)
-    isnothing(located) && return false
-    body = method_body(located.form)
-    isnothing(body) && return false
-    node_holds_loop(body)
-end
-
-function ordered_callees(graph)
-    found = Dict{Method,Vector{Method}}()
-    for (method, callees) in graph.edges
-        ordered = collect(callees)
-        sort!(ordered; lt = method_before)
-        found[method] = ordered
-    end
-    found
-end
-
-function callees_of(ordered, method)
-    get(ordered, method, Method[])
-end
-
-# A loop in the repeated callee's body, or in a callee two hops away, is the work a repeat costs.
-function costs_work(ctx, ordered, method)
-    frontier = Method[method]
-    seen = Set{Method}()
-    depth = 0
-    while depth <= LOOP_HOPS && !isempty(frontier)
-        next_methods = Method[]
-        for current in frontier
-            current in seen && continue
-            push!(seen, current)
-            body_loops(ctx, current) && return true
-            depth == LOOP_HOPS && continue
-            for callee in callees_of(ordered, current)
-                push!(next_methods, callee)
-            end
-        end
-        frontier = next_methods
-        depth += 1
-    end
-    false
-end
-
 # The methods every call of the name on a site's line lands on, as the walk's inference matched them; none for a
 # call it holds no fact on.
 function site_targets(facts, path, line, callee)
@@ -113,13 +44,12 @@ end
 
 resolved_targets(facts, path, call) = site_targets(facts, path, call.line, call.callee)
 
-function repeated_costs(ctx, ordered, facts, path, call)
-    targets = resolved_targets(facts, path, call)
-    for target in targets
-        costs_work(ctx, ordered, target) && return true
-    end
-    isempty(targets) || return false
-    call.callee in LOOP_CALLS
+# A repeat costs work when the call runs a loop or a recursion at some depth: inference then cannot prove its callee
+# terminates, a bit Julia taints for each and carries up through every caller (`Effects.terminates`).
+function call_loops(facts, path, call)
+    key = (path, call.line, call.callee)
+    at = get(facts, key, CallFact[])
+    any(fact -> !fact.is_terminating, at)
 end
 
 # A repeat asks one question only when inference proves each of its calls writes nothing and gives equal results
@@ -281,15 +211,11 @@ function first_path(ctx, facts, start, goals)
     nothing
 end
 
-function reach_costing(ctx, ordered, facts, helpers, inners)
-    costing = Set{Method}()
-    for method in inners
-        costs_work(ctx, ordered, method) && push!(costing, method)
-    end
-    isempty(costing) && return nothing
+function helper_path(ctx, facts, helpers, inners)
+    isempty(inners) && return nothing
     ordered_helpers = sort(collect(helpers); lt = method_before)
     for start in ordered_helpers
-        path = first_path(ctx, facts, start, costing)
+        path = first_path(ctx, facts, start, inners)
         isnothing(path) || return path
     end
     nothing
@@ -362,7 +288,7 @@ function cross_line(helpers, inners)
     found
 end
 
-function twice_findings(file, caller, grouped, ordered, ctx, facts)
+function twice_findings(file, caller, grouped, facts)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the same call is written twice"
@@ -370,7 +296,7 @@ function twice_findings(file, caller, grouped, ordered, ctx, facts)
         line = joining_line(matched)
         isnothing(line) && continue
         sample = matched[1].call
-        repeated_costs(ctx, ordered, facts, file.path, sample) || continue
+        call_loops(facts, file.path, sample) || continue
         effects = proven_effects(facts, file.path, matched)
         isnothing(effects) && continue
         text = call_text(sample)
@@ -382,7 +308,7 @@ function twice_findings(file, caller, grouped, ordered, ctx, facts)
     findings
 end
 
-function reach_findings(file, caller, grouped, ordered, ctx, facts)
+function reach_findings(file, caller, grouped, ctx, facts)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the caller asks a question a helper already asks"
@@ -396,9 +322,10 @@ function reach_findings(file, caller, grouped, ordered, ctx, facts)
             isnothing(line) && continue
             helper_call = helpers[1].call
             inner_call = inners[1].call
+            call_loops(facts, file.path, inner_call) || continue
             helper_methods = resolved_targets(facts, file.path, helper_call)
             inner_methods = resolved_targets(facts, file.path, inner_call)
-            path = reach_costing(ctx, ordered, facts, helper_methods, inner_methods)
+            path = helper_path(ctx, facts, helper_methods, inner_methods)
             isnothing(path) && continue
             isnothing(proven_effects(facts, file.path, helpers)) && continue
             effects = proven_effects(facts, file.path, inners)
@@ -415,14 +342,14 @@ function reach_findings(file, caller, grouped, ordered, ctx, facts)
     findings
 end
 
-function method_overlap_findings(file, caller, placed, ordered, ctx, facts)
+function method_overlap_findings(file, caller, placed, ctx, facts)
     findings = Finding[]
     groups = group_by(placed, Tuple{String,String}, argument_key)
     for bucket in values(groups)
         grouped = group_by(bucket, Tuple{Symbol,String}, callee_key)
-        twice = twice_findings(file, caller, grouped, ordered, ctx, facts)
+        twice = twice_findings(file, caller, grouped, facts)
         append!(findings, twice)
-        reached = reach_findings(file, caller, grouped, ordered, ctx, facts)
+        reached = reach_findings(file, caller, grouped, ctx, facts)
         append!(findings, reached)
     end
     findings
@@ -430,7 +357,6 @@ end
 
 function run(::OverlappingCalls, ctx)
     isnothing(ctx.methods) && throw(ArgumentError("OverlappingCalls needs entries"))
-    ordered = ordered_callees(ctx.methods)
     facts = facts_by_site(ctx.methods, ctx.recorded)
     seen = Set{Tuple{String,Symbol,Int}}()
     findings = Finding[]
@@ -446,7 +372,7 @@ function run(::OverlappingCalls, ctx)
         calls = get(located.file.scan.callsites, located.site, CallSite[])
         isempty(calls) && continue
         placed = place_calls(located.form, calls)
-        found = method_overlap_findings(located.file, method, placed, ordered, ctx, facts)
+        found = method_overlap_findings(located.file, method, placed, ctx, facts)
         append!(findings, found)
     end
     findings

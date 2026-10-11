@@ -72,6 +72,17 @@ lower(xs::Int) = mid(xs)
 upper(xs::Int) = lower(xs)
 ask_far(xs::Int) = upper(xs) + upper(xs)
 ask_sum(xs::Int) = sum(xs) + sum(xs)
+count_down(xs::Int) = xs <= 0 ? 0 : 1 + count_down(xs - 1)
+ask_recur(xs::Int) = count_down(xs) + count_down(xs)
+lookup(x, wanted::Int) = false
+lookup(x::Int, wanted::Int) = x == wanted
+function lookup(xs::Vector{Int}, wanted::Int)
+    for x in xs
+        x == wanted && return true
+    end
+    false
+end
+ask_lookup(x) = lookup(x, 1) + lookup(x, 1)
 ask_map(xs::Vector{Int}) = map!(identity, xs, xs) + map!(identity, xs, xs)
 function while_child(kids::Vector{Int}, index::Int, outer::Int)
     total = 0
@@ -245,6 +256,9 @@ function call_entries(pkg)
         (:ask_near, Int),
         (:ask_far, Int),
         (:ask_sum, Int),
+        (:ask_recur, Int),
+        (:ask_lookup, Any),
+        (:ask_lookup, Int),
         (:ask_map, Vector{Int}),
     )
     entries = Tuple[]
@@ -386,23 +400,16 @@ function path_text(path)
     join(names, " ")
 end
 
+# A method costs work when it or any method it reaches loops.
 function index_costs(edges, loops, start)
-    frontier = Int[start]
+    pending = Int[start]
     seen = Set{Int}()
-    depth = 0
-    while depth <= 2 && !isempty(frontier)
-        next_frontier = Int[]
-        for node in frontier
-            node in seen && continue
-            push!(seen, node)
-            if loops[node]
-                return true
-            end
-            depth == 2 && continue
-            append!(next_frontier, edges[node])
-        end
-        frontier = next_frontier
-        depth += 1
+    while !isempty(pending)
+        node = pop!(pending)
+        node in seen && continue
+        push!(seen, node)
+        loops[node] && return true
+        append!(pending, edges[node])
     end
     false
 end
@@ -480,11 +487,11 @@ end
         end
     end
 
-    @testset "a loop-free callee and a stateful callee stay quiet" begin
+    @testset "a loop-free callee, a stateful callee and a loop only abstract arguments reach stay quiet" begin
         found = CALL_PROBE_FOUND
         got = overlap_records(found)
         symbols = record_symbols(got)
-        quiet = ("ask_plain", "ask_store", "ask_twice_store", "ask_map", "ask_leaf")
+        quiet = ("ask_plain", "ask_store", "ask_twice_store", "ask_map", "ask_leaf", "ask_lookup")
         for symbol in quiet
             @test !(symbol in symbols)
         end
@@ -499,17 +506,15 @@ end
         @test !("ask_differ" in symbols)
     end
 
-    @testset "one call written twice fires when it costs work, and a three-hop repeat stays quiet" begin
+    @testset "a call written twice fires when a loop or a recursion runs under it at any depth, and a loop-free one stays quiet" begin
         found = CALL_PROBE_FOUND
         got = overlap_records(found)
         symbols = record_symbols(got)
-        twice = ("ask_twice", "inner(xs)", "inner")
-        summed = ("ask_sum", "sum(xs)", "sum")
-        near = ("ask_near", "shell(xs) shallow(xs)", "shell shallow")
-        @test twice in got
-        @test summed in got
-        @test near in got
-        @test !("ask_far" in symbols)
+        @test ("ask_twice", "inner(xs)", "inner") in got
+        @test ("ask_near", "shell(xs) shallow(xs)", "shell shallow") in got
+        @test ("ask_far", "upper(xs)", "upper") in got
+        @test ("ask_recur", "count_down(xs)", "count_down") in got
+        @test !("ask_sum" in symbols)
     end
 
     @testset "calls in exclusive branches stay quiet, and calls on one path overlap" begin

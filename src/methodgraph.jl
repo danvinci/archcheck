@@ -1,8 +1,9 @@
 # The method zoom of the call graph: the methods each call can land on. The name graph merges every method of a
 # function into one node; this one keeps them apart.
 
-"""What the walk's inference proved about one call a walked method writes, merged over its instances. Nothrow and
-consistent hold at every instance passing concrete arguments, since abstract ones taint them; the rest at every one."""
+"""What the walk's inference proved about one call a walked method writes, merged over its instances. Nothrow,
+consistent and terminates hold at every instance passing concrete arguments, since abstract ones taint them; the rest
+at every one."""
 struct CallFact
     file::Symbol            # file the call's line sits in, as the code records it; empty when it records none
     line::Int               # source line of the call; 0 when the code records none
@@ -488,7 +489,7 @@ function call_fact(frame, position, branches, route)
     is_concrete = all(branch -> Base.isdispatchtuple(branch.atype), branches)
     flags = frame.ssaflags[position]
     is_effect_free = has_flag(flags, Core.Compiler.IR_FLAG_EFFECT_FREE)
-    is_terminating = has_flag(flags, Core.Compiler.IR_FLAG_TERMINATES)
+    is_terminating = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_TERMINATES)
     is_nothrow = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_NOTHROW)
     is_consistent = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_CONSISTENT)
     is_generated = any(matches_generated, branches)
