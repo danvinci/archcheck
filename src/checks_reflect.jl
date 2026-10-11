@@ -250,10 +250,12 @@ function method_form(index::SourceIndex, method::Method)
     found = indexed_file(index, path, line)
     isnothing(found) && return nothing
     file = found::FileNode
-    for (site, form) in file.scan.forms
-        site.line == line || continue
-        site_names_method(site, method) || continue
-        return (file = file, site = site, form = form)
+    key = (path, line)
+    held = get(index.forms, key, NO_PLACED_FORMS)
+    for placed in held
+        placed.file === file || continue
+        site_names_method(placed.site, method) || continue
+        return (file = file, site = placed.site, form = placed.form)
     end
     nothing
 end

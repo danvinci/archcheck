@@ -27,6 +27,15 @@ struct EntryCode
     scan::FileScan        # what the one walk recorded over it, each qualifier resolved as the code binds it
 end
 
+# One parsed method form, with the indexed code and the site the scan recorded for it.
+struct PlacedForm
+    file::FileNode       # indexed code the form sits in
+    site::MethodSite     # name and line the scan recorded
+    form::JS.SyntaxNode  # the definition form
+end
+
+const NO_PLACED_FORMS = PlacedForm[]
+
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
 struct SourceIndex
     repo::String                            # the root every path below is relative to
@@ -39,6 +48,7 @@ struct SourceIndex
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
     missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
     nonliteral::Vector{Tuple{Symbol,String,Int}}      # include whose argument is not a string literal: owner, file, line
+    forms::Dict{Tuple{String,Int},Vector{PlacedForm}} # (path, line) -> method forms defined there, in file order
 end
 
 # The wrapper is the one file its module leaves out of the include order, so it stays unranked.
@@ -528,7 +538,22 @@ function read_unloaded_extensions!(build::IndexBuild, modules::ReachModules)
     end
 end
 
+# Each method form by the file and line it is defined on, in file order, so a loaded method finds its form in one lookup.
+function form_table(files)
+    forms = Dict{Tuple{String,Int},Vector{PlacedForm}}()
+    for file in files
+        for (site, form) in file.scan.forms
+            key = (file.path, site.line)
+            held = get!(Vector{PlacedForm}, forms, key)
+            placed = PlacedForm(file, site, form)
+            push!(held, placed)
+        end
+    end
+    forms
+end
+
 function source_index(build::IndexBuild)
+    forms = form_table(build.nodes)
     SourceIndex(
         build.repo,
         build.ranks,
@@ -540,6 +565,7 @@ function source_index(build::IndexBuild)
         build.unparsed,
         build.missing,
         build.nonliteral,
+        forms,
     )
 end
 
