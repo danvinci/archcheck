@@ -428,15 +428,6 @@ function method_overlap_findings(file, caller, placed, ordered, ctx, facts)
     findings
 end
 
-function module_agrees(method, file_mod)
-    key = module_key(method.module)
-    key === file_mod && return true
-    text = string(key)
-    root = string(file_mod)
-    prefix = root * "."
-    startswith(text, prefix)
-end
-
 function run(::OverlappingCalls, ctx)
     isnothing(ctx.methods) && throw(ArgumentError("OverlappingCalls needs entries"))
     ordered = ordered_callees(ctx.methods)
@@ -446,7 +437,9 @@ function run(::OverlappingCalls, ctx)
     for method in ctx.defined
         located = method_form(ctx.index, ctx.recorded, method)
         isnothing(located) && continue
-        module_agrees(method, located.file.mod) || continue
+        home = loaded_module(ctx.root, located.file.mod)
+        isnothing(home) && continue
+        encloses(home, method.module) || continue
         site_key = (located.file.path, located.site.name, located.site.line)
         site_key in seen && continue
         push!(seen, site_key)

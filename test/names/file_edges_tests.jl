@@ -102,7 +102,12 @@ function load_extra()
 end
 tail_name() = 1
 """, [
-    "decl.jl" => "function shape_of end\n",
+    "decl.jl" => """
+    function shape_of end
+    @static if VERSION < v"1.0"
+        import Base: setindex
+    end
+    """,
     "host.jl" => """
     include("part.jl")
     measure(x) = shape_of(x) + part_size(x)

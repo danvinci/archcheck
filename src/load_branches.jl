@@ -1,4 +1,4 @@
-# The branches this Julia decides while it loads, and what the code it runs includes and opens.
+# The branches this Julia decides while it loads.
 
 # A `v"..."` literal's version; nothing for any other node.
 function version_literal(node)
@@ -150,19 +150,3 @@ function in_skipped_branch(node, root)
     end
     false
 end
-
-# What loaded code includes and opens, in source order, past branches this Julia skips and method bodies, which
-# include only when called.
-function collect_live_events!(events, node)
-    JS.kind(node) == K"quote" && return events
-    is_method_form(node) && return events
-    for child in live_children(node)
-        if is_module_block(child) || is_include_call(child)
-            push!(events, child)
-        end
-        collect_live_events!(events, child)
-    end
-    events
-end
-
-live_load_events(root) = collect_live_events!(JS.SyntaxNode[], root)

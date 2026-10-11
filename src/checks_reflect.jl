@@ -41,30 +41,6 @@ function module_key(mod::Module)
     Symbol(text)
 end
 
-# A dotted path's last name, and the module names written before it.
-function path_parts(path::Symbol)
-    text = string(path)
-    parts = split(text, ".")
-    name = Symbol(parts[end])
-    prefix = parts[1:end-1]
-    (name, prefix)
-end
-
-# A bare path names the root module. A written prefix matches a module whose path below the root ends in it.
-function module_path_ends(mod, root, prefix)
-    isempty(prefix) && return mod === root
-    names = fullname(mod)
-    length(names) < 2 && return false
-    below = names[2:end]
-    length(below) < length(prefix) && return false
-    start = length(below) - length(prefix) + 1
-    for index in eachindex(prefix)
-        piece = string(below[start + index - 1])
-        piece == prefix[index] || return false
-    end
-    true
-end
-
 function owned_value(value::Union{Function,Type}, mod::Module)
     parentmodule(value) === mod || return nothing
     value
@@ -78,16 +54,16 @@ function owned_callable(mod, name)
     owned_value(value, mod)
 end
 
-"""The function or type a path names inside the package: `name` in the root module, `Sub.name` in a module whose
-path below the root ends in `Sub`. Nothing when no package module owns a callable at that path."""
+"""The function or type a path names inside the package: `name` in the root module, `Sub.name` in the package module
+the root binds as `Sub`. Nothing when no package module owns a callable at that path."""
 function package_callable(ctx, path::Symbol)
-    name, prefix = path_parts(path)
-    for mod in package_modules(ctx)
-        module_path_ends(mod, ctx.root, prefix) || continue
-        found = owned_callable(mod, name)
-        isnothing(found) || return found
-    end
-    nothing
+    segments = key_segments(path)
+    prefix = segments[1:(end - 1)]
+    home = path_module(ctx.root, prefix)
+    isnothing(home) && return nothing
+    home in package_modules(ctx) || return nothing
+    name = last(segments)
+    owned_callable(home, name)
 end
 
 # The modules defined directly inside a module.

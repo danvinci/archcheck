@@ -50,14 +50,65 @@ function exports_value(candidate::Module, name::Symbol, value)
     getglobal(candidate, name) === value
 end
 
-"""What one judgement of late reads resolves against: the load's bindings and the package's loaded modules."""
-struct LateJudge
-    walk::LoadWalk                   # each code's place and each name's first binding
-    by_key::Dict{Symbol,Module}      # each loaded package module by its key
-    by_module::IdDict{Module,Symbol} # each loaded package module -> its key
+# ---- where the load first binds each name ----
+
+"""Where the load first binds one name in one module."""
+struct NameBinding
+    started::Int      # includes the load has started when it makes the binding
+    code::Int         # position in `index.files` of the code that makes it
+    is_import::Bool   # a using or import clause makes it, so a module the code uses may resolve the name sooner
+    tick::Int         # the load step the binding follows
+    byte::Int         # where the binding sits in its code, after that step
 end
 
-function LateJudge(walk::LoadWalk, mods, package::Module)
+function site_binding(load::CodeLoad, position::Int, byte::Int, is_import::Bool)
+    step = step_before(load, byte)
+    NameBinding(step.started, position, is_import, step.tick, byte)
+end
+
+# Keeps the load's earliest binding of `name` in module `key`.
+function bind_first!(names, key::Symbol, name::Symbol, binding::NameBinding)
+    bound = get!(Dict{Symbol,NameBinding}, names, key)
+    held = get(bound, name, nothing)
+    if !isnothing(held)
+        is_earlier = (binding.tick, binding.byte) < (held.tick, held.byte)
+        is_earlier || return names
+    end
+    bound[name] = binding
+    names
+end
+
+# Each name each piece of code binds as it runs, and each its import clauses bind on a branch the load takes.
+function load_bindings(index::SourceIndex)
+    names = Dict{Symbol,Dict{Symbol,NameBinding}}()
+    for (position, load) in enumerate(index.loads)
+        for site in load.sites
+            binding = site_binding(load, position, site.byte, false)
+            bind_first!(names, site.mod, site.name, binding)
+        end
+        file = index.files[position]
+        for clause in file.scan.clauses
+            in_skipped_branch(clause.node, file.tree) && continue
+            byte = JS.first_byte(clause.node)
+            binding = site_binding(load, position, byte, true)
+            bound = add_bound_names!(Set{Symbol}(), clause)
+            for name in bound
+                bind_first!(names, file.mod, name, binding)
+            end
+        end
+    end
+    names
+end
+
+"""What one judgement of late reads resolves against: the load's bindings and the package's loaded modules."""
+struct LateJudge
+    index::SourceIndex                              # the codes judged, each with its load
+    names::Dict{Symbol,Dict{Symbol,NameBinding}}    # module key -> each name -> where the load first binds it
+    by_key::Dict{Symbol,Module}                     # each loaded package module by its key
+    by_module::IdDict{Module,Symbol}                # each loaded package module -> its key
+end
+
+function LateJudge(index::SourceIndex, mods, package::Module)
     by_key = Dict{Symbol,Module}()
     by_module = IdDict{Module,Symbol}()
     for loaded in package_modules(package, mods)
@@ -65,7 +116,8 @@ function LateJudge(walk::LoadWalk, mods, package::Module)
         by_key[key] = loaded
         by_module[loaded] = key
     end
-    LateJudge(walk, by_key, by_module)
+    names = load_bindings(index)
+    LateJudge(index, names, by_key, by_module)
 end
 
 """A file pair the load binds late: the methods that read across it and the names they read."""
@@ -80,7 +132,7 @@ end
 # The binding `name` reads in module `key` when the load has started `started` includes; nothing when the load has
 # bound it by then, or a module the code uses resolves it until its explicit binding.
 function late_binding(judge::LateJudge, key::Symbol, name::Symbol, started::Int)
-    bound = get(judge.walk.names, key, nothing)
+    bound = get(judge.names, key, nothing)
     isnothing(bound) && return nothing
     binding = get(bound, name, nothing)
     isnothing(binding) && return nothing
@@ -96,34 +148,37 @@ end
 # name. Code another module evaluates into it binds where no file shows.
 function is_seen_binding(judge::LateJudge, holder::Symbol, current::Module, name::Symbol)
     name === nameof(current) && return true
-    bound = get(judge.walk.names, holder, nothing)
+    bound = get(judge.names, holder, nothing)
     isnothing(bound) && return false
     haskey(bound, name)
 end
 
-# The package module a qualifier names, resolved from the code's module through bindings the parse sees. Nothing
-# for a local, another package's module, or a step the load binds late, judged as that step's own read.
-function member_module(judge::LateJudge, key::Symbol, qualifier, started::Int)
-    path = dotted_names(qualifier)
-    isnothing(path) && return nothing
-    current = get(judge.by_key, key, nothing)
-    for name in path
-        current isa Module || return nothing
-        holder = get(judge.by_module, current, nothing)
-        isnothing(holder) && return nothing
-        is_seen_binding(judge, holder, current, name) || return nothing
-        late = late_binding(judge, holder, name, started)
+# The key of the package module a member read goes through, as the index resolved it. Nothing when a step of its
+# qualifier passes another package's module or a binding the parse cannot see or the load makes late.
+function member_holder(judge::LateJudge, key::Symbol, read::NameRead, started::Int)
+    through = read.through
+    isnothing(through) && return nothing
+    holder = get(judge.by_module, through, nothing)
+    isnothing(holder) && return nothing
+    home = get(judge.by_key, key, nothing)
+    isnothing(home) && return nothing
+    path = dotted_names(read.qualifier)
+    passed = descend!(Module[], home, path)
+    length(passed) == length(path) + 1 || return nothing
+    for (step, name) in enumerate(path)
+        current = passed[step]
+        owner = get(judge.by_module, current, nothing)
+        isnothing(owner) && return nothing
+        is_seen_binding(judge, owner, current, name) || return nothing
+        late = late_binding(judge, owner, name, started)
         isnothing(late) || return nothing
-        isdefined(current, name) || return nothing
-        current = getglobal(current, name)
     end
-    current isa Module || return nothing
-    get(judge.by_module, current, nothing)
+    holder
 end
 
 function note_late!(edges, judge::LateJudge, position::Int, reader::Symbol, name::Symbol, binding)
     isnothing(binding) && return edges
-    files = judge.walk.index.files
+    files = judge.index.files
     file = files[position]
     target = files[binding.code]
     target.path == file.path && return edges
@@ -144,15 +199,15 @@ function judge_read!(edges, judge::LateJudge, position::Int, readers, read::Name
     read.in_signature && return edges
     read.is_quoted && return edges
     is_local_read(read) && return edges
-    file =judge.walk.index.files[position]
+    file = judge.index.files[position]
     reader = loaded_reader!(readers, form, file.tree)
     isnothing(reader) && return edges
-    load = judge.walk.loads[position]
+    load = judge.index.loads[position]
     byte = JS.first_byte(form)
-    started = started_at(load, byte)
+    started = step_before(load, byte).started
     holder = file.mod
     if is_member(read)
-        holder = member_module(judge, file.mod, read.qualifier, started)
+        holder = member_holder(judge, file.mod, read, started)
         isnothing(holder) && return edges
     end
     binding = late_binding(judge, holder, read.name, started)
@@ -189,10 +244,9 @@ end
 # file-backedge: a method reads a name the load binds after the method's file is done. A qualified read counts in the
 # package module its qualifier names; another package's name is that package's.
 function check_file_backedges(index::SourceIndex, mods, package::Module)
-    walk = load_walk(index, nameof(package))
-    judge = LateJudge(walk, mods, package)
+    judge = LateJudge(index, mods, package)
     edges = Dict{Tuple{String,String},LateEdge}()
-    for position in walk.order
+    for position in eachindex(index.loads)
         file = index.files[position]
         readers = IdDict{JS.SyntaxNode,Union{Nothing,Symbol}}()
         for read in file.scan.reads

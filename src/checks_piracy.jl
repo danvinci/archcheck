@@ -1,5 +1,5 @@
 # A method whose function and every argument type sit outside its owner: the package, or the defining module, with
-# an extension owning what the root owns. An owner's subtree is every module whose full name starts with its own.
+# an extension owning what the root owns. An owner's subtree is every module it encloses.
 
 # How a union counts. A value may hold any member, so one foreign member claims it: Union{Owned,Int} claims Int as
 # well. A type object names one type, foreign only when every member is.
@@ -55,23 +55,12 @@ function all_foreign(types, owns, rule = ValueUnion())
     true
 end
 
-# A module's full name, `fullname(mod)`: the root's name, then each enclosing module's, then its own.
-const ModulePath = Tuple{Vararg{Symbol}}
-
-# Whether a module's full name is `scope` or starts with it; `exact` takes `scope` alone.
-function is_in_scope(mod::Module, scope::ModulePath, exact::Bool)
-    full = fullname(mod)
-    exact && return full == scope
-    full_length = length(full)
-    scope_length = length(scope)
-    taken = min(full_length, scope_length)
-    prefix = full[1:taken]
-    prefix == scope
-end
-
-function is_in_any_scope(mod, scopes, exact::Bool)
+# Whether `mod` is one of `scopes`, or without `exact` a module one of them encloses.
+function is_in_any_scope(mod::Module, scopes::Vector{Module}, exact::Bool)
     for scope in scopes
-        is_in_scope(mod, scope, exact) && return true
+        scope === mod && return true
+        exact && continue
+        encloses(scope, mod) && return true
     end
     false
 end
@@ -83,14 +72,12 @@ function is_extension(mod::Module, repo)
     first(parts) == EXTENSION_DIR
 end
 
-# The full module names whose functions and subtree types a method's module owns: the package's, or with `strict` its
-# own. An extension adds the root's methods to its own and other packages' types, so it owns both in either mode.
+# The modules whose functions and subtree types a method's module owns: the package, or with `strict` its own. An
+# extension adds the root's methods to its own and other packages' types, so it owns both in either mode.
 function owner_scopes(home::Module, root::Module, strict::Bool, repo)
-    package_scope = fullname(root)
-    own_scope = fullname(home)
-    is_extension(home, repo) && return ModulePath[own_scope, package_scope]
-    strict && return ModulePath[own_scope]
-    ModulePath[package_scope]
+    is_extension(home, repo) && return Module[home, root]
+    strict && return Module[home]
+    Module[root]
 end
 
 # module-piracy: the function is foreign to every owner scope, and every argument type to their subtrees. A keyword

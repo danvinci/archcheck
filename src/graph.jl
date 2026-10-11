@@ -44,7 +44,7 @@ struct SourceIndex
     repo::String                            # the root every path below is relative to
     rank::Dict{Symbol,Vector{Int}}          # module, nested ones by dotted key -> its load position in each enclosing module
     files::Vector{FileNode}                 # every module-owned source file
-    opened::IdDict{JS.SyntaxNode,Vector{Int}}   # each include call the load ran -> the code it opened, by place in `files`
+    loads::Vector{CodeLoad}                 # each placed code as the load ran it, by place in `files`
     unincluded::Vector{String}              # repo-relative src/ files no include call in loaded code names, parsed
     refs::Vector{ModRef}                    # cross-module references, from the same parse
     external::Set{Symbol}                   # names referenced from entry dirs other than test/ and unloaded extensions
@@ -77,8 +77,10 @@ struct IndexBuild
     ranks::Dict{Symbol,Vector{Int}}                           # module -> its load position in each enclosing module
     parses::Parses                                            # every file's one parse, shared with the layout
     placements::Vector{Placement}                             # loaded code in load order
+    loads::Vector{CodeLoad}                                   # each placement as the load ran it
+    started::Base.RefValue{Int}                               # includes the load has started so far
+    ticks::Base.RefValue{Int}                                 # steps the load has finished so far
     unmatched::Vector{Placement}                              # recorded includes no include call the walk reads ran
-    opened::IdDict{JS.SyntaxNode,Vector{Int}}                 # include call -> the placements it opened
     resolved::Base.IdSet{JS.SyntaxNode}                       # computed include calls a record resolved
     unincluded::Vector{String}                                # repo-relative src/ files no include in loaded code names
     nodes::Vector{FileNode}                                   # code accepted into the index
@@ -175,8 +177,10 @@ function start_index(parses::Parses, src_root::AbstractString, package::Module, 
         Dict{Symbol,Vector{Int}}(),
         parses,
         Placement[],
+        CodeLoad[],
+        Ref(0),
+        Ref(0),
         Placement[],
-        IdDict{JS.SyntaxNode,Vector{Int}}(),
         Base.IdSet{JS.SyntaxNode}(),
         String[],
         FileNode[],
@@ -224,11 +228,6 @@ function include_record(build::IndexBuild, loaded::Module, top::Symbol)
     IncludeRecord(includes, Ref(0))
 end
 
-function add_placement!(build::IndexBuild, placement::Placement)
-    push!(build.placements, placement)
-    length(build.placements)
-end
-
 # A load's entry opens its module: the entry's module body is its code at position 0, and what that code loads takes
 # the positions after.
 function open_module!(build::IndexBuild, key::Symbol, rank::Vector{Int}, entry::String, record::LoadRecord)
@@ -240,25 +239,36 @@ function open_module!(build::IndexBuild, key::Symbol, rank::Vector{Int}, entry::
         return
     end
     code = entry_code(tree)
-    add_placement!(build, Placement(key, entry, 0, code))
     unit = LoadUnit(key, rank, record, Ref(0))
-    walk_code!(build, unit, code, entry)
+    placement = Placement(key, entry, 0, code)
+    walk_code!(build, unit, placement, BindingSite[])
     place_unmatched!(build, record)
 end
 
-# Load order: each include that runs and each module block takes the next position in the walking module, and the
-# walk enters it there, as Julia loads it.
-function walk_code!(build::IndexBuild, unit::LoadUnit, code, file)
-    events = live_load_events(code)
+# The load finishes a step of one piece of code at `byte`.
+function end_step!(build::IndexBuild, load::CodeLoad, byte::Int)
+    build.ticks[] += 1
+    step = LoadStep(byte, build.started[], build.ticks[])
+    push!(load.steps, step)
+end
+
+# Load order: the code takes the next placement, then each include that runs and each module block in it the next
+# position in the walking module, entered as Julia loads it. `sites` holds what the code binds as it opens.
+function walk_code!(build::IndexBuild, unit::LoadUnit, placement::Placement, sites::Vector{BindingSite})
+    push!(build.placements, placement)
+    file = placement.path
+    events = collect_parts!(JS.SyntaxNode[], sites, unit.owner, placement.code, true, true)
+    load = CodeLoad(LoadStep[], sites)
+    push!(build.loads, load)
+    end_step!(build, load, 0)
     for (position, event) in enumerate(events)
         if is_module_block(event)
             place_block!(build, unit, event, file)
-            continue
+        else
+            place_include!(build, unit, events, position, file)
         end
-        opened = place_include!(build, unit, events, position, file)
-        if !isempty(opened)
-            build.opened[event] = opened
-        end
+        byte = JS.first_byte(event)
+        end_step!(build, load, byte)
     end
 end
 
@@ -287,9 +297,8 @@ function place_include!(build::IndexBuild, unit::LoadUnit, events, position, fil
     call = events[position]
     target = literal_target(call, file)
     isnothing(target) && return place_computed!(build, unit, unit.record, events, position, file)
-    runs_include(build, unit, unit.record, target) || return Int[]
-    placed = place_file!(build, unit, target)
-    isnothing(placed) ? Int[] : [placed]
+    runs_include(build, unit, unit.record, target) || return
+    place_file!(build, unit, target)
 end
 
 # The absolute file a literal include call in `file` names; nothing for a computed one.
@@ -317,7 +326,6 @@ function place_computed!(build::IndexBuild, unit::LoadUnit, record::IncludeRecor
     push!(build.resolved, call)
     directory = computed_directory(call, file)
     later = literal_targets(events, position, file)
-    opened = Int[]
     while true   # bounded: each pass matches one recorded include
         upcoming = next_include(record)
         isnothing(upcoming) && break
@@ -325,13 +333,11 @@ function place_computed!(build::IndexBuild, unit::LoadUnit, record::IncludeRecor
         is_within(upcoming.path, directory) || break
         upcoming.path in later && break
         record.matched[] += 1
-        placed = place_file!(build, unit, upcoming.path)
-        isnothing(placed) || push!(opened, placed)
+        place_file!(build, unit, upcoming.path)
     end
-    opened
 end
 
-place_computed!(_build, _unit, ::NoRecord, _events, _position, _file) = Int[]
+place_computed!(_build, _unit, ::NoRecord, _events, _position, _file) = nothing
 
 # The absolute directory a computed include's literal pieces name; the including file's own without any.
 function computed_directory(call, file)
@@ -354,10 +360,10 @@ function literal_targets(events, position, file)
 end
 
 # A file holding only a module block opens that module where it is included; any other file joins the including
-# module. The placement the file's code took, or nothing when a module already holds it or it will not parse.
+# module. A file the load runs starts one include; one a module already holds, or that will not parse, runs none.
 function place_file!(build::IndexBuild, unit::LoadUnit, target)
     key = (unit.owner, target)
-    key in build.placed && return nothing
+    key in build.placed && return
     push!(build.placed, key)
     push!(build.visited, target)
     position = next_position!(unit)
@@ -365,32 +371,34 @@ function place_file!(build::IndexBuild, unit::LoadUnit, target)
     if isnothing(tree)
         rel = relpath(target, build.repo)
         push!(build.unparsed, (unit.owner, rel))
-        return nothing
+        return
     end
     block = sole_module_block(tree)
-    isnothing(block) || return open_block!(build, unit, block, target, position)
-    placed = add_placement!(build, Placement(unit.owner, target, position, tree))
-    walk_code!(build, unit, tree, target)
-    placed
+    isnothing(block) || return open_block!(build, unit, block, target, position, 1)
+    build.started[] += 1
+    placement = Placement(unit.owner, target, position, tree)
+    walk_code!(build, unit, placement, BindingSite[])
 end
 
 function place_block!(build::IndexBuild, unit::LoadUnit, block, file)
     position = next_position!(unit)
-    open_block!(build, unit, block, file, position)
+    open_block!(build, unit, block, file, position, 0)
 end
 
-# A module block opens its module at `position` in the walking module: its body is the module's code at position 0.
-function open_block!(build::IndexBuild, unit::LoadUnit, block, file, position)
+# A module block opens its module at `position` in the walking module and binds its name there; its body is the
+# module's code at position 0. `includes` is the one include a file holding only the block starts, or none.
+function open_block!(build::IndexBuild, unit::LoadUnit, block, file, position, includes::Int)
     name = module_name(block)
-    isnothing(name) && return nothing
+    isnothing(name) && return
+    build.started[] += includes
     key = inline_key(build, unit.owner, name)
     rank = child_rank(unit.rank, position)
     build.ranks[key] = rank
     body = module_body(block)
-    placed = add_placement!(build, Placement(key, file, 0, body))
     inner = LoadUnit(key, rank, unit.record, Ref(0))
-    walk_code!(build, inner, body, file)
-    placed
+    placement = Placement(key, file, 0, body)
+    named = BindingSite(unit.owner, name, 0)
+    walk_code!(build, inner, placement, [named])
 end
 
 # A recorded include no call the walk reads ran joins the index unranked, in the module the record names.
@@ -724,7 +732,7 @@ function source_index(build::IndexBuild)
         build.repo,
         build.ranks,
         build.nodes,
-        build.opened,
+        build.loads,
         build.unincluded,
         build.refs,
         build.external,
