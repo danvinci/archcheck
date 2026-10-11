@@ -153,9 +153,9 @@ end
 
 # `outer`, plus the names `binder` finds from `first_position` through the child before `index`.
 function bound_before(outer, children, index, binder, first_position)
-    bound = copy(outer)
     last_earlier = index - 1
-    last_earlier < first_position && return bound
+    last_earlier < first_position && return outer
+    bound = copy(outer)
     for position in first_position:last_earlier
         binder(bound, children[position])
     end
@@ -196,7 +196,7 @@ end
 function method_child(node, index, outer)
     children = child_nodes(node)
     past_end = isnothing(children) || index > length(children)
-    past_end && return copy(outer)
+    past_end && return outer
     if index == 1
         bound = copy(outer)
         names = sig_argnames!(empty(outer), children[1])
@@ -221,7 +221,7 @@ function while_child(children, index, outer)
         none = empty(outer)
         return nested_bound(outer, none, children[index])
     end
-    copy(outer)
+    outer
 end
 
 function generator_child(children, index, outer)
@@ -237,7 +237,7 @@ end
 
 function filter_child(children, index, outer)
     child = children[index]
-    is_iteration_clause(child) && return copy(outer)
+    is_iteration_clause(child) && return outer
     bound = copy(outer)
     add_iteration_names!(bound, children)
     bound
@@ -256,7 +256,7 @@ end
 
 function let_child(children, index, outer)
     if index == 1
-        return copy(outer)
+        return outer
     end
     seeded = copy(outer)
     binding_names!(seeded, children[1])
@@ -282,10 +282,10 @@ function lhs_child(children, index, outer)
         _argname!(bound, children[1])
         return bound
     end
-    copy(outer)
+    outer
 end
 
-# Names local to the child at `index`. `outer` holds the names local around `node`.
+# Names local to the child at `index`. A child that binds nothing returns `outer` for the caller to read.
 # A `for` or a generator reads its first iterator outside that scope.
 function child_locals(node, index, outer)
     if is_method_form(node)
@@ -293,12 +293,12 @@ function child_locals(node, index, outer)
     end
     if is_let_bindings(node)
         children = child_nodes(node)
-        isnothing(children) && return copy(outer)
+        isnothing(children) && return outer
         return bound_before(outer, children, index, binding_names!, 1)
     end
     children = child_nodes(node)
     out_of_range = isnothing(children) || index < 1 || index > length(children)
-    out_of_range && return copy(outer)
+    out_of_range && return outer
     kind = JS.kind(node)
     if kind == K"for"
         return for_child(children, index, outer)
@@ -327,7 +327,7 @@ function child_locals(node, index, outer)
     if kind == K"in" || kind == K"="
         return lhs_child(children, index, outer)
     end
-    copy(outer)
+    outer
 end
 
 # The lambda arguments and loop variables this child binds itself, including a name the outer scope already holds.
