@@ -54,8 +54,8 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     with_method_graph(unwalked, entries)
 end
 
-# The same context once the workload has run, with the method lists `observe` read after it: restored probes
-# define methods, and that walk sees them.
+# The same context once the workload has run, with the method lists `observe` read after it: methods the workload
+# defines are in that walk.
 function Context(ctx::Context; observed::Observation, census)
     lists = (census.defined, census.added, census.nested)
     recorded = recorded_paths(ctx.index.repo, lists)

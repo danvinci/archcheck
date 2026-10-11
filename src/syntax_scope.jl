@@ -72,42 +72,6 @@ function collect_scope_assigns!(bound, node)
     end
 end
 
-# Every name a binding under `node` introduces: assignment and loop targets, closure and method
-# parameters, local method names, `local` and `catch` variables. Keyword labels count too.
-function bound_names!(names::Union{Vector{Symbol}, Set{Symbol}}, node::JS.SyntaxNode)
-    children = child_nodes(node)
-    isnothing(children) && return
-    kind = JS.kind(node)
-    if is_method_form(node)
-        local_name = sig_name(children[1])
-        isnothing(local_name) || push!(names, local_name)
-        arguments = sig_argnames(children[1])::Vector{Symbol}
-        union!(names, arguments)
-    elseif kind == K"=" || kind == K"in" || kind == K"->" || kind == K"do" || kind == K"catch"
-        _argname!(names, children[1])
-    elseif kind == K"local"
-        for declared in children
-            _argname!(names, declared)
-        end
-    end
-    for child in children
-        bound_names!(names, child)
-    end
-end
-
-const JOIN_NAMES = (:fetch, :wait)
-
-# The join names a method leaves unbound, read from its parse: there each one names Base's `fetch` or `wait`.
-function free_joins(form)
-    bound = Set{Symbol}()
-    bound_names!(bound, form)
-    free = Symbol[]
-    for name in JOIN_NAMES
-        name in bound || push!(free, name)
-    end
-    free
-end
-
 function collect_scope_globals!(names, node)
     is_nested_scope(node) && return
     kind = JS.kind(node)

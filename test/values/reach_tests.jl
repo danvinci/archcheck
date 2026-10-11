@@ -100,8 +100,6 @@ const MACRO_BUILT = load_package("MacroBuilt", """
     entry = (pkg.route, Tuple{Int,Any})
     checks = (UnreachedMethods(),)
     entries = (entry,)
-    probes = Probes(functions = (pkg.called,))
-    @test_throws ArgumentError gate_findings(pkg; checks, workload = PriorRun(), probes)
     found = gate_findings(pkg; checks, workload = PriorRun(), entries)
     uncalled = only(methods(pkg.uncalled))
     hit = only(finding for finding in found if finding.symbol == "uncalled")

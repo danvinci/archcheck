@@ -27,21 +27,6 @@ end
     end
 end
 
-@testset "self-check: the self-gate's probes judge each parse within its gate run, and a second run is no repeat" begin
-    gate_twice = function ()
-        gate_findings(Nested; checks = ())
-        gate_findings(Nested; checks = ())
-    end
-    checks = (Rebuilds(),)
-    probes = self_probes()
-    seen = observed_gate(ArchCheck; checks, probes, workload = gate_twice)
-    parses = [record for record in seen.observed.records if record.name === :parse_file]
-    @test !isempty(parses)
-    callers = Set(record.caller for record in parses)
-    @test callers == Set([:gate])
-    @test isempty(seen.findings)
-end
-
 @testset "self-check: every exported check is run or named inapplicable" begin
     held = Set{Any}()
     for pair in NOT_APPLICABLE

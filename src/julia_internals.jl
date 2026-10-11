@@ -215,29 +215,6 @@ function unspecialized_names(method::Method)
     names
 end
 
-# The keyword method `Core.kwcall` holds for a method that declares keywords.
-function keyword_method(method::Method)
-    declares_keywords(method) || return nothing
-    params = signature_types(method.sig)
-    tail = params[2:end]
-    owner = params[1]
-    bare = Tuple{NamedTuple, owner, tail...}
-    # The method's where-clause binds the parameters of the query.
-    query = under_clauses_of(bare, method.sig)
-    which(Core.kwcall, query)
-end
-
-"""Removes a method and its keyword method from the table. `Base.delete_method` makes a new world in which the method
-is gone, so a later definition of the same signature is a fresh method."""
-function drop_method!(method::Method)
-    keyword = keyword_method(method)
-    if !isnothing(keyword)
-        Base.delete_method(keyword)
-    end
-    Base.delete_method(method)
-    nothing
-end
-
 # Types print as seen from a module holding only the standard imports, so what `Main` holds changes no text.
 const TYPE_SCOPE = Module(:TypeText)
 
@@ -410,9 +387,6 @@ function project_dependencies(repo)
     dependencies
 end
 
-# The local `@sync` binds its task list to, `Base.sync_varname`; an `@async` inside the block pushes its task there.
-sync_binding() = Base.sync_varname
-
 """The native code Julia compiled for `instance`. An instance's `cache` chains its `CodeInstance`s through `next`;
 the native one has no `owner`, which an external interpreter's entries set."""
 function native_code(instance::Core.MethodInstance)
@@ -423,17 +397,6 @@ function native_code(instance::Core.MethodInstance)
         code = code.next
     end
     code
-end
-
-"""Whether the native code compiled for `signature` is unconditionally consistent; nothing when none is compiled. A
-`CodeInstance` keeps its effects in `ipo_purity_bits`, which `Compiler.decode_effects` reads (Compiler/src/effects.jl)."""
-function compiled_consistency(signature::Type)
-    instance = Base.method_instance(signature)
-    isnothing(instance) && return nothing
-    code = native_code(instance)
-    isnothing(code) && return nothing
-    effects = Core.Compiler.decode_effects(code.ipo_purity_bits)
-    Core.Compiler.is_consistent(effects)
 end
 
 """The methods `instance`'s native code calls, by its edges; `ForwardToBackedgeIterator` (Compiler/src/typeinfer.jl)

@@ -1,4 +1,4 @@
-# The package workload: it runs the probed calls and the declared value's uncached caller.
+# The package workload: it runs the planted methods and the declared value's uncached caller.
 
 # duplicate_owner: the same exported name, a different function in the early module
 twin_name() = 2
@@ -25,9 +25,6 @@ function exercise()
     clone_left(1, 2, 3, 4)
     clone_right(1, 2, 3, 4)
     skip_store(1)
-    left_name(1)
-    left_name(1)
-    right_name(1)
     drops()
     PlainItem(1)
     Loose(1.0)
@@ -47,10 +44,5 @@ function exercise()
     piece = Piece(1, 1)
     span = again_span(piece)
     pass_span(span)
-    numbers = [1, 2, 3]
-    held = Set([1])
-    pairs = Dict(1 => 2)
-    viewed = view(numbers, 1:1)
-    hold_inputs(held, pairs, viewed, numbers, Shape)
     0
 end

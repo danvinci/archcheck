@@ -1,23 +1,17 @@
 # The workload phase: the package's own run between the static checks and the checks that read what it did.
 
-"""What the method table holds after one run of the workload, the probed calls that run made, and the waits those calls logged."""
+"""What the method table holds after one run of the workload."""
 struct Observation
-    reached::Set{Method}             # live methods compiled during the run or earlier, read before the method graph's walk; a keyword body, a restored probe or an all-Any constructor credits its method
+    reached::Set{Method}             # live methods compiled during the run or earlier, read before the method graph's walk; a keyword body or an all-Any constructor credits its method
     specializations::Base.IdSet{Core.MethodInstance}   # the package's specializations when the run ended, before the walk adds its own
-    records::Vector{ProbeRecord}     # probed calls of at least the probes' slow threshold; empty when nothing is probed
-    waits::Vector{WaitRecord}        # waits those calls logged; empty when nothing is probed
     seconds::Float64                 # the workload's wall time (s)
 end
 
 """The workload of a gate called where the package's code already ran, as at the end of `test/runtests.jl`: it runs
-nothing, so the gate reads what the earlier run compiled. Probes armed after that run record nothing, so none may join it."""
+nothing, so the gate reads what the earlier run compiled."""
 struct PriorRun end
 
 (::PriorRun)() = nothing
-
-# Whether probes armed around the workload's call can record what it runs.
-records_calls(_workload) = true
-records_calls(::PriorRun) = false
 
 function record_specializations!(existing, method::Method, modules)
     method.module in modules || return
@@ -197,48 +191,6 @@ method_in_table(value::Function, method::Method) = method in methods(value)
 method_in_table(value::Type, method::Method) = method in methods(value)
 method_in_table(_value, ::Method) = false
 
-function argument_types(method::Method)
-    params = signature_types(method.sig)
-    positional = params[2:end]
-    Tuple{positional...}
-end
-
-# The probed definition was compiled, then replaced. The table holds the later method of the same signature.
-function restored_method(probed::Method)
-    value = defined_callable(probed)
-    isnothing(value) && return nothing
-    types = argument_types(probed)
-    matched = methods(value, types)
-    chosen = nothing
-    for method in matched
-        method.sig == probed.sig || continue
-        if isnothing(chosen) || method.primary_world > chosen.primary_world
-            chosen = method
-        end
-    end
-    chosen
-end
-
-function compiled_probed(armed::ProbeHandle, modules)
-    found = Method[]
-    module_set = Set{Module}(modules)
-    for func in armed.functions
-        defined = methods(func)
-        for method in defined
-            record_compiled!(found, method, module_set)
-        end
-    end
-    found
-end
-
-function credit_restored!(reached, probed_compiled)
-    for probed in probed_compiled
-        restored = restored_method(probed)
-        isnothing(restored) && continue
-        push!(reached, restored)
-    end
-end
-
 function record_compiled!(reached, method::Method, modules)
     method.module in modules || return
     is_generated(method) && return
@@ -247,32 +199,14 @@ function record_compiled!(reached, method::Method, modules)
     push!(reached, method)
 end
 
-"""Runs the workload, a zero-argument callable, once with the probes armed (`nothing` probes nothing), and reads
-which of the package's methods it compiled. Returns the `Observation` and the method lists the same walk of the
-method table read. The gate calls it before it walks the method graph."""
-function observe(workload, probes, ctx)
-    records = ProbeRecord[]
-    waits = WaitRecord[]
-    elapsed = 0.0
-    probed_compiled = Method[]
+"""Runs the workload, a zero-argument callable, once, and reads which of the package's methods it compiled. Returns
+what the run left in the method table and the method lists the same walk of the table read. The gate calls it before
+it walks the method graph."""
+function observe(workload, ctx)
     modules = package_modules(ctx)
-    if isnothing(probes)
-        elapsed = @elapsed workload()
-    else
-        armed = arm!(probes, ctx)
-        # arm! and disarm! define methods and keyword bodies after the caller's world began, so the workload and
-        # every read of the method table run in the latest one. disarm! still runs when the workload throws.
-        try
-            elapsed = @elapsed Base.invokelatest(workload)
-            probed_compiled = Base.invokelatest(compiled_probed, armed, modules)
-        finally
-            traced = disarm!(armed)
-            records = traced.records
-            waits = traced.waits
-        end
-    end
+    elapsed = @elapsed workload()
+    # The workload can define methods after the caller's world began, so the table is read in the latest one.
     table = Base.invokelatest(read_run_methods, modules)
-    Base.invokelatest(credit_restored!, table.reached, probed_compiled)
-    observed = Observation(table.reached, table.specializations, records, waits, elapsed)
+    observed = Observation(table.reached, table.specializations, elapsed)
     (observed, table.census)
 end

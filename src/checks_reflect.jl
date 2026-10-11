@@ -41,31 +41,6 @@ function module_key(mod::Module)
     Symbol(text)
 end
 
-function owned_value(value::Union{Function,Type}, mod::Module)
-    parentmodule(value) === mod || return nothing
-    value
-end
-
-owned_value(::Any, ::Module) = nothing
-
-function owned_callable(mod, name)
-    isdefined(mod, name) || return nothing
-    value = getfield(mod, name)
-    owned_value(value, mod)
-end
-
-"""The function or type a path names inside the package: `name` in the root module, `Sub.name` in the package module
-the root binds as `Sub`. Nothing when no package module owns a callable at that path."""
-function package_callable(ctx, path::Symbol)
-    segments = key_segments(path)
-    prefix = segments[1:(end - 1)]
-    home = path_module(ctx.root, prefix)
-    isnothing(home) && return nothing
-    home in package_modules(ctx) || return nothing
-    name = last(segments)
-    owned_callable(home, name)
-end
-
 # The modules defined directly inside a module.
 function submodules(mod::Module)
     found = Module[]

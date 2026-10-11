@@ -19,15 +19,11 @@ module PhaseChecks
 end
 
 @testset "the gate refuses a run that cannot place every check" begin
-    # a workload check with no workload; probes with no workload; an unknown phase;
-    # a finding kind outside the kinds the check declares
-    refusals = (
-        ((PhaseChecks.AfterRun(),), nothing),
-        ((Corpus(),), Probes(functions = ())),
-        ((PhaseChecks.Misplaced(),), nothing),
-        ((PhaseChecks.Stray(),), nothing),
-    )
-    for (checks, probes) in refusals
-        @test_throws ArgumentError gate_findings(Nested; checks, probes)
+    # a workload check with no workload; an unknown phase; a finding kind outside the kinds the check declares
+    after_run = PhaseChecks.AfterRun()
+    misplaced = PhaseChecks.Misplaced()
+    stray = PhaseChecks.Stray()
+    for check in (after_run, misplaced, stray)
+        @test_throws ArgumentError gate_findings(Nested; checks = (check,))
     end
 end

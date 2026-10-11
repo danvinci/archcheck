@@ -1,5 +1,5 @@
 # The gate on this package's own source while Julia builds its image, so a consumer's first gate runs cached code.
-# Probes stay out: arming one redefines methods, which an image build refuses. A red gate here fails the build.
+# A red gate here fails the build.
 function precompile_checks()
     readers = ((run, Tuple{Any}), (kinds, Tuple{}))
     named_here = ("src/precompile.jl",)

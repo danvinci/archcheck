@@ -51,18 +51,15 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 
 A package names its expensive or meaning-bearing values with `Derived(producer; key, cache, readers, converters)` and passes them as `gate(MyPackage; derived = (...))`. The gate then holds that one function produces each value (`OneProducer`), its key names one evaluation (`CacheKeys`), its callers write the cache (`CachedCalls`), and it reaches only its readers (`DerivedReaders`).
 
-## Checks that watch a run
+## Methods a run never compiled
 
-Given a `workload` and `Probes` naming the functions to record, the gate runs the code and checks what it did:
+`UnreachedMethods` reports each method of the package that a run left uncompiled. The run is a `workload`, a function the gate calls before it reads Julia's method table:
 
 ```julia
 ArchCheck.gate(MyPackage;
-    checks = (ArchCheck.CHECKS..., Rebuilds(), TwoNames(), Waits(), UnreachedMethods()),
-    workload = () -> MyPackage.main(),
-    probes = Probes(functions = (MyPackage.solve, MyPackage.load)))
+    checks = (ArchCheck.CHECKS..., UnreachedMethods()),
+    workload = () -> MyPackage.main())
 ```
-
-`Rebuilds` reports a function evaluated again on equal arguments, and `TwoNames` two functions producing one value (a function returning its own argument produces none), each within one call of a probed caller; calls the workload makes itself are its own choice and stay unjudged. A `rebuild` carries `consistent` when the compiler proved the repeated code returns an equal result for equal arguments. `Waits` reports a waited result nobody reads, and `UnreachedMethods` the methods the run never compiled.
 
 The package's own test suite serves as the workload when the gate runs at the end of `test/runtests.jl`, after the tests:
 
@@ -72,7 +69,7 @@ ArchCheck.gate(MyPackage;
     workload = PriorRun())
 ```
 
-`PriorRun()` runs nothing, so `UnreachedMethods` reports the methods the tests never compiled; a test that errors inside a testset still counts every method it ran. An extension whose trigger only the tests load is judged too, since the gate reads the modules loaded when it runs. Probes record only calls made while they are armed, so the gate refuses them beside `PriorRun()`.
+`PriorRun()` runs nothing, so `UnreachedMethods` reports the methods the tests never compiled; a test that errors inside a testset still counts every method it ran. An extension whose trigger only the tests load is judged too, since the gate reads the modules loaded when it runs. With `entries`, a method that a call in the method graph can land on counts as reached.
 
 ## Writing a check
 

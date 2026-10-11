@@ -22,11 +22,6 @@ include("checks_abstract_fields.jl")
 include("checks_boxed_captures.jl")
 include("callgraph.jl")
 include("methodgraph.jl")
-include("probe_hash.jl")
-include("probe_session.jl")
-include("probe_wait.jl")
-include("probe_rewrite.jl")
-include("probe.jl")
 include("workload.jl")
 include("derived.jl")
 include("checks_file.jl")
@@ -44,7 +39,6 @@ include("checks_overloads.jl")
 include("checks_clones.jl")
 include("checks_reach.jl")
 include("checks_opt.jl")
-include("checks_trace.jl")
 include("checks_derived.jl")
 include("checks_waits.jl")
 include("checks_readers.jl")
@@ -60,10 +54,10 @@ export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerWhitelist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
-export UnreachedMethods, Rebuilds, TwoNames, Waits, UnreadWaits
-export Derived, Probes, PriorRun
+export UnreachedMethods, UnreadWaits
+export Derived, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
-export Observation, ProbeRecord, WaitRecord
+export Observation
 public gate, run, kinds, phase, CHECKS
 
 include("precompile.jl")   # last: it gates the finished module

@@ -1,4 +1,4 @@
-# The package spine is the root module's file: its methods are indexed, and a workload probe records them.
+# The package spine is the root module's file: its methods are indexed, and a workload reaches them.
 
 const SPINE_ROOT = load_package("SpineRoot", """
 include("child/Child.jl")
@@ -12,7 +12,7 @@ spine_only(x) = x + 1
     """,
 ])
 
-@testset "a method in the spine is indexed and probed" begin
+@testset "a method in the spine is indexed and reached" begin
     ctx = case_context(SPINE_ROOT)
     spine_file = only(file for file in ctx.index.files if file.name == "SpineRoot.jl")
     @test spine_file.mod === :SpineRoot
@@ -28,11 +28,10 @@ spine_only(x) = x + 1
     uses_child = any(ref -> ref.to === :Child && ref.via === :using, ctx.index.refs)
     @test uses_child
     target = SPINE_ROOT.pkg.spine_only
-    probes = Probes(; functions = (target,), slow_s = 0.0)
     workload = () -> target(2)
-    watched = observed_gate(SPINE_ROOT.pkg; workload, probes)
-    names = [record.name for record in watched.observed.records]
-    @test names == [:spine_only]
+    watched = observed_gate(SPINE_ROOT.pkg; workload)
+    spine_method = only(methods(target))
+    @test spine_method in watched.observed.reached
 end
 
 @testset "a spine using an outside package and importing its child by the package name indexes" begin

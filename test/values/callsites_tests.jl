@@ -95,7 +95,7 @@ function emit_stmt!(lines, calls, depth, rng)
     end
 end
 
-function random_probe(rng, name)
+function random_method(rng, name)
     lines = String["function " * name * "()"]
     calls = CallRow[]
     count = rand(rng, 1:3)
@@ -112,8 +112,8 @@ function callsite_generated()
     includes = String[]
     for seed in 1:40
         rng = Xoshiro(seed)
-        name = "probe_" * string(seed, pad = 2)
-        source, calls = random_probe(rng, name)
+        name = "generated_" * string(seed, pad = 2)
+        source, calls = random_method(rng, name)
         filename = "p" * string(seed, pad = 2) * ".jl"
         push!(files, filename => source)
         expected[filename] = calls
@@ -207,10 +207,10 @@ const CALL_HAND_SCANS = file_scans(CALL_HAND_CTX)
     filename = "p" * string(seed, pad = 2) * ".jl"
     scan = CALL_GENERATED_SCANS[filename]
     got = rows_by_site(scan)
-    probe_name = Symbol("probe_" * string(seed, pad = 2))
-    probe = MethodSite(probe_name, 1)
+    method_name = Symbol("generated_" * string(seed, pad = 2))
+    site = MethodSite(method_name, 1)
     expected = CALL_GENERATED.expected[filename]
-    @test got == Dict(probe => expected)
+    @test got == Dict(site => expected)
 end
 
 @testset "a method's calls are keyed by its name and its line" begin

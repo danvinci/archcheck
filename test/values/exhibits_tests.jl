@@ -35,7 +35,6 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("reaches_internal", "src/shape/plants.jl", "Low.extend_me"),
     ("reaches_internal", "src/shape/workload.jl", "Low.extend_me"),
     ("reader_set", "src/shape/plants.jl", "PlainItem.read_item"),
-    ("rebuild", "src/shape/trace.jl", "left_name"),
     ("runtime_dispatch", "src/shape/plants.jl", "boxed_total(::Int64)"),
     ("runtime_dispatch", "src/shape/plants.jl", "runtime_plant(::Function, ::Int64)"),
     ("second_producer", "src/shape/derived.jl", "again_span"),
@@ -54,8 +53,6 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("stale_export", "src/shape/Shape.jl", "never_defined"),
     ("storage_overload", "src/shape/plants.jl", "store_copy"),
     ("tuple_return", "src/shape/plants.jl", "triple"),
-    ("two_names", "src/shape/trace.jl", "left_name"),
-    ("two_names", "src/shape/trace.jl", "right_name"),
     ("type_branch", "src/shape/plants.jl", "pick_type:value"),
     ("uncached_call", "src/shape/derived.jl", "skip_store"),
     ("undeclared_module", "src/contracts/Contracts.jl", "Low"),
@@ -68,8 +65,6 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("ignored_parameter", "src/shape/sinks.jl", "sink_a:1"),
     ("ignored_parameter", "src/shape/sinks.jl", "sink_b:1"),
     ("ignored_parameter", "src/shape/sinks.jl", "sink_c:1"),
-    ("ignored_parameter", "src/shape/trace.jl", "left_name:1"),
-    ("ignored_parameter", "src/shape/trace.jl", "right_name:1"),
     ("unused_argument", "src/shape/plants.jl", "Base.identity:choice"),
     ("unused_argument", "src/shape/plants.jl", "Base.identity:marker"),
     ("unused_argument", "src/shape/plants.jl", "Base.identity:tail"),
@@ -77,11 +72,8 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("unused_argument", "src/shape/sinks.jl", "sink_a:brick"),
     ("unused_argument", "src/shape/sinks.jl", "sink_b:brick"),
     ("unused_argument", "src/shape/sinks.jl", "sink_c:brick"),
-    ("unused_argument", "src/shape/trace.jl", "left_name:x"),
-    ("unused_argument", "src/shape/trace.jl", "right_name:x"),
     ("unreached_method", "src/shape/plants.jl", "never_called"),
-    ("unread_wait", "src/shape/trace.jl", "drops"),
-    ("wait", "src/shape/trace.jl", "produced"),
+    ("unread_wait", "src/shape/joins.jl", "drops"),
 ])
 
 @testset "exhibits: the gate reports the planted set" begin

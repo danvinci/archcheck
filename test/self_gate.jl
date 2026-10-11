@@ -41,21 +41,6 @@ function exhibit_entries()
     ((Exhibits.exercise, Tuple{}),)
 end
 
-# `exercise` is the call within which the probed calls' repeats are judged.
-function exhibit_probes()
-    watched = (
-        Exhibits.Shape.exercise,
-        Exhibits.Shape.make_span,
-        Exhibits.Shape.left_name,
-        Exhibits.Shape.right_name,
-        Exhibits.Shape.produced,
-        Exhibits.Shape.looked,
-        Exhibits.Shape.drops,
-        Exhibits.Shape.hold_inputs,
-    )
-    Probes(functions = watched, slow_s = 0.0)
-end
-
 function exhibit_derived()
     declared = Derived(
         Exhibits.Shape.make_span;
@@ -82,7 +67,7 @@ function exhibit_checks()
     allowed = (("src/shape/plants.jl", :allowed_call),)
     whitelist = CallerWhitelist((:guarded,), allowed)
     push!(active, whitelist)
-    push!(active, UnreadWaits(allowed = (:hold_inputs,)))
+    push!(active, UnreadWaits())
     push!(active, Independent(:Low, :Shape))
     push!(active, DeclaredExtensions())
     readers = ((Exhibits.Shape.read_item, Tuple{}),)
@@ -92,13 +77,10 @@ function exhibit_checks()
     corpus = OptEntry[runtime, boxed]
     push!(active, OptAnalysis(corpus))
     push!(active, UnreachedMethods())
-    push!(active, Rebuilds())
-    push!(active, TwoNames())
-    push!(active, Waits())
     Tuple(active)
 end
 
-function run_exhibit_gate(report_path, io, probes)
+function run_exhibit_gate(report_path, io)
     checks = exhibit_checks()
     entries = exhibit_entries()
     derived = exhibit_derived()
@@ -109,7 +91,6 @@ function run_exhibit_gate(report_path, io, probes)
             io = io,
             checks = checks,
             entries = entries,
-            probes = probes,
             derived = derived,
             workload = exhibit_workload,
             entry_dirs = [scripts],
@@ -125,8 +106,7 @@ function run_exhibit_gate(report_path, io, probes)
 end
 
 function exhibit_gate(; report_path, io)
-    probes = exhibit_probes()
-    run_exhibit_gate(report_path, io, probes)
+    run_exhibit_gate(report_path, io)
 end
 
 # The public calls a caller makes, with any keywords.
@@ -168,12 +148,12 @@ end
 # Julia internals with no public form in 1.13.1, each read only in the boundary file, whose every operation states
 # its contract.
 function internal_sites()
-    callees = (:visit, :kwarg_decl, :bodyfunction, :delete_method, :method_argnames, :fixup_stdlib_path, :moduleloc,
+    callees = (:visit, :kwarg_decl, :bodyfunction, :method_argnames, :fixup_stdlib_path, :moduleloc,
                :meta, :Binding, :datatype_haspadding, :loaded_modules, :env_project_file, :parsed_toml, :PkgId,
-               :sync_varname, :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module,
+               :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module,
                :unwrap_unionall, :rewrap_unionall, :has_free_typevars, :uniontypes, :isType, :NativeInterpreter,
                :InferenceParams, :infer_return_type, :return_types, :generating_output, :specializations,
-               :method_instance, :hasgenerator, :isvarargtype, :get_world_counter, :decode_effects,
+               :method_instance, :hasgenerator, :isvarargtype, :get_world_counter,
                :ForwardToBackedgeIterator, :argextype, :widenconst, :pkgorigins, :parse_cache_header, :_crc32c)
     boundary = ("src/julia_internals.jl",)
     CallerWhitelist(callees, (), boundary)
@@ -193,8 +173,7 @@ function static_checks()
     push!(active, parse_sites())
     push!(active, inference_sites())
     push!(active, internal_sites())
-    waits = UnreadWaits(allowed = (:probe_wait, :wait_synced))
-    push!(active, waits)
+    push!(active, UnreadWaits())
     push!(active, InferredCalls())
     readers = ((ArchCheck.run, Tuple{Any}), (ArchCheck.kinds, Tuple{}))
     push!(active, ReaderSet(Check, readers))
@@ -202,35 +181,21 @@ function static_checks()
     Tuple(active)
 end
 
-function workload_checks()
-    (UnreachedMethods(), Rebuilds(), TwoNames(), Waits())
-end
-
-# The derivations several readers share, each evaluated once per piece of code within one gate run, the call that
-# judges their repeats. Named by path: the tests reach only public names.
-function self_probes()
-    producers = (:gate, :parse_file, :scan_tree, :method_bodies, :load_events)
-    Probes(functions = producers, slow_s = 0.0)
-end
-
 function self_checks()
     static = static_checks()
-    workload = workload_checks()
-    (static..., workload...)
+    (static..., UnreachedMethods())
 end
 
 # The tests are an entry dir, so they too may reach only exported and public names.
 function self_gate(; report_path, io)
     checks = self_checks()
     entries = self_entries()
-    probes = self_probes()
     tests = joinpath(pkgdir(ArchCheck), "test")
     ArchCheck.gate(ArchCheck;
         report_path = report_path,
         io = io,
         checks = checks,
         entries = entries,
-        probes = probes,
         workload = exhibit_gate_quiet,
         entry_dirs = [tests],
     )
@@ -238,7 +203,6 @@ end
 
 function exhibit_gate_quiet()
     report = joinpath(mktempdir(), "exhibits.jsonl")
-    probes = exhibit_probes()
-    run_exhibit_gate(report, devnull, probes)
+    run_exhibit_gate(report, devnull)
     nothing
 end

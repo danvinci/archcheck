@@ -12,7 +12,7 @@ function checks_in(checks::Vector{Check}, wanted::Symbol)
     phased
 end
 
-"""Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()` with `probes` armed, then walks the method graph from `entries` and runs the checks that read the graph or the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names. Called at the end of `test/runtests.jl` with `workload = PriorRun()`, it reads what the test suite ran."""
+"""Parses `pkg`'s `src/` once and runs the static `checks` (`CHECKS` by default), then `workload()`, then walks the method graph from `entries` and runs the checks that read the graph or the workload. Prints what is new since the last report, writes each finding as a JSON line to `report_path` (`test/out/architecture.jsonl` by default), throws on a finding of an error kind, and returns the findings. `error_kinds` promotes kinds to errors; `entries` are `(function, argument types)` pairs that seed the method graph; `derived` holds the package's `Derived` declarations; `entry_dirs` are script and test directories that `ReachesInternal` holds to the public names. Called at the end of `test/runtests.jl` with `workload = PriorRun()`, it reads what the test suite ran."""
 function gate(pkg::Module;
               src = joinpath(pkgdir(pkg), "src"),
               entry_dirs = String[],
@@ -21,7 +21,6 @@ function gate(pkg::Module;
               checks = CHECKS,
               error_kinds = (),
               workload = nothing,
-              probes::Union{Nothing,Probes} = nothing,
               entries = (),
               derived::Tuple{Vararg{Derived}} = ())
     listed = collect(Check, checks)
@@ -29,14 +28,14 @@ function gate(pkg::Module;
     promoted = collect(Symbol, error_kinds)
     source = String(src)
     report = String(report_path)
-    run_gate(pkg, source, directories, report, io, listed, promoted, workload, probes, entries, derived)
+    run_gate(pkg, source, directories, report, io, listed, promoted, workload, entries, derived)
 end
 
 # Inferred once at these types, whatever keywords a caller passed: the keyword method above only narrows them.
 Base.@nospecializeinfer function run_gate(pkg::Module, src::String, entry_dirs::Vector{String}, report_path::String,
                                          @nospecialize(io::IO), checks::Vector{Check}, error_kinds::Vector{Symbol},
-                                         @nospecialize(workload), probes::Union{Nothing,Probes},
-                                         @nospecialize(entries), @nospecialize(derived::Tuple{Vararg{Derived}}))
+                                         @nospecialize(workload), @nospecialize(entries),
+                                         @nospecialize(derived::Tuple{Vararg{Derived}}))
     severity = severities(checks; error_kinds)   # before the parse, so a bad error_kinds fails fast
     static = checks_in(checks, :static)
     walking = checks_in(checks, :graph)
@@ -44,18 +43,14 @@ Base.@nospecializeinfer function run_gate(pkg::Module, src::String, entry_dirs::
     if isnothing(workload)
         waiting = typeof.(observing)
         isempty(observing) || throw(ArgumentError("workload checks $waiting need a workload"))
-        isnothing(probes) || throw(ArgumentError("probes observe a workload, and none is declared"))
-    end
-    if !isnothing(probes) && !records_calls(workload)
-        throw(ArgumentError("probes record the calls a workload makes, and $(typeof(workload)) ran before they were armed"))
     end
     parsed = Context(pkg; src, entry_dirs, derived)   # the one parse, src/ and entry dirs
     findings = run_static_checks(parsed, static)
     # The walk makes a specialization of each method it walks, so it waits until the workload's reach is read.
-    # Restored probes define methods after this call's world began.
+    # The workload can define methods after this call's world began.
     unwalked = parsed
     if !isnothing(workload)
-        observed, census = observe(workload, probes, parsed)
+        observed, census = observe(workload, parsed)
         unwalked = Context(parsed; observed, census)
     end
     ctx = Base.invokelatest(with_method_graph, unwalked, entries)
