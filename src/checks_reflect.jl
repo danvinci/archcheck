@@ -126,21 +126,6 @@ function check_stale_exports(mods; repo)
     findings
 end
 
-"""The repo-relative path of each file the package's loaded methods record, converted once per context: thousands of
-methods share a few hundred files. A method recorded elsewhere, as another package's, converts where it is read."""
-struct RecordedPaths
-    repo::String                 # the root every path is relative to
-    paths::Dict{Symbol,String}   # file a method records -> its repo-relative path
-end
-
-function site_path(recorded::RecordedPaths, file::Symbol)
-    held = get(recorded.paths, file, nothing)
-    isnothing(held) || return held
-    recorded_path(file, recorded.repo)
-end
-
-method_site(method::Method, recorded::RecordedPaths) = (site_path(recorded, method.file), Int(method.line))
-
 # A recorded repo-relative site, when its file lies inside the repository; nothing for another package's file or for
 # code evaluated with no file.
 function site_in_repository(site, repo)

@@ -258,6 +258,31 @@ function recorded_path(file, repo)
     relpath(local_path, repo)
 end
 
+"""The repo-relative path of each file the package's loaded methods record, converted once per context: thousands of
+methods share a few hundred files. A method recorded elsewhere, as another package's, converts where it is read."""
+struct RecordedPaths
+    repo::String                 # the root every path is relative to
+    paths::Dict{Symbol,String}   # file a method records -> its repo-relative path
+end
+
+# Each file the method lists record, converted to its repo-relative path once.
+function recorded_paths(repo::String, method_lists)
+    paths = Dict{Symbol,String}()
+    for methods in method_lists, method in methods
+        haskey(paths, method.file) && continue
+        paths[method.file] = recorded_path(method.file, repo)
+    end
+    RecordedPaths(repo, paths)
+end
+
+function site_path(recorded::RecordedPaths, file::Symbol)
+    held = get(recorded.paths, file, nothing)
+    isnothing(held) || return held
+    recorded_path(file, recorded.repo)
+end
+
+method_site(method::Method, recorded::RecordedPaths) = (site_path(recorded, method.file), Int(method.line))
+
 # Where a module's `module` line sits. `Base.moduleloc` reads the location Julia recorded when it defined the module.
 function module_site(mod::Module, repo)
     location = Base.moduleloc(mod)

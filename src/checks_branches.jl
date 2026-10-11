@@ -3,14 +3,14 @@
 const TYPE_COMPARISONS = (:(==), :(===), :(!=), :(!==), :(<:))
 
 # The arguments each loaded method leaves unspecialized, by repo-relative file, line and name.
-function unspecialized_arguments(defined, repo)
+function unspecialized_arguments(defined, recorded::RecordedPaths)
     found = Set{Tuple{String,Int,Symbol}}()
     for method in defined
         names = unspecialized_names(method)
         isempty(names) && continue
-        file = recorded_path(method.file, repo)
+        file, line = method_site(method, recorded)
         for name in names
-            push!(found, (file, method.line, name))
+            push!(found, (file, line, name))
         end
     end
     found
@@ -25,9 +25,9 @@ function argument_identifiers(scan::FileScan)
     found
 end
 
-function check_type_branches(index::SourceIndex, defined, repo)
+function check_type_branches(index::SourceIndex, defined, recorded::RecordedPaths)
     findings = Finding[]
-    unspecialized = unspecialized_arguments(defined, repo)
+    unspecialized = unspecialized_arguments(defined, recorded)
     for file in index.files
         arguments = argument_identifiers(file.scan)
         walk = BranchWalk(findings, file, arguments, unspecialized)

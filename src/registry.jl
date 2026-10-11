@@ -29,16 +29,6 @@ function read_methods(mods)
     finish_methods(defined, foreign, nested, project)
 end
 
-# Each file the method lists record, converted to its repo-relative path once.
-function recorded_paths(repo::String, method_lists)
-    paths = Dict{Symbol,String}()
-    for methods in method_lists, method in methods
-        haskey(paths, method.file) && continue
-        paths[method.file] = recorded_path(method.file, repo)
-    end
-    RecordedPaths(repo, paths)
-end
-
 function Context(index::SourceIndex, root::Module, mods; methods = nothing, derived = ())
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
@@ -290,7 +280,7 @@ kinds(::DeclaredExtensions) = (:private_extension => :error,)
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
 kinds(::ForeignFields) = (:foreign_field => :advisory,)
 
-run(::TypeBranches, ctx) = check_type_branches(ctx.index, ctx.defined, ctx.index.repo)
+run(::TypeBranches, ctx) = check_type_branches(ctx.index, ctx.defined, ctx.recorded)
 kinds(::TypeBranches) = (:type_branch => :advisory,)
 
 run(::FileBackEdges, ctx) = check_file_backedges(ctx.index, ctx.mods, ctx.root)
