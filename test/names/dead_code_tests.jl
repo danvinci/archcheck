@@ -322,6 +322,35 @@ include("body.jl")
     end
 end
 
+# `colon` adds methods to `Base.:(:)`, and `@recipe` keeps no function `plotted`, so what each reads stays live;
+# `@inline` keeps its definition.
+const LOADED_FUNCTION = load_package("LoadedFunction", """
+macro recipe(ex)
+    :(nothing)
+end
+include("ranges.jl")
+""", ["ranges.jl" => """
+struct Span
+    lo::Int   # first value
+end
+const colon = Base.:(:)
+colon(a::Span, b::Span) = span_range(a, b)
+span_range(a, b) = a.lo:b.lo
+@recipe function plotted(x::Int)
+    erased_helper()
+end
+erased_helper() = 1
+@inline function inlined_unused()
+    1
+end
+unused_helper() = 1
+"""])
+
+@testset "a definition is judged as the function its loaded method belongs to" begin
+    dead = dead_symbols(LOADED_FUNCTION)
+    @test dead == Set(["inlined_unused", "unused_helper"])
+end
+
 @testset "a local binding is not a call and a real call of another name still counts" begin
     dead = dead_symbols(LOCAL_BINDINGS)
     for name in LOCAL_BINDING_DEAD
@@ -332,4 +361,43 @@ end
     end
     @test !("PosCallLaw" in dead)
     @test !("Some" in dead)
+end
+
+# `f ≀ x` adds a method of `≀`. The left name is an argument.
+const INFIX_DEFINITION = load_package("InfixDefinition", """
+include("body.jl")
+""", ["body.jl" => """
+f ≀ x = infix_helper()
+infix_helper() = 1
+"""])
+
+@testset "an infix definition is judged as the operator its loaded method belongs to" begin
+    dead = dead_symbols(INFIX_DEFINITION)
+    @test dead == Set(["infix_helper", "≀"])
+end
+
+# The fallback include parses the extension, and this Julia skips that branch. The extension's trigger is absent.
+const FALLBACK_INCLUDE = load_package("FallbackInclude", """
+kept_by_extension() = 1
+if !isdefined(Base, :get_extension)
+    include("../ext/FallbackIncludeAbsentExt.jl")
+end
+""", [
+    "../ext/FallbackIncludeAbsentExt.jl" => """
+    module FallbackIncludeAbsentExt
+    using FallbackInclude
+    caller() = FallbackInclude.kept_by_extension()
+    end
+    """,
+], """
+[weakdeps]
+Absent = "4d5c8b1e-0f3a-4e6b-9c2d-7a1b3c5d7e9f"
+
+[extensions]
+FallbackIncludeAbsentExt = "Absent"
+""")
+
+@testset "a fallback include of an unloaded extension keeps the definition that extension reads" begin
+    dead = dead_symbols(FALLBACK_INCLUDE)
+    @test !("kept_by_extension" in dead)
 end

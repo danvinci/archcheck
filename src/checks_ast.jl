@@ -27,14 +27,38 @@ function published_names(index)
     names
 end
 
-# The top-level functions DeadCode judges, by module and name. A curly constructor binds no name: dispatch reaches
-# it through its type, as it reaches `Base.show` methods.
-function judged_defs(index)
+# Each definition form's name -> the lines it starts on, nested forms included.
+function form_lines(scan::FileScan)
+    lines = Dict{Symbol,Vector{Int}}()
+    for site in keys(scan.forms)
+        push!(get!(Vector{Int}, lines, site.name), site.line)
+    end
+    lines
+end
+
+# Whether a loaded method at one of `starts` in `path` adds to the package's own function `name`.
+function defines_own_function(owned, path, starts, name)
+    for line in starts
+        added = get(owned, (path, line), nothing)
+        isnothing(added) && continue
+        name in added && return true
+    end
+    false
+end
+
+# A form is judged only when a loaded method at its line adds to the package's own function of its name; an alias
+# to another module's function, a macro's rewrite or an unloaded extension adds none, so what it reads stays a root.
+function judged_defs(index, owned)
     defs = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
-    for file in index.files, name in file.scan.funcs
-        name in file.scan.constructors && continue
-        line = file.scan.line[name]
-        defs[(file.mod, name)] = (file.path, line)
+    for file in index.files
+        lines = form_lines(file.scan)
+        for name in file.scan.funcs
+            name in file.scan.constructors && continue
+            starts = get(lines, name, Int[])
+            defines_own_function(owned, file.path, starts, name) || continue
+            line = file.scan.line[name]
+            defs[(file.mod, name)] = (file.path, line)
+        end
     end
     defs
 end
@@ -92,8 +116,8 @@ function dead_readers(edges, reached, judged)
     readers
 end
 
-function dead_code_findings(index, entries)
-    defs = judged_defs(index)
+function dead_code_findings(index, entries, owned)
+    defs = judged_defs(index, owned)
     judged = Set(last(key) for key in keys(defs))
     edges = name_edges(index)
     roots = name_roots(index, edges, judged, entries)
@@ -121,7 +145,7 @@ const RUNTIME_ENTRIES = (:__init__,)
 
 # A top-level function no root reaches through names, cycles included. A loaded module's `names` holds what its
 # load exported or declared public, as an `@eval export` loop does, beside the lists the parse reads.
-function check_dead_code_static(index, modules; public_is_entry::Bool)
+function check_dead_code_static(index, modules, owned; public_is_entry::Bool)
     entries = union(index.external, RUNTIME_ENTRIES)
     if public_is_entry
         published = published_names(index)
@@ -131,7 +155,7 @@ function check_dead_code_static(index, modules; public_is_entry::Bool)
             union!(entries, loaded)
         end
     end
-    dead_code_findings(index, entries)
+    dead_code_findings(index, entries, owned)
 end
 
 # Every .jl the tool touches is a ranked member, a module wrapper, or a hole.

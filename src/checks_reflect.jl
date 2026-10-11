@@ -220,6 +220,21 @@ end
 
 method_site(method::Method, repo) = (recorded_path(method.file, repo), Int(method.line))
 
+# Each source site -> the names of the package's own functions that the loaded methods there add to.
+function owned_functions_by_site(defined, modules, repo)
+    project = Set{Module}(modules)
+    by_site = Dict{Tuple{String,Int},Set{Symbol}}()
+    for method in defined
+        added_to = method_function(method)
+        isnothing(added_to) && continue
+        parentmodule(added_to) in project || continue
+        site = method_site(method, repo)
+        owned = get!(Set{Symbol}, by_site, site)
+        push!(owned, nameof(added_to))
+    end
+    by_site
+end
+
 # A scan site names a method by its own name, or by a qualified name ending in it (`Base.show`).
 function site_names_method(site::MethodSite, method::Method)
     site.name === method.name && return true
