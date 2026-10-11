@@ -39,7 +39,7 @@ const REPORT_FIELDS = (:module, :kind, :severity, :file, :line, :symbol, :detail
 
 # One JSON object per line, greppable per module. `severity` is the one the gate applied, promotions included. Every
 # field has a concrete type, so one compiled writer serves every finding.
-function emit_jsonl(io::IO, findings, severity)
+function emit_jsonl(io::IO, findings::Vector{Finding}, severity::Dict{Symbol,Symbol})
     for f in findings
         evidence = Dict{String,String}(string(key) => value for (key, value) in f.evidence)
         level = string(severity[f.kind])

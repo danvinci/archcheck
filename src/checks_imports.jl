@@ -77,7 +77,7 @@ function listed_binding(item)
     last(names), source_line(item)
 end
 
-function add_clause!(imports::ModuleImports, home::Module, file, clause, line_kind)
+function add_clause!(imports::ModuleImports, home::Module, file, clause::JS.SyntaxNode, line_kind)
     kind = JS.kind(clause)
     if kind == K"as"
         renamed = renamed_parts(clause)

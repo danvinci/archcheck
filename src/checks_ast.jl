@@ -145,7 +145,7 @@ const RUNTIME_ENTRIES = (:__init__,)
 
 # A top-level function no root reaches through names, cycles included. A loaded module's `names` holds what its
 # load exported or declared public, as an `@eval export` loop does, beside the lists the parse reads.
-function check_dead_code_static(index, modules, owned; public_is_entry::Bool)
+function check_dead_code_static(index::SourceIndex, modules, owned; public_is_entry::Bool)
     entries = union(index.external, RUNTIME_ENTRIES)
     if public_is_entry
         published = published_names(index)
@@ -264,7 +264,7 @@ function layered_refs(index, root::Symbol, strict::Bool)
 end
 
 # Any cross-module reference whose target does not finish loading strictly before its source.
-function check_backedges(index, root::Symbol; strict::Bool)
+function check_backedges(index::SourceIndex, root::Symbol; strict::Bool)
     findings = Finding[]
     for ref in layered_refs(index, root, strict)
         is_backedge(index.rank, ref.from, ref.to) || continue
@@ -272,7 +272,7 @@ function check_backedges(index, root::Symbol; strict::Bool)
         to_rank = index.rank[ref.to]
         from_text = join(from_rank, ".")
         to_text = join(to_rank, ".")
-        order = from_text * "->" * to_text
+        order = string(from_text, "->", to_text)
         via = string(ref.via)
         evidence = [:include_order => order, :via => via]
         target = string(ref.to)

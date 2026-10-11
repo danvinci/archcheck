@@ -60,14 +60,14 @@ end
 
 # Every name a binding under `node` introduces: assignment and loop targets, closure and method
 # parameters, local method names, `local` and `catch` variables. Keyword labels count too.
-function bound_names!(names, node)
+function bound_names!(names::Union{Vector{Symbol}, Set{Symbol}}, node::JS.SyntaxNode)
     children = child_nodes(node)
     isnothing(children) && return
     kind = JS.kind(node)
     if is_method_form(node)
         local_name = sig_name(children[1])
         isnothing(local_name) || push!(names, local_name)
-        arguments = sig_argnames(children[1])
+        arguments = sig_argnames(children[1])::Vector{Symbol}
         union!(names, arguments)
     elseif kind == K"=" || kind == K"in" || kind == K"->" || kind == K"do" || kind == K"catch"
         _argname!(names, children[1])

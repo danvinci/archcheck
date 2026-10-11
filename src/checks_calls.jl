@@ -12,14 +12,14 @@ kinds(::OverlappingCalls) = (:overlapping_call => :advisory,)
 
 phase(::OverlappingCalls) = :graph
 
-function call_text(call)
+function call_text(call::CallSite)
     name = string(call.callee)
     if !isempty(call.qualifier)
-        name = call.qualifier * "." * name
+        name = string(call.qualifier, ".", name)
     end
-    opened = name * "(" * call.arguments
-    isempty(call.keywords) && return opened * ")"
-    opened * "; " * call.keywords * ")"
+    opened = string(name, "(", call.arguments)
+    isempty(call.keywords) && return string(opened, ")")
+    string(opened, "; ", call.keywords, ")")
 end
 
 function method_before(left, right)

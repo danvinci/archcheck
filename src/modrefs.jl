@@ -166,7 +166,7 @@ function add_alias!(aliases, modules::ModuleNames, scope, dots, path, bound)
 end
 
 # The module renames one using/import clause makes: `import A.B as C` binds C, `using A: b as c` binds c to A.b.
-function clause_aliases!(aliases, modules::ModuleNames, scope, clause)
+function clause_aliases!(aliases, modules::ModuleNames, scope, clause::JS.SyntaxNode)
     kind = JS.kind(clause)
     if kind == K"as"
         whole = renamed_parts(clause)
@@ -460,7 +460,7 @@ end
 
 # The modules one clause binds in a script: a path naming a module whole binds its last name, or the name after
 # `as`, and `using` it brings its exports; a listed name binds when it names a module.
-function script_clause!(script::ScriptNames, modules::ReachModules, clause, line_kind)
+function script_clause!(script::ScriptNames, modules::ReachModules, clause::JS.SyntaxNode, line_kind)
     kind = JS.kind(clause)
     if kind == K"as"
         renamed = renamed_parts(clause)

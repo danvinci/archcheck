@@ -58,9 +58,9 @@ function require_covered(index, directory)
 end
 
 # The directory's module, and every module nested in it, are where a name can be declared public.
-function is_tree_public(ctx, root_key, name)
+function is_tree_public(ctx, root_key::Symbol, name::Symbol)
     root = string(root_key)
-    nested = root * "."
+    nested = string(root, ".")
     modules = package_modules(ctx)
     for mod in modules
         key = string(module_key(mod))

@@ -539,7 +539,7 @@ function walk_scoped!(scan, node, scope)
 end
 
 # `where` and return-type wrappers unwrap; their annotations are signature reads.
-function unwrap_signature!(scan, signature, noted)
+function unwrap_signature!(scan, signature::JS.SyntaxNode, noted)
     kind = JS.kind(signature)
     while kind == K"where" || kind == K"::"
         children = child_nodes(signature)
@@ -577,7 +577,7 @@ end
 
 # Default right-hand sides in signature order: positionals, then the keyword block.
 # Each value is filtered by where-typevars plus the names of arguments to its left.
-function absorb_defaults!(scan, signature, scope)
+function absorb_defaults!(scan, signature::JS.SyntaxNode, scope)
     prefix = copy(scope.bound)
     where_vars!(prefix, signature)
     annotation_bound = copy(prefix)

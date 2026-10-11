@@ -290,7 +290,7 @@ kinds(::FileBackEdges) = (:file_backedge => :advisory,)
 
 function run(::FileSinkable, ctx)
     published = published_names(ctx.index)
-    judge = function (cg)
+    judge = function (cg::CallGraph)
         vocabulary = union(cg.types, cg.shared, published)
         check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.index.repo, vocabulary)
     end

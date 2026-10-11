@@ -5,7 +5,7 @@ using Base.JuliaSyntax: @K_str
 is_module_block(node) = JS.kind(node) == K"module"
 
 # Every walk takes children here. A module block's code belongs to that module, so a walk stops at one.
-function child_nodes(node)
+function child_nodes(node::JS.SyntaxNode)::Union{Nothing, Vector{JS.SyntaxNode}}
     is_module_block(node) && return nothing
     JS.children(node)
 end
@@ -239,7 +239,7 @@ function method_body(node)
 end
 
 # A prefix call's own arguments, keyword block excluded.
-function call_args(node)
+function call_args(node::JS.SyntaxNode)
     found = JS.SyntaxNode[]
     children = child_nodes(node)
     isnothing(children) && return found
