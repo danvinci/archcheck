@@ -15,20 +15,49 @@ function has_all_keyword(call_part)
     any(is_all_keyword, arguments)
 end
 
-function is_blanket_names_call(node)
+# `@__MODULE__` with no arguments: the wrapper the call is written in.
+function is_this_module_macro(argument)
+    JS.kind(argument) == K"macrocall" || return false
+    parts = child_nodes(argument)
+    child_count(parts) == 1 || return false
+    macro_name = first(parts)
+    named_symbol(macro_name) === Symbol("@__MODULE__")
+end
+
+# A bare name or a dotted path that spells this wrapper's module.
+function is_own_module_argument(argument, module_key)
+    path = dotted_names(argument)
+    isnothing(path) && return false
+    written = join(path, ".")
+    written_key = Symbol(written)
+    written_key === module_key && return true
+    length(path) == 1 || return false
+    segments = key_segments(module_key)
+    own_name = last(segments)
+    only(path) === own_name
+end
+
+# `names(...; all = true)` lists this wrapper when its argument is `@__MODULE__` or the module's own name.
+function is_blanket_names_call(node, module_key)
     JS.kind(node) == K"call" || return false
     call_parts = child_nodes(node)
     child_count(call_parts) == 0 && return false
     call_parts[1].val === :names || return false
-    any(has_all_keyword, call_parts)
+    any(has_all_keyword, call_parts) || return false
+    arguments = call_args(node)
+    length(arguments) == 1 || return false
+    subject = only(arguments)
+    lists_this_module = is_this_module_macro(subject)
+    lists_this_module && return true
+    is_own_module_argument(subject, module_key)
 end
 
-function find_blanket_names(node)
-    is_blanket_names_call(node) && return node
+function find_blanket_names(node, module_key)
+    is_blanket_names_call(node, module_key) && return node
     children = child_nodes(node)
     isnothing(children) && return nothing
     for child in children
-        found = find_blanket_names(child)
+        found = find_blanket_names(child, module_key)
         isnothing(found) || return found
     end
     nothing
@@ -38,7 +67,7 @@ function check_blanket_exports(index::SourceIndex)
     findings = Finding[]
     for file in index.files
         is_wrapper(file) || continue
-        hit = find_blanket_names(file.tree)
+        hit = find_blanket_names(file.tree, file.mod)
         isnothing(hit) && continue
         line = source_line(hit)
         detail = "module exports its whole namespace, so it declares no interface"

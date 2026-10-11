@@ -12,6 +12,34 @@ include("body.jl")
 # names(@__MODULE__; all = true)
 """, ["body.jl" => "kept() = 1\n"])
 
+const NAMES_HELPER = load_package("NamesHelper", """
+exported_names(m::Module) = names(m; all = true)
+helper() = 1
+export helper
+""", [])
+
+const NAMES_EXPORT = load_package("NamesExport", """
+for name in names(@__MODULE__; all = true)
+    Core.eval(@__MODULE__, Expr(:export, name))
+end
+""", [])
+
+const OWN_NAME_EXPORT = load_package("OwnNameExport", """
+for name in names(OwnNameExport; all = true)
+    Core.eval(OwnNameExport, Expr(:export, name))
+end
+""", [])
+
+const NESTED_OWN_NAME = load_package("NestedOwnName", """
+module Outer
+module Inner
+for name in names(Inner; all = true)
+    Core.eval(Inner, Expr(:export, name))
+end
+end
+end
+""", [])
+
 const MISSING_EXPORT = load_package("MissingExport", """
 export present, vanished
 public planned
@@ -131,6 +159,21 @@ end
     ctx = case_context(BLANKET_NAMES)
     found = ArchCheck.run(BlanketExports(), ctx)
     @test only(found).kind === :blanket_export
+    export_ctx = case_context(NAMES_EXPORT)
+    export_found = ArchCheck.run(BlanketExports(), export_ctx)
+    @test only(export_found).kind === :blanket_export
+    own_ctx = case_context(OWN_NAME_EXPORT)
+    own_found = ArchCheck.run(BlanketExports(), own_ctx)
+    @test only(own_found).kind === :blanket_export
+    nested_ctx = case_context(NESTED_OWN_NAME)
+    nested_found = ArchCheck.run(BlanketExports(), nested_ctx)
+    @test only(nested_found).kind === :blanket_export
+end
+
+@testset "names on an argument is not this module exporting itself" begin
+    ctx = case_context(NAMES_HELPER)
+    found = ArchCheck.run(BlanketExports(), ctx)
+    @test isempty(found)
 end
 
 @testset "a comment that quotes a blanket export is not one" begin
