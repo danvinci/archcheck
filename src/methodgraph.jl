@@ -279,7 +279,7 @@ function record_calls!(facts, frame)
         end
         route = call_route(info)
         fact = call_fact(frame, position, branches, route)
-        merge_fact!(facts, fact)
+        isnothing(fact) || merge_fact!(facts, fact)
     end
 end
 
@@ -336,6 +336,7 @@ function record_apply_veto!(facts, frame, position, branches, info)
         return
     end
     known = call_fact(frame, position, branches, route)
+    isnothing(known) && return
     merge_fact!(facts, known)
     veto = veto_fact(known.file, known.line, known.callee, known.via, known.is_used)
     merge_fact!(facts, veto)
@@ -445,9 +446,11 @@ call_route(@nospecialize(_info)) = :call
 # (`flags_for_effects`, Compiler/src/optimize.jl).
 has_flag(flags::UInt32, flag::UInt32) = flags & flag == flag
 
+# Inference types a call it proved unreachable `Union{}`, which lists no argument types, so it yields no fact.
 function call_fact(frame, position, branches, route)
-    code = frame.src
     parameters = signature_types(first(branches).atype)
+    isempty(parameters) && return nothing
+    code = frame.src
     is_keyword = length(parameters) >= 3 && parameters[1] === typeof(Core.kwcall)
     called = is_keyword ? parameters[3] : parameters[1]
     via = is_keyword ? :kwcall : route
@@ -669,11 +672,13 @@ function is_inlined_package_call(code, position, module_set)
     method.module in module_set
 end
 
-# The callee and argument types inference holds at a call; nothing for a builtin, or for a call it proved unreachable.
+# The callee and argument types inference holds at a call. Nothing for a builtin, an unreachable call, or an argument
+# outside the position `widened_argument_type` reads.
 function dispatch_signature(code, sptypes, args)
     types = Any[]
     for arg in args
-        widened = widened_type(code, sptypes, arg)
+        widened = widened_argument_type(code, sptypes, arg)
+        isnothing(widened) && return nothing
         widened === Union{} && return nothing
         push!(types, widened)
     end
@@ -681,11 +686,6 @@ function dispatch_signature(code, sptypes, args)
     callee === typeof(Core._apply_iterate) && return spread_signature(code, sptypes, args, types)
     callee <: Core.Builtin && return nothing
     Tuple{types...}
-end
-
-function widened_type(code, sptypes, arg)
-    inferred = Core.Compiler.argextype(arg, code, sptypes)
-    Core.Compiler.widenconst(inferred)
 end
 
 # A splatted call runs through `_apply_iterate(iterate, f, spreads...)`, which calls `f` on the spreads' members in
@@ -721,11 +721,13 @@ function built_members(code, sptypes, arg::Core.SSAValue)
     built = code.code[arg.id]
     built isa Expr || return nothing
     built.head === :call || return nothing
-    builder = widened_type(code, sptypes, first(built.args))
+    builder = widened_argument_type(code, sptypes, first(built.args))
+    isnothing(builder) && return nothing
     builder === typeof(Core.svec) || return nothing
     members = Any[]
     for member in built.args[2:end]
-        member_type = widened_type(code, sptypes, member)
+        member_type = widened_argument_type(code, sptypes, member)
+        isnothing(member_type) && return nothing
         push!(members, member_type)
     end
     members

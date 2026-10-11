@@ -114,6 +114,23 @@ inferred_return_types(f) = Base.return_types(f)
 cache."""
 inference_interpreter() = Base.Compiler.NativeInterpreter()
 
+# `argextype` accepts a non-expression and these expression heads in argument position (Compiler/src/optimize.jl).
+function can_read_argument(@nospecialize(arg))
+    arg isa Expr || return true
+    head = arg.head
+    head === :static_parameter && return true
+    head === :boundscheck && return true
+    head === :copyast
+end
+
+"""The widened type of an argument `Core.Compiler.argextype` reads, with `widenconst` dropping a constant
+(Compiler/src/optimize.jl). Nothing for an expression that function rejects, such as a nested call."""
+function widened_argument_type(code, sptypes, @nospecialize(arg))
+    can_read_argument(arg) || return nothing
+    inferred = Core.Compiler.argextype(arg, code, sptypes)
+    Core.Compiler.widenconst(inferred)
+end
+
 """Every method the current world matches for `signature`, however many there are. `Base._methods_by_ftype` lists
 them at `Base.get_world_counter`, and a negative limit asks for every match."""
 function matching_methods(@nospecialize(signature))
