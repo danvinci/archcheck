@@ -216,8 +216,7 @@ end
 function is_documented_field(S::DataType, field)
     home = parentmodule(S)
     entries = recorded_docs(home, nameof(S))
-    isnothing(entries) && return false
-    for entry in values(entries.docs)
+    for entry in entries
         recorded = get(entry.data, :fields, nothing)
         !isnothing(recorded) && haskey(recorded, field) && return true
     end

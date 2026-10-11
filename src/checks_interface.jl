@@ -217,7 +217,7 @@ function check_declared_extensions(defined, mods; recorded::RecordedPaths)
         push!(reported, key)
         is_public = Base.ispublic(owning_module, name)
         docs = recorded_docs(owning_module, name)
-        is_documented = !isnothing(docs)
+        is_documented = !isempty(docs)
         is_public && is_documented && continue
         owner = string(module_key(owning_module))
         file, line = method_site(method, recorded)

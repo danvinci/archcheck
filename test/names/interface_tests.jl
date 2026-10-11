@@ -128,6 +128,22 @@ using .Cc
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 """)
 
+# The root documents and extends a function its inner module owns and exports; Julia files that docstring in the
+# root's docs.
+const DOC_ELSEWHERE = load_package("DocElsewhere", """
+module Inner
+export grow
+function grow end
+end
+\"\"\"
+    grow(x)
+
+Grows x.
+\"\"\"
+Inner.grow
+Inner.grow(x::Int) = x + 1
+""")
+
 # A using clause outside the wrapper, in a file the module includes.
 const SPLIT_USING = load_package("SplitUsing", """
 include("parts.jl")
@@ -309,6 +325,12 @@ end
     records = [JSON.parse(line) for line in eachline(report)]
     severities = [record["severity"] for record in records if record["kind"] == "private_extension"]
     @test all(severity -> severity == "error", severities)
+end
+
+@testset "a docstring written in another module documents the owner's function" begin
+    ctx = case_context(DOC_ELSEWHERE)
+    found = ArchCheck.run(DeclaredExtensions(), ctx)
+    @test isempty(found)
 end
 
 @testset "a module reaches only the modules its using and import lines name, in any of its files" begin

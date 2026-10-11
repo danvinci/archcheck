@@ -288,13 +288,21 @@ function module_site(mod::Module, repo)
     (recorded_path(location.file, repo), location.line)
 end
 
-"""The docstrings `home` records for its binding `name`; nothing when it records none. `Base.Docs.meta` with
-`autoinit = false` leaves a module with no docs uninitialised."""
+"""Every docstring recorded for `home`'s binding `name`, from the docs of each module in `Base.Docs.modules`: Julia
+files a docstring under the module that writes it, keyed by the binding it documents."""
 function recorded_docs(home::Module, name::Symbol)
-    docs = Base.Docs.meta(home; autoinit = false)
-    isnothing(docs) && return nothing
     binding = Base.Docs.Binding(home, name)
-    get(docs, binding, nothing)
+    found = Base.Docs.DocStr[]
+    for writer in Base.Docs.modules
+        # `autoinit = false` reads a module's docs without initialising them.
+        docs = Base.Docs.meta(writer; autoinit = false)
+        isnothing(docs) && continue
+        entries = get(docs, binding, nothing)
+        isnothing(entries) && continue
+        multidoc = entries::Base.Docs.MultiDoc
+        append!(found, values(multidoc.docs))
+    end
+    found
 end
 
 # The uuid a package's root module was loaded under, from `Base.PkgId`; nothing for the language's own modules.
