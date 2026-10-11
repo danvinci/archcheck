@@ -39,7 +39,7 @@ struct NameRead
     method::Union{Nothing,JS.SyntaxNode}      # outermost method, macro or closure form holding it; nothing in load-time code
     line::Int                                 # source line of the read
     in_signature::Bool                        # in a signature's annotations, which run where the method is defined
-    in_export::Bool                           # listed by an `export` or `public` line, which publishes the binding
+    is_naming::Bool                           # an `export` or `public` entry or a docstring's subject: names, reads nothing
     is_quoted::Bool                           # a quoted symbol, which names a binding without reading it
 end
 

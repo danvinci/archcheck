@@ -470,12 +470,12 @@ function reads_package_name(build::IndexBuild, home, read::NameRead)
     !isdefined(home, head)
 end
 
-# Each name written joins its definition's refs, or modrefs outside any; signatures and export lists stay out. An
+# Each name written joins its definition's refs, or modrefs outside any; signatures and names only named stay out. An
 # imported name and a type's own name root in modrefs: a method on either extends what dispatch reaches.
 function file_refs!(build::IndexBuild, home, scan::FileScan)
     for read in scan.reads
         read.in_signature && continue
-        read.in_export && continue
+        read.is_naming && continue
         is_local_read(read) && continue
         if is_member(read)
             reads_package_name(build, home, read) || continue

@@ -98,7 +98,7 @@ function is_declared_name(node, name)
     false
 end
 
-function note_free_name!(walk::CodeWalk, node, scope, in_export = false)
+function note_free_name!(walk::CodeWalk, node, scope, is_naming = false)
     name = read_name(node)
     isnothing(name) && return
     binding = get(scope.bound.declared, name, nothing)
@@ -109,7 +109,7 @@ function note_free_name!(walk::CodeWalk, node, scope, in_export = false)
     is_declared_name(node, name) && return
     line = source_line(node)
     is_quoted = is_lone_quote(node)
-    read = NameRead(name, nothing, nothing, nothing, scope.target, scope.method, line, scope.in_signature, in_export,
+    read = NameRead(name, nothing, nothing, nothing, scope.target, scope.method, line, scope.in_signature, is_naming,
                     is_quoted)
     push!(walk.scan.reads, read)
 end
@@ -135,7 +135,7 @@ end
 
 # A member read through a qualifier that can name a module, with the module it names; a module the member itself
 # names is kept for the dotted path around it.
-function note_member!(walk::CodeWalk, scope, dot, qualifier, member)
+function note_member!(walk::CodeWalk, scope, dot, qualifier, member, is_naming)
     is_module_path(qualifier, scope.bound) || return
     through = qualifier_module(walk, qualifier)
     if !isnothing(through)
@@ -145,7 +145,7 @@ function note_member!(walk::CodeWalk, scope, dot, qualifier, member)
         end
     end
     line = source_line(dot)
-    read = NameRead(member, nothing, qualifier, through, scope.target, scope.method, line, scope.in_signature, false,
-                    false)
+    read = NameRead(member, nothing, qualifier, through, scope.target, scope.method, line, scope.in_signature,
+                    is_naming, false)
     push!(walk.scan.reads, read)
 end

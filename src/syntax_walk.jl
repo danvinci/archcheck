@@ -255,7 +255,7 @@ function scope_plain!(scan, node, scope)
     scope_children!(scan, node, scope)
 end
 
-function scope_dot!(scan, node, scope)
+function scope_dot!(scan, node, scope, is_naming = false)
     walked = walk_dot_base!(child -> walk_scoped!(scan, child, scope), node)
     if !walked
         scope_plain!(scan, node, scope)
@@ -269,7 +269,7 @@ function scope_dot!(scan, node, scope)
     end
     member = named_symbol(children[2])
     isnothing(member) && return
-    note_member!(scan, scope, node, children[1], member)
+    note_member!(scan, scope, node, children[1], member, is_naming)
 end
 
 # A method nested in a method already on `scope.site` gets its own form.
@@ -405,14 +405,21 @@ function scope_const!(walk::CodeWalk, node, scope)
     note_alias!(walk, node)
 end
 
-# A macro's arguments and the names its body assigns are its own; its name is no read.
+# A macro's arguments and the names its body assigns are its own; its name is no read. Outside every method its
+# body's reads are filed under `@name`, as a method's are under its function's name.
 function scope_macro!(scan, node::JS.SyntaxNode, scope)
     children = child_nodes(node)
     child_count(children) < 2 && return
     signature = children[1]
     call = signature_call(signature)
     isnothing(call) && return
-    inner = retarget(scope, scope.target, scope.bound, node)
+    target = scope.target
+    name = sig_name(signature)
+    if isnothing(scope.site) && !isnothing(name)
+        target = Symbol("@", name)
+        open_target!(scan, target)
+    end
+    inner = retarget(scope, target, scope.bound, node)
     arguments = child_nodes(call)[2:end]
     noted = signature_scope(inner, inner.bound)
     for argument in arguments
@@ -549,6 +556,8 @@ function walk_scoped!(scan, node, scope)
         scope_const!(scan, node, scope)
     elseif kind == K"export" || kind == K"public"
         scope_export!(scan, node, scope)
+    elseif kind == K"doc"
+        scope_doc!(scan, node, scope)
     elseif kind == K"="
         scope_assign!(scan, node, scope)
     elseif kind == K"call" || kind == K"dotcall" || kind == K"parameters" || kind == K"tuple"
@@ -614,7 +623,7 @@ function absorb_defaults!(scan, signature::JS.SyntaxNode, scope)
     end
 end
 
-# An export or public line lists names it publishes, each a use of the binding it names.
+# An export or public line lists names it publishes: each names its binding and reads nothing.
 function scope_export!(walk::CodeWalk, node, scope)
     for listed in child_nodes(node)
         named = listed
@@ -623,6 +632,51 @@ function scope_export!(walk::CodeWalk, node, scope)
             named = first(child_nodes(listed))
         end
         note_free_name!(walk, named, scope, true)
+    end
+end
+
+# A docstring runs its text's splices and the definition it documents. Julia runs nothing that reads a name, a member
+# or a signature it documents: it files the docstring under that binding, as an export line names it.
+function scope_doc!(walk::CodeWalk, node, scope)
+    children = child_nodes(node)
+    for index in eachindex(children)
+        child = children[index]
+        child_scope = entered_scope(walk, scope, node, index)
+        if index == lastindex(children)
+            scope_documented!(walk, child, child_scope)
+        else
+            walk_scoped!(walk, child, child_scope)
+        end
+    end
+end
+
+function scope_documented!(walk::CodeWalk, subject, scope)
+    kind = JS.kind(subject)
+    if kind == K"tuple"
+        for part in child_nodes(subject)
+            scope_documented!(walk, part, scope)
+        end
+    elseif is_sig(subject)
+        scope_documented_signature!(walk, subject, scope)
+    elseif kind == K"."
+        scope_dot!(walk, subject, scope, true)
+    elseif isnothing(node_symbol(subject))
+        walk_scoped!(walk, subject, scope)
+    else
+        note_free_name!(walk, subject, scope, true)
+    end
+end
+
+# A documented signature's annotations run where the docstring does, as a method's run where it is defined.
+function scope_documented_signature!(walk::CodeWalk, signature, scope)
+    bound = copy(scope.bound)
+    where_vars!(bound, signature)
+    noted = signature_scope(scope, bound)
+    unwrap_signature!(walk, signature, noted)
+    parts = call_parts(signature)
+    scope_documented!(walk, parts.head, scope)
+    for argument in parts.arguments
+        walk_assign_lhs!(walk, argument, noted)
     end
 end
 

@@ -1,6 +1,6 @@
 # A parameterized check a package configures: who may reference a name.
 
-"""Configured through `gate(...; checks)` with the names, the definitions allowed to reference them, and directories to skip. A reference from any other definition is a finding, and so is one in load-time code outside every definition."""
+"""Configured through `gate(...; checks)` with the names, the definitions allowed to reference them, and directories to skip. A reference from any other definition is a finding, cited at its first such reference, and so is one in load-time code outside every definition. A macro is a definition named with its `@`."""
 struct CallerWhitelist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
     callees::C       # function names a body may reference only from an allowed def
     allowed::A       # (repo-relative path, def name) pairs that may reference them
@@ -32,17 +32,19 @@ function require_covered(index, directory)
     throw(ArgumentError(message))
 end
 
-# Each name a def's code writes, a member read through any module included: `JS.parseall` calls `parseall`.
-function written_names(scan::FileScan)
-    written = Dict{Symbol,Set{Symbol}}()
+# Each guarded name each definition's code reads, a member read through any module included (`JS.parseall` calls
+# `parseall`), with the line of its first read there.
+function definition_reads(scan::FileScan, names)
+    found = Dict{Symbol,Dict{Symbol,Int}}()
     for read in scan.reads
         read.in_signature && continue
         is_local_read(read) && continue
         isnothing(read.def) && continue
-        names = get!(Set{Symbol}, written, read.def)
-        push!(names, read.name)
+        read.name in names || continue
+        lines = get!(Dict{Symbol,Int}, found, read.def)
+        get!(lines, read.name, read.line)
     end
-    written
+    found
 end
 
 # Each guarded name a file's load-time code reads outside every definition, with the line of its first read there. A
@@ -52,7 +54,7 @@ function load_time_reads(scan::FileScan, names)
     for read in scan.reads
         isnothing(read.def) || continue
         read.is_quoted && continue
-        read.in_export && continue
+        read.is_naming && continue
         read.name in names || continue
         get!(found, read.name, read.line)
     end
@@ -80,14 +82,11 @@ function run(check::CallerWhitelist, ctx)
     allowed = Set(check.allowed)
     for file in ctx.index.files
         any(prefix -> is_under(file.path, prefix), check.exempt_dirs) && continue
-        written = written_names(file.scan)
-        for (def, used) in written
-            referenced = intersect(used, names)
-            isempty(referenced) && continue
+        for (def, lines) in definition_reads(file.scan, names)
             pair = (file.path, def)
             pair in allowed && continue
-            line = Int(get(file.scan.line, def, 0))
-            finding = unlisted_finding(file, string(def), line, referenced)
+            first_line = minimum(values(lines))
+            finding = unlisted_finding(file, string(def), first_line, keys(lines))
             push!(findings, finding)
         end
         loaded = load_time_reads(file.scan, names)

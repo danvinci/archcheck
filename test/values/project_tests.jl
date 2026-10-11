@@ -76,6 +76,70 @@ const ABSENT_ROOT = load_package("AbsentRoot", "x() = 1\n")
     @test rows == expected
 end
 
+# A docstring on a bare name, a signature or a member documents a binding and runs nothing that reads it.
+const DOC_SUBJECT = load_package("DocSubject", """
+module Inner
+function guarded end
+end
+guarded(x) = 2x
+\"\"\"
+    guarded(x)
+
+Doubles x.
+\"\"\"
+guarded
+\"\"\"Doubles an integer.\"\"\"
+guarded(x::Int)
+\"\"\"Doubles a string, or does Inner's own work.\"\"\"
+guarded(x::String), Inner.guarded
+caller(x) = guarded(x)
+""")
+
+# A whitelist that lets no definition reference the fixtures' one protected function.
+const NO_GUARDED_CALLER = CallerWhitelist((:guarded,), ())
+
+@testset "a docstring's subject is no load-time reference" begin
+    ctx = case_context(DOC_SUBJECT)
+    found = ArchCheck.run(NO_GUARDED_CALLER, ctx)
+    symbols = sort!([f.symbol for f in found])
+    @test symbols == ["caller"]
+end
+
+const MACRO_BODY = load_package("MacroBody", """
+guarded(x) = 2x
+macro twice(ex)
+    quote
+        guarded(\$(esc(ex)))
+    end
+end
+""")
+
+@testset "a macro body's reference belongs to the macro" begin
+    ctx = case_context(MACRO_BODY)
+    found = ArchCheck.run(NO_GUARDED_CALLER, ctx)
+    @test [f.symbol for f in found] == ["@twice"]
+end
+
+const QUALIFIED_DEF = load_package("QualifiedDef", """
+module Inner
+function grow end
+end
+guarded(x) = 2x
+Inner.grow(x::Int) = guarded(x)
+caller(x::Int) = guarded(x)
+caller(x::String) = x
+""")
+
+@testset "an unlisted caller is cited at a line that references the name" begin
+    ctx = case_context(QUALIFIED_DEF)
+    found = ArchCheck.run(NO_GUARDED_CALLER, ctx)
+    spine = joinpath(QUALIFIED_DEF.src, "QualifiedDef.jl")
+    lines = readlines(spine)
+    cited = [checkbounds(Bool, lines, f.line) && occursin("guarded", lines[f.line]) for f in found]
+    @test length(found) == 2
+    @test all(cited)
+end
+
 @testset "a configured directory with no indexed file is refused" begin
     ctx = case_context(ABSENT_ROOT)
     check = CallerWhitelist((:f,), (), ("src/absent",))
