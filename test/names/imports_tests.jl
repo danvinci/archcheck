@@ -59,3 +59,23 @@ end
         (:stale_import, "println", "Test", "Base", 3),
     ]
 end
+
+# `using Base.Meta` imports a constant Base also exports, so `which` has two modules for `Meta`.
+# `norm` still comes through one bare `using`.
+const META_USING = load_package("MetaUsing", """
+using Base.Meta
+using LinearAlgebra
+is_call(ex) = Meta.isexpr(ex, :call)
+scaled(x) = norm(x)
+""", [], """
+[deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+""")
+
+@testset "a using of a stdlib module Base also exports does not abort the import check" begin
+    ctx = case_context(META_USING)
+    @test_throws ErrorException which(ctx.root, :Meta)
+    found = ArchCheck.run(ImportedNames(), ctx)
+    implicit = sort!([f.symbol for f in found if f.kind === :implicit_import])
+    @test implicit == ["norm"]
+end

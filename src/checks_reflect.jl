@@ -345,9 +345,14 @@ owned_subject(value::Function) = value
 owned_subject(@nospecialize(value::Type)) = value
 owned_subject(@nospecialize(value)) = typeof(value)
 
-# A Union has no parent module. The module that owns the alias binding stands for it.
-function binding_owner(home, name, value)
-    is_union_type(value) && return which(home, name)
+# A union names no parent module. The module that owns the alias binding stands for it, and the caller's
+# module stands for an alias imported from more than one module.
+function value_owner(home::Module, name::Symbol, value)
+    if is_union_type(value)
+        owner = binding_owner(home, name)
+        isnothing(owner) && return home
+        return owner
+    end
     subject = owned_subject(value)
     parentmodule(subject)
 end
@@ -357,7 +362,7 @@ function add_call_owners!(owners, home, called_names)
         isdefined(home, called_name) || continue
         value = getproperty(home, called_name)
         value isa Module && continue
-        owner = binding_owner(home, called_name, value)
+        owner = value_owner(home, called_name, value)
         push!(owners, owner)
     end
     owners

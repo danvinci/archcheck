@@ -109,8 +109,10 @@ function reach_finding(modules::ReachModules, unit::ReachUnit, home, through::Mo
     through in modules.allowed && return nothing
     isdefined(through, name) || return nothing
     Base.ispublic(through, name) && return nothing
-    defining = which(through, name)
-    owner = module_label(defining, modules)
+    defining = binding_owner(through, name)
+    # A binding `through` imported from more than one module has no single owner; the module read through names it.
+    labelled = isnothing(defining) ? through : defining
+    owner = module_label(labelled, modules)
     reached = module_label(through, modules)
     symbol = "$reached.$name"
     detail = "reads a name through a module that neither exports it nor declares it public"

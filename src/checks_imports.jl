@@ -130,15 +130,17 @@ end
 function exports_binding(exporter::Module, name::Symbol, owner::Module)
     Base.isexported(exporter, name) || return false
     isdefined(exporter, name) || return false
-    which(exporter, name) === owner
+    defining = binding_owner(exporter, name)
+    defining === owner
 end
 
-# The bare using that brings `name` into `home`; nothing when a clause binds it by name, the module defines it, or
-# a held module exports the same binding.
+# The bare using that brings `name` into `home`; nothing when a clause binds it by name, the module defines it,
+# a held module exports the same binding, or the name was imported from more than one module.
 function implicit_source(home::Module, name::Symbol, imports::ModuleImports, modules::ReachModules)
     name in imports.bound && return nothing
     isdefined(home, name) || return nothing
-    owner = which(home, name)
+    owner = binding_owner(home, name)
+    isnothing(owner) && return nothing
     owner === home && return nothing
     for implicit in (Base, Core)
         exports_binding(implicit, name, owner) && return nothing
@@ -158,7 +160,8 @@ function implicit_findings!(findings, key, home::Module, reads, imports::ModuleI
     for name in sort!(collect(reads))
         clause = implicit_source(home, name, imports, modules)
         isnothing(clause) && continue
-        owner = which(home, name)
+        owner = binding_owner(home, name)
+        isnothing(owner) && continue
         evidence = [:from => module_label(clause.used, modules), :owner => module_label(owner, modules)]
         detail = "reads a name that only a bare using brings in"
         finding = Finding(key, :implicit_import, clause.file, string(name), clause.line, detail, evidence)
@@ -225,7 +228,12 @@ function stale_findings!(findings, key, home::Module, reads, imports::ModuleImpo
         pair = (listed.name, listed.from)
         pair in reported && continue
         push!(reported, pair)
-        owner = which(home, listed.name)
+        defining = binding_owner(home, listed.name)
+        # A binding imported from more than one module keeps the clause's module as its owner label.
+        owner = listed.from
+        if !isnothing(defining)
+            owner = defining
+        end
         evidence = [:from => module_label(listed.from, modules), :owner => module_label(owner, modules)]
         detail = "an import list binds a name the module leaves unread"
         finding = Finding(key, :stale_import, listed.file, string(listed.name), listed.line, detail, evidence)

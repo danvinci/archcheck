@@ -294,6 +294,17 @@ function used_modules(home::Module)
     ccall(:jl_module_usings, Any, (Any,), home)::Vector{Any}
 end
 
+"""The module in which the binding of `name` in `home` was created. `which` returns that module. Nothing when `which`
+raises `ErrorException`: the name is undefined, or the same constant was imported from more than one module."""
+function binding_owner(home::Module, name::Symbol)::Union{Module,Nothing}
+    try
+        return which(home, name)::Module
+    catch err
+        err isa ErrorException || rethrow()
+        return nothing
+    end
+end
+
 # Whether this process is building a package image, from `Base.generating_output`; code run then is cached.
 is_building_image() = Base.generating_output()
 
