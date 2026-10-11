@@ -45,10 +45,15 @@ include("bb/Bb.jl")
 using .Bb
 include("cc/Cc.jl")
 using .Cc
+include("par/Parallel.jl")
+include("exp/Experimental.jl")
 """, [
     "aa/Aa.jl" => "module Aa\nexport dup\ndup() = 1\nend\n",
     "bb/Bb.jl" => "module Bb\nexport dup\ndup() = 2\nend\n",
     "cc/Cc.jl" => "module Cc\npublic dup\ndup() = 3\nend\n",
+    "par/Parallel.jl" => "module Parallel\nend\n",
+    "exp/Experimental.jl" => "module Experimental\ninclude(\"Parallel.jl\")\nend\n",
+    "exp/Parallel.jl" => "module Parallel\nend\n",
 ])
 
 const SOLO_NAME = load_package("SoloName", "export present\npresent() = 1\n")
@@ -249,10 +254,10 @@ end
 @testset "two modules exporting one name bound to different objects collide, and a public name is no export" begin
     ctx = case_context(DUPLICATE_NAME)
     found = ArchCheck.run(OwnerUniqueness(), ctx)
-    dup = only(found)
+    dup = only(finding for finding in found if finding.symbol == "dup")
     @test dup.kind === :duplicate_owner
-    @test dup.symbol == "dup"
     @test ev(dup, :owners) == "Aa Bb"
+    @test !any(finding -> finding.symbol == "Parallel", found)
     solo_ctx = case_context(SOLO_NAME)
     solo = ArchCheck.run(OwnerUniqueness(), solo_ctx)
     @test isempty(solo)

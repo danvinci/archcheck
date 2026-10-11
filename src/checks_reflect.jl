@@ -102,10 +102,12 @@ function submodules(mod::Module)
     found
 end
 
-# The names a module exports. `names` lists the names it declares public as well.
+# The names a module exports. Julia marks a module's own name exported in the module itself, and `names` lists
+# the names it declares public as well.
 function exported_names(mod::Module)
     listed = names(mod)
-    filter(name -> Base.isexported(mod, name), listed)
+    module_name = nameof(mod)
+    filter(name -> name !== module_name && Base.isexported(mod, name), listed)
 end
 
 # stale-export: Julia accepts `export foo` with no `foo`, so a deleted definition leaves the name exported
@@ -116,7 +118,6 @@ function check_stale_exports(mods; repo)
         owner = module_key(M)
         path, line = module_site(M, repo)
         for n in exported_names(M)
-            n === nameof(M) && continue
             isdefined(M, n) && continue
             found = Finding(owner, :stale_export, path, string(n), line, "exported name is never defined")
             push!(findings, found)
