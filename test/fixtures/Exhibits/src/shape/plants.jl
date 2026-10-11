@@ -1,7 +1,5 @@
 # Plants that sit in one file: each comment names the kind it exists to raise.
 
-const GAP = 0.01   # tolerance_search: the bound a search predicate measures against
-
 struct Tag
     n::Int   # marker the extension carries
 end
@@ -126,22 +124,6 @@ end
 
 function ask_twice(xs)
     spin(xs) + spin(xs)
-end
-
-# kept_builder: one method keeps the value, the other drops it
-function build_shape(store::Dict{Int,Int}, key::Int)
-    get!(store, key) do
-        key
-    end
-end
-
-function build_shape(x::Float64)
-    x + 1.0
-end
-
-# tolerance_search: findfirst compares against the named bound
-function near_gap(values)
-    findfirst(value -> value < GAP, values)
 end
 
 # file_sinkable: the only callee lives in one earlier file

@@ -130,8 +130,6 @@ struct ModuleCycles <: Check
     strict::Bool   # a reference to an enclosing module counts
 end
 ModuleCycles(; strict::Bool = false) = ModuleCycles(strict)
-"""Runs in `CHECKS`. A function in the contracts module does more than name a type and its interface."""
-struct ContractsPurity <: Check end
 """Runs in `CHECKS`. Two modules export one name bound to different objects; a name a module only declares `public` is no export. A module and one it encloses count only with `strict`."""
 struct OwnerUniqueness <: Check
     strict::Bool   # a module and one it encloses count as two owners
@@ -175,10 +173,6 @@ struct ReaderSet{S, R<:Tuple} <: Check
     super::Type{S}  # concrete subtypes of this type must answer each reader
     required::R     # (reader, extra argument types after the subject) pairs
 end
-"""Configured through `gate(...; checks)` with the directories to read. Fixed integer counts in one method form a uniform grid."""
-struct ScanSeeds{D<:Tuple} <: Check
-    directories::D  # source directories relative to the repository root, or absolute paths
-end
 """Configured through `gate(...; checks)` with two or more modules. A reference from one, or from a module nested in it, to another is a finding."""
 struct Independent{N} <: Check
     modules::NTuple{N,Symbol}   # dotted module keys below the package
@@ -217,9 +211,6 @@ kinds(::ModuleBackEdges) = (:back_edge => :error,)
 
 run(check::ModuleCycles, ctx) = check_cycles(ctx.index, nameof(ctx.root); strict = check.strict)
 kinds(::ModuleCycles) = (:cycle => :error,)
-
-run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
-kinds(::ContractsPurity) = (:contracts_logic => :error,)
 
 run(check::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.index.rank; strict = check.strict)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
@@ -268,9 +259,6 @@ kinds(::AbstractFields) = (:abstract_field => :advisory,)
 run(check::ReaderSet, ctx) =
     check_reader_set(package_modules(ctx), check.super, check.required; sites = ctx.sites)
 kinds(::ReaderSet) = (:reader_set => :error,)
-
-run(check::ScanSeeds, ctx) = check_scan_seeds(ctx.index; directories = check.directories)
-kinds(::ScanSeeds) = (:scan_seed => :advisory,)
 
 run(check::Independent, ctx) = check_independent(ctx.index, check.modules)
 kinds(::Independent) = (:sibling_edge => :error,)

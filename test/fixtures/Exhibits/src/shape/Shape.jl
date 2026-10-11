@@ -15,9 +15,6 @@ include("plants.jl")
 include("clones.jl")
 include("derived.jl")
 include("trace.jl")
-include("seeds.jl")
-include("sentinels.jl")
-include("payloads.jl")
 include("workload.jl")
 
 export exercise, twin_name

@@ -1,5 +1,5 @@
-# foreign-field: a field read on another module's struct, unless it is a contract type or a public type documenting
-# the field. Receivers are typed by annotations, aliases, field chains, and inference when it gives one concrete type.
+# foreign-field: a field read on another module's struct, unless a public type documents the field. Receivers are
+# typed by annotations, aliases, field chains, and inference when it gives one concrete type.
 
 # Locals are those `child_locals` records for this child. The type dict stays shared, so a binding made
 # earlier in the walk remains visible.
@@ -260,9 +260,8 @@ function is_documented_field(S::DataType, field)
     false
 end
 
-# Reads a caller may make of another module's struct: contract types, and the fields a public type documents.
-function is_open_read(owner, S::DataType, field)
-    is_within_module(owner, CONTRACTS_MODULE) && return true
+# The read a caller may make of another module's struct: a field a public type documents.
+function is_open_read(S::DataType, field)
     home = parentmodule(S)
     is_public = Base.ispublic(home, nameof(S))
     is_public && is_documented_field(S, field)
@@ -321,7 +320,7 @@ function check_foreign_fields(index::SourceIndex, mods)
                 continue
             end
             owner = get(key_of, parentmodule(S), nothing)
-            (isnothing(owner) || owner == file.mod || is_open_read(owner, S, access.field)) && continue
+            (isnothing(owner) || owner == file.mod || is_open_read(S, access.field)) && continue
             symbol = "$owner.$(nameof(S)).$(access.field)"
             detail = "reads a field of a struct another module owns"
             evidence = [:receiver => access.receiver, :declared => read_kind(S, access.field)]

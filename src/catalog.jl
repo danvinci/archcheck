@@ -1,9 +1,8 @@
-"""The checks `gate` runs by default. Checks a package configures (caller lists, tolerance names, sentinel directories) join them through `gate`'s `checks`."""
+"""The checks `gate` runs by default. Checks a package configures (caller lists, independent modules, required readers) join them through `gate`'s `checks`."""
 const CHECKS = (
     Corpus(),
     ModuleBackEdges(),
     ModuleCycles(),
-    ContractsPurity(),
     OwnerUniqueness(),
     ModulePiracy(),
     FileBackEdges(),

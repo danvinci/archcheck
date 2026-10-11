@@ -289,12 +289,11 @@ function tuple_tail_slots(body)
     length(slots)
 end
 
-# A function the code defines outside any other: its name, line, declared argument types and tuple tail.
+# A function the code defines outside any other: its name, line and tuple tail.
 function record_top_method!(scan::FileScan, name, line, children)
     push!(scan.funcs, name)
     scan.line[name] = line
     get!(Set{Symbol}, scan.refs, name)
-    scan.argtypes[name] = read_positionals(argtype_of, children[1])
     if is_type_constructor(children[1])
         push!(scan.constructors, name)
     end

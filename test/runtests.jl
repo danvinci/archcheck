@@ -154,7 +154,7 @@ end
 
 # every engine check at its declared severity, with no consumer promotion
 function default_severity()
-    engine = (ArchCheck.CHECKS..., ReaderSet(Any, ()), ScanSeeds(()))
+    engine = (ArchCheck.CHECKS..., ReaderSet(Any, ()))
     Dict(kind => severity for check in engine for (kind, severity) in ArchCheck.kinds(check))
 end
 

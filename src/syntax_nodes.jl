@@ -237,17 +237,6 @@ function all_symbols!(out, node)
     end
 end
 
-# A 3-child call is infix only when the middle symbol is one of these operators.
-# A 2-argument prefix call would otherwise read its second argument as the operator.
-const INFIX_OPS = Set((:(<), :(>), :(<=), :(>=), :(==), :(!=), :+, :-, :*, :/))
-
-function infix_op(node)
-    JS.kind(node) == K"call" || return nothing
-    children = child_nodes(node)
-    child_count(children) != 3 && return nothing
-    children[2].val in INFIX_OPS ? children[2].val : nothing
-end
-
 # The body of a `function` form or a short-form definition: its second child.
 function method_body(node)
     children = child_nodes(node)

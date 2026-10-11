@@ -1,4 +1,4 @@
-# Overlapping calls and kept builders, over synthetic modules and a generated reach oracle.
+# Overlapping calls, over synthetic modules and a generated reach oracle.
 
 function overlap_records(findings)
     found = Set{Tuple{String,String,String}}()
@@ -466,60 +466,6 @@ function oracle_entries(pkg)
     entries
 end
 
-const KEPT_VENDOR = """
-module OpenCascade
-\"\"\"kept\"\"\"
-Shape(x::Int) = get!(x, :k) do
-    x
-end
-end
-"""
-
-const KEPT_USE = """
-OpenCascade.Shape(x::String) = OpenCascade.Shape(length(x))
-OpenCascade.Shape(x::Float64) = x + 1.0
-OpenCascade.Shape(x::UInt8) = begin
-    y = x
-    get!(y, :k) do
-        y
-    end
-end
-function OpenCascade.Shape(x::UInt16)
-    return get!(x, :k) do
-        x
-    end
-end
-OpenCascade.Shape(x::Int16) = get!(x, :k, x)
-"""
-
-const BARE_VENDOR = """
-module OpenCascade
-Shape(x::Int) = x + 0
-end
-"""
-
-const BARE_USE = """
-OpenCascade.Shape(x::String) = OpenCascade.Shape(length(x))
-OpenCascade.Shape(x::Float64) = x + 1.0
-"""
-
-function kept_case(name, vendor, use)
-    spine = "include(\"vendor/OpenCascade.jl\")\nusing .OpenCascade\n" * use
-    files = ["vendor/OpenCascade.jl" => vendor]
-    load_package(name, spine, files)
-end
-
-const KEEP_PROBE = kept_case("KeepProbe", KEPT_VENDOR, KEPT_USE)
-const KEEP_BARE = kept_case("KeepBare", BARE_VENDOR, BARE_USE)
-
-const KEEP_ROOT = load_package("KeepRoot", """
-    const STORE = Dict{Int,Int}()
-    shape(x::Int) = get!(STORE, x) do
-        x
-    end
-    shape(x::Float64) = x + 1.0
-    """)
-
 @testset "calls" begin
     @testset "a helper that reaches the repeated callee fires, and one that does not stays quiet" begin
         found = CALL_PROBE_FOUND
@@ -635,45 +581,5 @@ const KEEP_ROOT = load_package("KeepRoot", """
             got = overlap_records(found)
             @test got == loaded.expected
         end
-    end
-
-    @testset "a builder kept by a get! do block or forwarding to a kept one stays quiet, and an unkept one fires" begin
-        check = KeptBuilders(:(OpenCascade.Shape); exempt_dirs = ("src/vendor",))
-        ctx = case_context(KEEP_PROBE)
-        found = ArchCheck.run(check, ctx)
-        @test length(found) == 2
-        forms = Set{String}()
-        for finding in found
-            @test finding.kind === :kept_builder
-            @test finding.symbol == "Shape"
-            @test finding.mod === :KeepProbe
-            @test endswith(finding.file, "KeepProbe.jl")
-            @test !occursin("vendor", finding.file)
-            @test ev(finding, :builder) == "OpenCascade.Shape"
-            push!(forms, ev(finding, :form))
-        end
-        @test "x + 1.0" in forms
-        @test "get!(x, :k, x)" in forms
-    end
-
-    @testset "a forward with no keeper is a finding" begin
-        check = KeptBuilders(:(OpenCascade.Shape); exempt_dirs = ("src/vendor",))
-        ctx = case_context(KEEP_BARE)
-        found = ArchCheck.run(check, ctx)
-        @test length(found) == 2
-        forms = Set{String}()
-        for finding in found
-            push!(forms, ev(finding, :form))
-            @test !occursin("vendor", finding.file)
-        end
-        @test any(form -> occursin("OpenCascade.Shape", form), forms)
-        @test "x + 1.0" in forms
-    end
-
-    @testset "a builder in the package's root module is named bare" begin
-        ctx = case_context(KEEP_ROOT)
-        found = ArchCheck.run(KeptBuilders(:shape), ctx)
-        rows = evidence_rows(found, :builder, :form)
-        @test rows == [(:kept_builder, "shape", "shape", "x + 1.0")]
     end
 end

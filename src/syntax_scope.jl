@@ -455,23 +455,3 @@ function method_bodies(root, path::String, mod::Symbol)
     end
     found
 end
-
-# Visits every node with the name of the nearest enclosing top-level def.
-# `visit(node, enclosing_name)` answers which function an expression sits inside.
-function walk_with_enclosing(visit, node, current = Symbol(""))
-    children = child_nodes(node)
-    if is_method_form(node)
-        name = sig_name(children[1])
-        enclosed = isnothing(name) ? current : name
-        isnothing(children) && return
-        for child in children
-            walk_with_enclosing(visit, child, enclosed)
-        end
-        return
-    end
-    visit(node, current)
-    isnothing(children) && return
-    for child in children
-        walk_with_enclosing(visit, child, current)
-    end
-end

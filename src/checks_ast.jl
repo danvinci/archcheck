@@ -1,4 +1,4 @@
-# Checks over the static index: corpus, dead code, module rank, and contracts purity.
+# Checks over the static index: corpus, dead code, module rank, and module independence.
 
 # Names an `export` or `public` statement lists. Those lines are declarations, so the def walk skips them.
 function collect_published!(names, node)
@@ -368,42 +368,6 @@ function check_independent(index, modules)
         detail = "references a module the independence set keeps apart from it"
         finding = Finding(ref.from, :sibling_edge, ref.file, reached, ref.line, detail, evidence)
         push!(findings, finding)
-    end
-    findings
-end
-
-# Type surface: an outer constructor whose name is a contract type, or an accessor over contract types only.
-# A raw or domain argument, or no argument, computes and belongs in a domain module.
-function is_type_interface(name, argtypes, contract_types)
-    name in contract_types && return true
-    haskey(argtypes, name) || return false
-    types = argtypes[name]
-    isempty(types) && return false
-    all(type -> !isnothing(type) && type in contract_types, types)
-end
-
-# The package's contracts module: seam types and their intrinsic interface, read field by field across modules.
-const CONTRACTS_MODULE = :Contracts
-
-function check_contracts_logic(index)
-    files = files_of(index, CONTRACTS_MODULE)
-    contract_types = Set{Symbol}()
-    for file in files
-        for type_name in file.scan.types
-            push!(contract_types, type_name)
-        end
-    end
-    findings = Finding[]
-    for file in files
-        names = unique(file.scan.funcs)
-        for name in names
-            is_type_interface(name, file.scan.argtypes, contract_types) && continue
-            line = file.scan.line[name]
-            symbol = string(name)
-            detail = "a function in contracts/, which holds types only"
-            finding = Finding(CONTRACTS_MODULE, :contracts_logic, file.path, symbol, line, detail)
-            push!(findings, finding)
-        end
     end
     findings
 end

@@ -45,7 +45,8 @@ function passes_join(call, bound)
 end
 
 function emit_node!(findings, file, site, form, node)
-    text = form_text(node)
+    raw = JS.sourcetext(node)
+    text = collapse_source(raw)
     line = source_line(node)
     finding = unread_finding(file, site, form, text, line)
     push!(findings, finding)

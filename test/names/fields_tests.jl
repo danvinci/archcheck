@@ -70,6 +70,7 @@ end
         ("Hi", "Geo.Cuts.Arc.at"),
         ("Hi", "Low.Pin.depth"),
         ("Hi", "Geo.Cuts.Kerf.depth"),
+        ("Hi", "Contracts.Record.values"),
     ])
 
     # The abstract type lives in the root. Low's structs declare the field, and Low reads it. Side reads it and

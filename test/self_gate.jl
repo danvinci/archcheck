@@ -11,8 +11,6 @@ end
 
 # A check with nothing in this package to point at, or one whose run throws on a file this configuration leaves unchanged.
 const NOT_APPLICABLE = (
-    (ToleranceSearch, "no quantity is compared with a named tolerance"),
-    (KeptBuilders, "no constructor result is kept for its caller with get!"),
     (Independent, "the package is one module, so no pair of modules is independent"),
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
 )
@@ -84,16 +82,11 @@ function exhibit_checks()
     allowed = (("src/shape/plants.jl", :allowed_call),)
     whitelist = CallerWhitelist((:guarded,), allowed)
     push!(active, whitelist)
-    push!(active, SentinelReturns(("src/shape/sentinels.jl",)))
-    push!(active, StringPayloads(("src/shape/payloads.jl",)))
     push!(active, UnreadWaits(allowed = (:hold_inputs,)))
-    push!(active, ToleranceSearch((:GAP,)))
-    push!(active, KeptBuilders(:(Shape.build_shape)))
     push!(active, Independent(:Low, :Shape))
     push!(active, DeclaredExtensions())
     readers = ((Exhibits.Shape.read_item, Tuple{}),)
     push!(active, ReaderSet(Exhibits.Shape.Item, readers))
-    push!(active, ScanSeeds(("src/shape/seeds.jl",)))
     push!(active, OverlappingCalls())
     runtime = OptEntry(Exhibits.Shape.runtime_plant, Tuple{Function,Int})
     boxed = OptEntry(Exhibits.Shape.boxed_total, Tuple{Int})
@@ -205,10 +198,6 @@ function static_checks()
     push!(active, InferredCalls())
     readers = ((ArchCheck.run, Tuple{Any}), (ArchCheck.kinds, Tuple{}))
     push!(active, ReaderSet(Check, readers))
-    sentinels = (:Inf, :NaN, :missing)
-    push!(active, SentinelReturns(("src",), sentinels))
-    push!(active, StringPayloads(("src",)))
-    push!(active, ScanSeeds(("src",)))
     push!(active, self_opt())
     Tuple(active)
 end

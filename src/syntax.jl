@@ -54,7 +54,6 @@ struct FileScan
     refs::Dict{Symbol,Set{Symbol}}                               # definition or qualified method -> bare names it reads, and members read through a package module
     modrefs::Set{Symbol}                                         # names read outside any definition
     line::Dict{Symbol,Int}                                       # def name -> source line
-    argtypes::Dict{Symbol,Vector{Union{Symbol,Nothing}}}         # function -> positional declared types; last method wins
     tupletail::Dict{Symbol,Int}                                  # function -> slot count when its body ends in a bare tuple
     imports::Set{Symbol}                                         # names this file's import clauses bind
     callsites::Dict{MethodSite,Vector{CallSite}}                 # each method -> the calls its body writes, source order
@@ -70,15 +69,13 @@ function empty_scan()
     refs = Dict{Symbol,Set{Symbol}}()
     modrefs = Set{Symbol}()
     line = Dict{Symbol,Int}()
-    argtypes = Dict{Symbol,Vector{Union{Symbol,Nothing}}}()
     tupletail = Dict{Symbol,Int}()
     imports = Set{Symbol}()
     callsites = Dict{MethodSite,Vector{CallSite}}()
     forms = Dict{MethodSite,JS.SyntaxNode}()
     reads = NameRead[]
     bindings = LocalBinding[]
-    FileScan(funcs, constructors, types, refs, modrefs, line, argtypes, tupletail, imports, callsites, forms, reads,
-             bindings)
+    FileScan(funcs, constructors, types, refs, modrefs, line, tupletail, imports, callsites, forms, reads, bindings)
 end
 
 # `nothing` on failure, so a caller accounts for it.

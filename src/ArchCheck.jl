@@ -16,7 +16,6 @@ include("syntax_reads.jl")
 include("graph.jl")
 include("load_order.jl")
 include("checks_ast.jl")
-include("checks_seeds.jl")
 include("checks_reflect.jl")
 include("checks_piracy.jl")
 include("checks_abstract_fields.jl")
@@ -43,10 +42,8 @@ include("checks_project.jl")
 include("call_paths.jl")
 include("checks_calls.jl")
 include("checks_inferred.jl")
-include("checks_kept.jl")
 include("checks_overloads.jl")
 include("checks_clones.jl")
-include("checks_tolerance.jl")
 include("checks_reach.jl")
 include("checks_opt.jl")
 include("checks_trace.jl")
@@ -59,13 +56,12 @@ include("gate.jl")
 # A name a caller writes is exported. A verb the caller qualifies stays public.
 export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
 export Check, Context
-export Corpus, ModuleBackEdges, ModuleCycles, ContractsPurity, OwnerUniqueness, ModulePiracy
+export Corpus, ModuleBackEdges, ModuleCycles, OwnerUniqueness, ModulePiracy
 export FileBackEdges, FileSinkable, Sinkable, TupleReturns, DeadCode, BlanketExports, StaleExports
 export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
-export CallerWhitelist, SentinelReturns, StringPayloads, ToleranceSearch, KeptBuilders
-export Independent, ReaderSet, ScanSeeds, OverlappingCalls, InferredCalls, OptAnalysis, OptEntry
+export CallerWhitelist, Independent, ReaderSet, OverlappingCalls, InferredCalls, OptAnalysis, OptEntry
 export UnreachedMethods, Rebuilds, TwoNames, Waits, UnreadWaits
 export Derived, Probes, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph

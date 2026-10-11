@@ -1,4 +1,4 @@
-# Expression clones and tolerance search. The node count is read from the syntax tree itself.
+# Expression clones. The node count is read from the syntax tree itself.
 
 expression_nodes(expr) = body_nodes("f(v1, v2, v3, v4) = " * expr)
 
@@ -58,12 +58,6 @@ function clone_found(case, min_nodes)
     ctx = case_context(case)
     check = ExpressionClones(; min_nodes = min_nodes)
     ArchCheck.run(check, ctx)
-end
-
-function search_record(finding)
-    search = ev(finding, :search)
-    tolerance = ev(finding, :tolerance)
-    (finding.symbol, search, tolerance)
 end
 
 function expr_lines()
@@ -139,47 +133,6 @@ const CLONE_ONCE_NODES = expression_nodes("v1 + KEEPER + 41")
 const CLONE_ONCE = clone_case("CloneOnce", "once.jl",
     "only(v1) = (v1 + KEEPER + 41) + (v1 + KEEPER + 41)\n")
 
-const CLONE_TOL = clone_case("CloneTol", "tol.jl", """
-function direct(xs, target)
-    findfirst(x -> abs(x - target) < GEOM_EPS, xs)
-end
-function from_end(xs, target)
-    findlast(x -> abs(x - target) <= GEOM_EPS, xs)
-end
-function every_hit(xs, target)
-    findall(x -> isapprox(x, target; atol = GEOM_EPS), xs)
-end
-function by_local(xs, target)
-    close(x) = abs(x - target) < GEOM_EPS
-    findfirst(close, xs)
-end
-function by_chain(xs, target)
-    nearer(x) = abs(x - target) < GEOM_EPS
-    close(x) = nearer(x)
-    findfirst(close, xs)
-end
-function by_block(xs, target)
-    findfirst(xs) do x
-        abs(x - target) < GEOM_EPS
-    end
-end
-function validate_all(xs, target)
-    all(x -> abs(x - target) < GEOM_EPS, xs)
-end
-function validate_any(xs, target)
-    any(x -> abs(x - target) < GEOM_EPS, xs)
-end
-function exact(xs, target)
-    findfirst(x -> x == target, xs)
-end
-function other_tol(xs, target)
-    findfirst(x -> abs(x - target) < OTHER_EPS, xs)
-end
-function bare_approx(xs, target)
-    findfirst(x -> isapprox(x, target), xs)
-end
-""")
-
 @testset "renamed locals are one clone, and a changed literal, operator, free name, or field is not" begin
     nodes = CLONE_EXPR_BUILT.nodes
     found = clone_found(CLONE_EXPR, nodes)
@@ -219,21 +172,4 @@ end
 @testset "two copies in one method are not a clone group" begin
     found = clone_found(CLONE_ONCE, CLONE_ONCE_NODES)
     @test isempty(found)
-end
-
-@testset "a search that reaches a configured tolerance is a finding, and one that does not is not" begin
-    ctx = case_context(CLONE_TOL)
-    check = ToleranceSearch((:GEOM_EPS,))
-    found = ArchCheck.run(check, ctx)
-    got = Set(search_record(finding) for finding in found)
-    expected = Set([
-        ("direct", "findfirst", "GEOM_EPS"),
-        ("from_end", "findlast", "GEOM_EPS"),
-        ("every_hit", "findall", "GEOM_EPS"),
-        ("by_local", "findfirst", "GEOM_EPS"),
-        ("by_chain", "findfirst", "GEOM_EPS"),
-        ("by_block", "findfirst", "GEOM_EPS"),
-    ])
-    @test got == expected
-    @test all(f -> f.kind === :tolerance_search && f.mod === :CloneTol, found)
 end
