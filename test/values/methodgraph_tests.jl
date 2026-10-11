@@ -198,20 +198,12 @@ const CALL_FACTS = load_package("CallFacts", """
         dest(xs...)
     end
     short_spread(xs::Tuple{Int}) = pair(xs...)
-    """)
-
-# A default argument lowers to a call of the full method. At an empty parameter that signature is `Union{}`.
-const UNREACHABLE_CALL = load_package("UnreachableCall", """
     struct Box{T}
         value::T
     end
     function mid(box::Box{T}, alpha = 0.5) where {T<:AbstractFloat}
         box.value + alpha
     end
-    """)
-
-# Allocating a `BigInt` inlines a foreign call whose library name is a call nested in argument position.
-const NESTED_CALL = load_package("NestedCall", """
     allocate(nbits::Int) = BigInt(; nbits = nbits)
     """)
 
@@ -619,20 +611,22 @@ end
     end
 end
 
+# A default argument lowers to a call of the full method. At an empty parameter that signature is `Union{}`.
 @testset "a call proved unreachable still builds the graph" begin
-    pkg = UNREACHABLE_CALL.pkg
+    pkg = CALL_FACTS.pkg
     entry = (pkg.mid, Tuple{pkg.Box{Union{}}})
     entries = (entry,)
-    graph = graph_of(UNREACHABLE_CALL, entries)
+    graph = graph_of(CALL_FACTS, entries)
     caller = which(pkg.mid, (pkg.Box{Union{}},))
     @test haskey(graph.edges, caller)
 end
 
+# Allocating a `BigInt` inlines a foreign call whose library name is a call nested in argument position.
 @testset "a foreign call whose name is a nested call still builds the graph" begin
-    pkg = NESTED_CALL.pkg
+    pkg = CALL_FACTS.pkg
     entry = (pkg.allocate, Tuple{Int})
     entries = (entry,)
-    graph = graph_of(NESTED_CALL, entries)
+    graph = graph_of(CALL_FACTS, entries)
     caller = only(methods(pkg.allocate))
     @test haskey(graph.edges, caller)
 end

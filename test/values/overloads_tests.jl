@@ -178,14 +178,12 @@ boxed(xs::Matrix{Box{L}}) where {L} = xs
 # A free rank still pairs with a vector.
 open_rank(xs::AbstractArray{T,N}) where {T,N} = xs
 open_rank(xs::Vector{Any}) = xs
+# A vector and a matrix are different ranks.
+from_scale(μ::Vector, σ::Vector) = σ
+from_scale(μ::Vector, Σ::Matrix) = Σ
 """
 
 const STORE_HEAP = load_package("StoreHeap", STORE_SPINE)
-
-const SHAPE_PAIR = load_package("ShapePair", """
-from_scale(μ::Vector, σ::Vector) = σ
-from_scale(μ::Vector, Σ::Matrix) = Σ
-""", [])
 
 # The heap method loads first; the fixed-size one sits in a module block a later file holds.
 const STORE_BLOCK = load_package("StoreBlock", """
@@ -249,6 +247,7 @@ end
         (name = "held", count = 0, storage = nothing, methods = nothing),
         (name = "boxed", count = 0, storage = nothing, methods = nothing),
         (name = "open_rank", count = 1, storage = nothing, methods = nothing),
+        (name = "from_scale", count = 0, storage = nothing, methods = nothing),
     )
     for case in cases
         hits = filter(f -> f.symbol == case.name, store_found)
@@ -272,12 +271,6 @@ end
     block_found = ArchCheck.run(StorageOverloads(), block_ctx)
     block_hit = only(block_found)
     @test block_hit.file == joinpath("src", "heap.jl")
-end
-
-@testset "a vector argument and a matrix argument are not two storages of one value" begin
-    ctx = case_context(SHAPE_PAIR)
-    found = ArchCheck.run(StorageOverloads(), ctx)
-    @test isempty(found)
 end
 
 @testset "storage pairs drawn from the lattice match the verdict of the draw" begin
