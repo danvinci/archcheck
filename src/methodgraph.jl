@@ -21,6 +21,7 @@ struct CallFact
     is_generated::Bool      # a method the call matches is `@generated`
     is_value::Bool          # returns, and returns a value other than `nothing`
     returns::String         # the inferred return type at the first instance walked; empty unless it drops a pure value
+    targets::Vector{Method} # written methods the dispatch matched at every statement and instance merged here
 end
 
 """Calls between methods. An edge joins a caller to a method a call can land on: the one inference resolved, or, for
@@ -270,8 +271,21 @@ function call_fact(frame, position, branches, route)
     is_dropped = !is_used && is_effect_free
     returns = is_dropped ? string(returned) : ""
     callee = callee_slot_name(called)
+    targets = matched_methods(branches)
     CallFact(file, line, callee, via, is_used, is_failing, failing, is_stub, is_forward, is_concrete,
-             is_effect_free, is_terminating, is_nothrow, is_consistent, is_generated, is_value, returns)
+             is_effect_free, is_terminating, is_nothrow, is_consistent, is_generated, is_value, returns, targets)
+end
+
+# Each method a branch's dispatch matched, as the source wrote it, once.
+function matched_methods(branches)
+    found = Method[]
+    for branch in branches
+        for match in branch.results.matches
+            written = written_method(match.method)
+            written in found || push!(found, written)
+        end
+    end
+    found
 end
 
 # The file and line a statement of unoptimized code records; a macro's expansion keeps the line of its call.
@@ -346,6 +360,8 @@ end
 function merged_fact(known::CallFact, fact::CallFact)
     is_failing = known.is_failing && fact.is_failing
     failing = is_failing ? known.failing : ""
+    # The line is the finest site the code records, so a merged fact keeps only the methods every call there takes.
+    targets = intersect(known.targets, fact.targets)
     CallFact(known.file, known.line, known.callee, known.via,
              known.is_used || fact.is_used,
              is_failing, failing,
@@ -358,7 +374,8 @@ function merged_fact(known::CallFact, fact::CallFact)
              known.is_consistent && fact.is_consistent,
              known.is_generated || fact.is_generated,
              known.is_value && fact.is_value,
-             known.returns)
+             known.returns,
+             targets)
 end
 
 # The repo-relative file a fact's call sits in, as an indexed file names it; empty when the code records none.
