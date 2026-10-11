@@ -30,10 +30,6 @@ struct MethodGraph
     typed::Dict{Method,Vector{Core.CodeInfo}}   # caller -> the code inference typed at each instance walked, unoptimized
 end
 
-# Inference reads a callee it already holds more precisely than one it meets mid-walk, so a first walk in a cold
-# process can land a call differently. The graph is the walk a further walk reproduces.
-const GRAPH_WALKS_MAX = 4
-
 # Where a runtime-dispatched call can land depends on its signature alone, so one graph matches each signature once.
 struct CallLandings{M<:AbstractSet,P<:AbstractVector,C<:AbstractDict}
     module_set::Set{Module}   # modules whose methods expand and whose methods a dispatched call can land on
@@ -58,14 +54,14 @@ end
 pair. Only methods `modules` define expand; `defined` lists them, and `values` names an unknown callee's functions."""
 function method_graph(entries, modules, values, defined)
     landings = CallLandings(modules, values, defined)
-    previous = nothing
-    for _walk in 1:GRAPH_WALKS_MAX
+    previous = walk_methods(entries, landings)
+    # unbounded: inference reads a callee it already holds more precisely than one it meets mid-walk, so a walk can
+    # land calls differently from the last; each walk only fills inference's cache, and a walk over a full one repeats.
+    while true
         current = walk_methods(entries, landings)
-        is_settled = !isnothing(previous) && current.edges == previous.edges
-        is_settled && return current
+        current.edges == previous.edges && return current
         previous = current
     end
-    error("the method graph changed on each of $GRAPH_WALKS_MAX walks")
 end
 
 function walk_methods(entries, landings::CallLandings)
