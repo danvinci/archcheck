@@ -339,6 +339,15 @@ function owned_methods(defined, added, owned)
     found
 end
 
+# Whether every method declares `position` as `declared`. Unspecialized: a type value is its own type, so a closure
+# capturing it would compile once per declared type.
+function shares_declared_type(methods, position::Int, @nospecialize(declared))
+    for method in methods
+        position_type(method, position) == declared || return false
+    end
+    true
+end
+
 # Each position every method of a package-owned function leaves unread under one declared type.
 function add_ignored_findings!(findings, value::Function, all_methods, project, index, paths, reads_of, reads)
     own = filter(method -> method.module in project, all_methods)
@@ -352,7 +361,7 @@ function add_ignored_findings!(findings, value::Function, all_methods, project, 
     for position in 1:widest
         all(flags -> position <= length(flags) && flags[position], unread) || continue
         declared = position_type(home, position)
-        all(method -> position_type(method, position) == declared, all_methods) || continue
+        shares_declared_type(all_methods, position, declared) || continue
         file, line = method_site(home, index.repo)
         symbol = string(function_name, ":", position)
         detail = "every method of the function leaves this position unread under one declared type"
