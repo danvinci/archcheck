@@ -106,7 +106,7 @@ function walk_assignment!(state, scope, node)
     children = child_nodes(node)
     rhs = child_scope(scope, node, 2)
     walk_field_reads!(state, rhs, children[2])
-    source = value_source(state, rhs, children[2])
+    source = value_source(rhs, children[2])
     bind_target!(state, scope, children[1], source)
 end
 
@@ -119,10 +119,10 @@ function bind_iteration!(state, scope, targets, node)
         collection_scope = child_scope(scope, node, 2)
         collection = children[2]
         walk_field_reads!(state, collection_scope, collection)
-        source = value_source(state, collection_scope, collection)
+        source = value_source(collection_scope, collection)
         element = nothing
         if !isnothing(source)
-            element = Deferred(iterated_element, (state.steps, source))
+            element = Deferred(IteratedStep(), source)
         end
         target = children[1]
         bind_target!(state, scope, target, element)
@@ -145,7 +145,7 @@ function bind_iteration!(state, scope, targets, node)
     walk_field_reads!(state, scope, node)
 end
 
-# A deferred source's type nests one level per binding step, so specializing on it compiles once per nesting shape.
+# Unspecialized: the source is a type, a deferred value, or nothing, and each would compile its own walk.
 function bind_target!(state, scope, target, @nospecialize(source))
     name = target.val
     kind = JS.kind(target)
@@ -170,7 +170,8 @@ function bind_target!(state, scope, target, @nospecialize(source))
         for index in eachindex(parts)
             element = nothing
             if is_positional
-                element = Deferred(tuple_element, (source, index))
+                position = Int(index)
+                element = Deferred(TupleStep(), source, position)
             end
             bind_target!(state, scope, parts[index], element)
         end
