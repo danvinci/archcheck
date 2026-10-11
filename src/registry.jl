@@ -42,6 +42,7 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     spine = joinpath(src, pkg_name * ".jl")
     root = nameof(pkg)
     parses = package_parses(src)
+    parse_package!(parses, source_root(src), entry_dirs)
     dir2mod = package_layout(parses, spine, root)
     extensions = loaded_extensions(pkg, parses.repo)
     index = build_source_index(parses, src, dir2mod; entry_dirs, package = pkg, extensions)

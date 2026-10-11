@@ -99,6 +99,15 @@ end
 
 Parses(repo::AbstractString) = Parses(repo, Dict{String,JS.SyntaxNode}(), Set{String}())
 
+function record_parse!(parses::Parses, key::String, tree::Union{Nothing,JS.SyntaxNode})
+    if isnothing(tree)
+        push!(parses.failed, key)
+    else
+        parses.trees[key] = tree
+    end
+    parses
+end
+
 # A file's parse, read and parsed on first request; nothing when it does not parse.
 function parsed_tree(parses::Parses, path::AbstractString)
     key = normpath(path)
@@ -107,10 +116,39 @@ function parsed_tree(parses::Parses, path::AbstractString)
     rel = relpath(key, parses.repo)
     source = read(key, String)
     tree = parse_file(source, rel)
-    if isnothing(tree)
-        push!(parses.failed, key)
-        return nothing
-    end
-    parses.trees[key] = tree
+    record_parse!(parses, key, tree)
     tree
+end
+
+# One file's parse on a task of its own, through a cache of its own, which the shared cache takes in after.
+fresh_parse(path::String, repo::String) = parsed_tree(Parses(repo), path)
+
+# A task's value; a task that threw throws its own exception here, as the same call on the caller's task would.
+function task_result(task::Task)
+    try
+        fetch(task)
+    catch failure
+        failure isa TaskFailedException || rethrow()
+        throw(failure.task.exception)
+    end
+end
+
+# `f(item, shared)` for each item, in the items' order whatever order the calls finish in. With one thread the calls
+# run in turn on the caller's task; with more, each is its own task on the default pool.
+function ordered_results(f::F, ::Type{T}, items::AbstractVector, shared) where {F,T}
+    results = Vector{T}(undef, length(items))
+    if Threads.nthreads() == 1
+        for (position, item) in enumerate(items)
+            results[position] = f(item, shared)
+        end
+        return results
+    end
+    tasks = Vector{Task}(undef, length(items))
+    for (position, item) in enumerate(items)
+        tasks[position] = Threads.@spawn f($item, $shared)
+    end
+    for (position, task) in enumerate(tasks)
+        results[position] = task_result(task)::T
+    end
+    results
 end

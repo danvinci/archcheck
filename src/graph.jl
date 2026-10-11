@@ -118,6 +118,48 @@ function tracked_files(dir::AbstractString)
     found
 end
 
+# The `.jl` files under `dir`, as normalized absolute paths, in walk order.
+function julia_files(dir::AbstractString)
+    found = String[]
+    isdir(dir) || return found
+    for (folder, _, names) in walkdir(dir), name in names
+        endswith(name, ".jl") || continue
+        joined = joinpath(folder, name)
+        push!(found, normpath(joined))
+    end
+    found
+end
+
+# Every file the index build parses, parsed across threads before the build asks for any: src/'s tracked files,
+# `ext/`, and the entry dirs, keyed as the build keys them. One thread leaves each parse to the build's first request.
+function parse_package!(parses::Parses, src_root::String, entry_dirs)
+    Threads.nthreads() == 1 && return parses
+    tracked = tracked_files(src_root)
+    wanted = String[]
+    for path in julia_files(src_root)
+        isnothing(tracked) || path in tracked || continue
+        push!(wanted, path)
+    end
+    extension_dir = joinpath(parses.repo, EXTENSION_DIR)
+    append!(wanted, julia_files(extension_dir))
+    for dir in entry_dirs
+        isdir(dir) || continue
+        for (folder, _, names) in walkdir(dir), name in names
+            endswith(name, ".jl") || continue
+            path = joinpath(folder, name)
+            joined = isabspath(path) ? path : joinpath(parses.repo, path)
+            push!(wanted, normpath(joined))
+        end
+    end
+    unique!(wanted)
+    filter!(isfile, wanted)
+    trees = ordered_results(fresh_parse, Union{Nothing,JS.SyntaxNode}, wanted, parses.repo)
+    for (path, tree) in zip(wanted, trees)
+        record_parse!(parses, path, tree)
+    end
+    parses
+end
+
 # The directories of the directory modules inside `moddir`, which place their own files.
 function nested_dirs(build::IndexBuild, moddir)
     inner = String[]
@@ -378,7 +420,9 @@ function file_refs!(build::IndexBuild, home, scan::FileScan)
     scan
 end
 
-function add_node!(build::IndexBuild, owner::Symbol, path, filerank, iswrapper, code)
+# One piece of code scanned into its node. It reads the build's ranks and loaded modules and writes none of the build,
+# so pieces scan on separate threads.
+function file_node(build::IndexBuild, owner::Symbol, path, filerank, iswrapper, code)
     rel = relpath(path, build.repo)
     name = basename(rel)
     modrank = module_rank(build, owner)
@@ -386,16 +430,23 @@ function add_node!(build::IndexBuild, owner::Symbol, path, filerank, iswrapper, 
     walked = scan_tree(code, home)
     scan = file_refs!(build, home, walked)
     bodies = method_bodies(code, rel, owner)
-    node = FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code, bodies)
-    push!(build.nodes, node)
+    FileNode(owner, rel, name, modrank, filerank, iswrapper, scan, code, bodies)
 end
 
-# Loaded code in load order. Position 0 is a module's own code: a directory module's entry, or an inline block.
+# Position 0 is a module's own code: a directory module's entry, or an inline block.
+function placed_node(placement::Placement, build::IndexBuild)
+    is_entry = placement.position == 0
+    file_node(build, placement.owner, placement.path, placement.position, is_entry, placement.code)
+end
+
+# A file no load walk reached, unranked under the module whose directory holds it.
+loose_node(placement::Placement, build::IndexBuild) =
+    file_node(build, placement.owner, placement.path, 0, false, placement.code)
+
+# Loaded code in load order.
 function index_placements!(build::IndexBuild)
-    for placement in build.placements
-        is_entry = placement.position == 0
-        add_node!(build, placement.owner, placement.path, placement.position, is_entry, placement.code)
-    end
+    nodes = ordered_results(placed_node, FileNode, build.placements, build)
+    append!(build.nodes, nodes)
 end
 
 # Module references resolve once every module is known, the inline ones included, and once every module's renames
@@ -440,10 +491,9 @@ end
 # A source file no load walk reached joins the index unranked, under the module whose directory holds it.
 function add_loose_files!(build::IndexBuild)
     tracked = tracked_files(build.src_root)
-    for (dir, _, names) in walkdir(build.src_root), name in names
-        endswith(name, ".jl") || continue
-        joined = joinpath(dir, name)
-        full = normpath(joined)
+    loose = Placement[]
+    for full in julia_files(build.src_root)
+        name = basename(full)
         full in build.visited && continue
         if !isnothing(tracked) && !(full in tracked)
             continue
@@ -461,10 +511,12 @@ function add_loose_files!(build::IndexBuild)
             note_unowned_includes!(build, full, tree)
             continue
         end
-        add_node!(build, owner, full, 0, false, tree)
+        push!(loose, Placement(owner, full, 0, tree))
         rel = relpath(full, build.repo)
         note_includes!(build, owner, full, rel, tree)
     end
+    nodes = ordered_results(loose_node, FileNode, loose, build)
+    append!(build.nodes, nodes)
 end
 
 # An entry-dir file joins `scripts` unless the index holds it as source. Outside test/ its names join `external`, and
