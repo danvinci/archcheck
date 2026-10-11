@@ -136,8 +136,8 @@ function task_result(task::Task)
     end
 end
 
-# `f(item, shared)` for each item, in the items' order whatever order the calls finish in. With one thread the calls
-# run in turn on the caller's task; with more, each is its own task on the default pool.
+# `f(item, shared)` for each item, in the items' order. One thread runs the calls in turn on the caller's task; more
+# run each as a task holding the list and a position, so every item type shares one body the image build compiles.
 function ordered_results(f::F, ::Type{T}, items::AbstractVector, shared) where {F,T}
     results = Vector{T}(undef, length(items))
     if Threads.nthreads() == 1
@@ -147,8 +147,8 @@ function ordered_results(f::F, ::Type{T}, items::AbstractVector, shared) where {
         return results
     end
     tasks = Vector{Task}(undef, length(items))
-    for (position, item) in enumerate(items)
-        tasks[position] = Threads.@spawn f($item, $shared)
+    for position in eachindex(items)
+        tasks[position] = Threads.@spawn f(items[$position], shared)
     end
     for (position, task) in enumerate(tasks)
         results[position] = task_result(task)::T
