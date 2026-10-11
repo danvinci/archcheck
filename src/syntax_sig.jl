@@ -90,12 +90,17 @@ function signature_call(signature)
     node
 end
 
-# The head and the arguments of a signature's call; nothing past a `where`, a return type, or a bare binding.
+# The head and the arguments of a signature's call; nothing past a `where`, a return type, or a bare binding. An infix
+# call keeps its children in source order, so `f ≀ x` holds its operator second.
 function call_parts(signature)
     call = signature_call(signature)
     isnothing(call) && return nothing
     children = child_nodes(call)
     child_count(children) == 0 && return nothing
+    if JS.is_infix_op_call(call)
+        operands = vcat(children[1:1], children[3:end])
+        return (head = children[2], arguments = operands)
+    end
     (head = children[1], arguments = children[2:end])
 end
 
