@@ -7,12 +7,17 @@ struct ValueUnion end
 struct TypeObjectUnion end
 
 # A value parameter stands for its type. A Symbol parameter belongs to nobody, so it counts as owned.
-is_foreign(@nospecialize(x), owns, rule = ValueUnion()) = is_foreign(typeof(x), owns, rule)
+is_foreign(@nospecialize(x), owns, rule) = is_foreign(typeof(x), owns, rule)
 is_foreign(::Symbol, _owns, _rule) = false
 is_foreign(@nospecialize(vararg::Core.TypeofVararg), owns, rule) = is_foreign(vararg.T, owns, rule)
 
-# A variable may stand for any type below its bound, so its bound is judged as a value.
-is_foreign(@nospecialize(typevar::TypeVar), owns, _rule) = is_foreign(typevar.ub, owns, ValueUnion())
+# A variable bounded by a union may stand for any member, so that bound is judged as a value; any other bound keeps
+# the rule it sits under.
+function is_foreign(@nospecialize(typevar::TypeVar), owns, rule)
+    bound = typevar.ub
+    bound isa Union && return is_foreign(bound, owns, ValueUnion())
+    is_foreign(bound, owns, rule)
+end
 
 # A UnionAll is foreign when its body and its bound variable are both foreign.
 function is_foreign(@nospecialize(unionall::UnionAll), owns, rule)
