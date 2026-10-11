@@ -119,7 +119,7 @@ function bind_iteration!(state, scope, targets, node)
         source = value_source(state, collection_scope, collection)
         element = nothing
         if !isnothing(source)
-            element = Deferred(element_type, (source,))
+            element = Deferred(iterated_element, (state.steps, source))
         end
         target = children[1]
         bind_target!(state, scope, target, element)
@@ -236,8 +236,8 @@ function walk_field_reads!(state, scope, node)
 end
 
 # Every field read in a parsed file on a receiver the scan types, in the module's namespace.
-function field_reads(tree, mod::Module, inferred::InferredTypes)
-    state = ReadState(mod, FieldRead[], inferred)
+function field_reads(tree, mod::Module, inferred::InferredTypes, steps::IterateSteps)
+    state = ReadState(mod, FieldRead[], inferred, steps)
     types = Dict{Symbol,Union{Type,Deferred}}()
     locals = Set{Symbol}()
     scope = Scope(types, locals)
@@ -277,11 +277,12 @@ function check_foreign_fields(index::SourceIndex, mods)
     key_of = Dict(M => module_key(M) for M in mods)
     findings = Finding[]
     inferred = InferredTypes()
+    steps = IterateSteps()
     for file in index.files
         M = get(by_key, file.mod, nothing)
         isnothing(M) && continue
         # a read through a Union reads the field on each member
-        for access in field_reads(file.tree, M, inferred).reads, member in union_members(access.type)
+        for access in field_reads(file.tree, M, inferred, steps).reads, member in union_members(access.type)
             S = declared_datatype(member)
             isnothing(S) && continue
             owner = get(key_of, parentmodule(S), nothing)

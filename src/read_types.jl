@@ -129,11 +129,15 @@ end
 # identity, so a callee's own `hash` stays uncalled.
 const InferredTypes = IdDict{Tuple{Any,Any},Union{Nothing,DataType}}
 
+# One run's iterate steps, keyed by signature. Identity on `Any` keeps each signature as itself.
+const IterateSteps = IdDict{Any,Union{Nothing,DataType}}
+
 # One file's reads, walked in the namespace of the module that owns the file.
-struct ReadState{E,C}
+struct ReadState{E,C,S}
     mod::Module                      # the file's module, where annotations and callees resolve
     reads::Vector{E}                 # reads on typed receivers
     inferred::C                      # InferredTypes shared by every file of one run, whose world stays fixed
+    steps::S                         # iterate signature -> the (element, state) type, or nothing; one run, one world
 end
 
 # The value a dotted path binds in `mod` when every binding along it is constant; nothing otherwise.
@@ -375,23 +379,37 @@ function call_type(state, scope, node)
 end
 
 # The element a loop over a collection binds, when every step of `iterate` yields one concrete type.
-function element_type(@nospecialize(collection))
+function iterated_element(steps, @nospecialize(collection))
     collection_type = resolved(collection)
     (isnothing(collection_type) || has_free_variables(collection_type)) && return nothing
-    first_step = iterate_step(Tuple{collection_type})
+    first_signature = Tuple{collection_type}
+    first_step = iterate_step(steps, first_signature)
     isnothing(first_step) && return nothing
     step_state = fieldtype(first_step, 2)
-    next_step = iterate_step(Tuple{collection_type, step_state})
+    next_signature = Tuple{collection_type, step_state}
+    next_step = iterate_step(steps, next_signature)
     next_step == first_step || return nothing
     element = fieldtype(first_step, 1)
     concrete_type(element)
 end
 
-# The (element, state) tuple type Julia infers for an `iterate` call that does not end the loop.
-function iterate_step(signature)
+# The (element, state) tuple type an `iterate` call infers when the call does not end the loop.
+function computed_iterate_step(signature)
     stepped = inferred_return_type(iterate, signature)
-    step = typeintersect(stepped, Tuple{Any,Any})
-    step isa DataType && fieldcount(step) == 2 ? step : nothing
+    narrowed = typeintersect(stepped, Tuple{Any,Any})
+    is_pair = narrowed isa DataType && fieldcount(narrowed) == 2
+    is_pair && return narrowed
+    nothing
+end
+
+# One signature's step, kept for the rest of the run that owns `steps`.
+function iterate_step(steps, signature)
+    if haskey(steps, signature)
+        return steps[signature]
+    end
+    step = computed_iterate_step(signature)
+    steps[signature] = step
+    step
 end
 
 # The type of the value at a position of a destructured tuple, when the tuple's type is concrete and that long.
