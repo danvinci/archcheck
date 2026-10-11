@@ -1,9 +1,9 @@
 # The method zoom of the call graph: the methods each call can land on. The name graph merges every method of a
 # function into one node; this one keeps them apart.
 
-"""What the walk's inference proved about one call a walked method writes, merged over its instances. Nothrow,
-consistent and terminates hold at every instance passing concrete arguments, since abstract ones taint them; the rest
-at every one."""
+"""What the walk's inference proved about one call a walked method writes, merged over its instances and its method's
+declared signature, so a bit holds for every argument the method accepts. Terminates, which a loop claim reads as
+failing, holds at every instance passing concrete arguments, since abstract ones taint it."""
 struct CallFact
     file::Symbol            # file the call's line sits in, as the code records it; empty when it records none
     line::Int               # source line of the call; 0 when the code records none
@@ -103,7 +103,31 @@ function walk_methods(entries, landings::CallLandings)
         callees[instance] = expansion.targets
     end
     calls = merge_reached_calls(entry_instances, recorded, caused, callees)
+    merge_declared_calls!(calls, walked, interp)
     MethodGraph(edges, calls, typed)
+end
+
+# A method walked only at narrower types answers for every argument it accepts, so its declared instance is inferred
+# for facts alone, adding no edge: a bit failing there fails for the call, whatever a default or an entry fixed.
+function merge_declared_calls!(calls, walked, interp)
+    for (method, covered) in walked
+        is_kwcall_method(method) && continue
+        declared = declared_instance(method)
+        declared.specTypes <: covered && continue
+        caller = written_method(method)
+        known = get(calls, caller, nothing)
+        isnothing(known) && continue
+        frame = inference_frame(declared, interp)
+        isnothing(frame) && continue
+        widest = CallFact[]
+        record_calls!(widest, frame)
+        for fact in widest
+            index = site_index(known, fact)
+            isnothing(index) && continue
+            known[index] = merged_fact(known[index], fact)
+        end
+    end
+    calls
 end
 
 # Each held method's function as the signature up to its function slot, open after it.
@@ -490,8 +514,8 @@ function call_fact(frame, position, branches, route)
     flags = frame.ssaflags[position]
     is_effect_free = has_flag(flags, Core.Compiler.IR_FLAG_EFFECT_FREE)
     is_terminating = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_TERMINATES)
-    is_nothrow = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_NOTHROW)
-    is_consistent = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_CONSISTENT)
+    is_nothrow = has_flag(flags, Core.Compiler.IR_FLAG_NOTHROW)
+    is_consistent = has_flag(flags, Core.Compiler.IR_FLAG_CONSISTENT)
     is_generated = any(matches_generated, branches)
     returned = returned_type(branches)
     is_value = returned !== Nothing && returned !== Union{}
@@ -567,14 +591,15 @@ end
 
 # One fact per site, callee and route: two calls of one callee on one line, or one call at two instances, merge.
 function merge_fact!(facts, fact::CallFact)
-    for index in eachindex(facts)
-        known = facts[index]
-        is_same = (known.file, known.line, known.callee, known.via) == (fact.file, fact.line, fact.callee, fact.via)
-        is_same || continue
-        facts[index] = merged_fact(known, fact)
-        return facts
-    end
-    push!(facts, fact)
+    index = site_index(facts, fact)
+    isnothing(index) && return push!(facts, fact)
+    facts[index] = merged_fact(facts[index], fact)
+    facts
+end
+
+function site_index(facts, fact::CallFact)
+    site = (fact.file, fact.line, fact.callee, fact.via)
+    findfirst(known -> (known.file, known.line, known.callee, known.via) == site, facts)
 end
 
 function merged_fact(known::CallFact, fact::CallFact)

@@ -159,6 +159,7 @@ function inference_sites()
     allowed = (
         ("src/methodgraph.jl", :inference_frame),
         ("src/methodgraph.jl", :expand_instance!),
+        ("src/methodgraph.jl", :merge_declared_calls!),
         ("src/julia_internals.jl", :inferred_return_types),
         ("src/checks_opt.jl", :analyze_entries),
     )

@@ -114,7 +114,7 @@ function stray_call(x::Int)
 end
 
 # overlapping_call: one question asked twice of an immutable value, and the callee loops
-function spin(xs)
+function spin(xs::Tuple{Vararg{Int}})
     total = 0
     for value in xs
         total = total + value
@@ -122,7 +122,7 @@ function spin(xs)
     total
 end
 
-function ask_twice(xs)
+function ask_twice(xs::NTuple{3,Int})
     spin(xs) + spin(xs)
 end
 

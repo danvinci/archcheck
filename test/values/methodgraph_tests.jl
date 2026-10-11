@@ -172,6 +172,11 @@ const CALL_FACTS = load_package("CallFacts", """
         checked(x)
         x
     end
+    admits(kind) = kind === Int || throw(ArgumentError("unsupported kind"))
+    function read_as(x; kind::Type = Int)
+        admits(kind)
+        x
+    end
     function advance(counter::Vector{Int})
         for _step in 1:3
             counter[1] += 1
@@ -230,9 +235,20 @@ function call_facts_context()
         (pkg.open_spread, Tuple{Tuple{String}}),
         (pkg.short_spread, Tuple{Tuple{Int}}),
         (pkg.beside, Tuple{Any}),
+        (pkg.read_as, Tuple{Any}),
     )
     case_context(CALL_FACTS; entries = rows)
 end
+
+# The walk pops entries last first, so one order reaches `compares` at `Int` before its declared signature.
+const ENTRY_ORDER = load_package("EntryOrder", """
+    same(a, b) = a === b
+    function compares(x)
+        same(x, 1)
+        x
+    end
+    reaches_compare(y::Int) = compares(y)
+    """)
 
 const CALL_FACTS_CONTEXT = call_facts_context()
 const CALL_FACTS_FOUND = ArchCheck.run(InferredCalls(), CALL_FACTS_CONTEXT)
@@ -600,10 +616,21 @@ end
     ]
 end
 
-@testset "a dropped pure value is a finding, and an abstract instance alone stays quiet" begin
+@testset "a dropped pure value is a finding at every argument its method accepts, and a guard a default passes stays quiet" begin
     dropped = filter(finding -> finding.kind === :dropped_value, CALL_FACTS_FOUND)
     rows = evidence_rows(dropped, :returns)
-    @test rows == [(:dropped_value, "drops", "Bool")]
+    @test rows == [(:dropped_value, "abstract_drops", "Bool"), (:dropped_value, "drops", "Bool")]
+end
+
+@testset "the order of the entries does not change the findings" begin
+    pkg = ENTRY_ORDER.pkg
+    entries = [(pkg.compares, Tuple{Any}), (pkg.reaches_compare, Tuple{Int})]
+    forward_context = case_context(ENTRY_ORDER; entries)
+    backward_context = case_context(ENTRY_ORDER; entries = reverse(entries))
+    forward = ArchCheck.run(InferredCalls(), forward_context)
+    backward = ArchCheck.run(InferredCalls(), backward_context)
+    @test evidence_rows(forward, :returns) == [(:dropped_value, "compares", "Bool")]
+    @test evidence_rows(backward, :returns) == evidence_rows(forward, :returns)
 end
 
 @testset "a stateful call written twice stays quiet, and a pure one carries its effects" begin
