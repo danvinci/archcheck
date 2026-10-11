@@ -151,18 +151,15 @@ end
 
 # unranked-module: a loaded submodule the index does not rank though the repository holds its source, so the index
 # files that source under its parent and no rank rule reaches it.
-function check_module_corpus(mods, rank; repo)
+function check_module_corpus(mods, rank, nested; repo)
     unranked = Pair{Module,Module}[]
     for mod in mods, child in submodules(mod)
         key = module_key(child)
         haskey(rank, key) || push!(unranked, mod => child)
     end
     findings = Finding[]
-    isempty(unranked) && return findings
-    children = [last(pair) for pair in unranked]
-    defined = project_methods(children)
     for (mod, child) in unranked
-        site = source_site(child, defined, repo)
+        site = source_site(child, nested, repo)
         isnothing(site) && continue
         file, line = site
         owner = module_key(mod)

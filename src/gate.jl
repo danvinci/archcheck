@@ -43,8 +43,8 @@ function gate(pkg::Module;
     # Restored probes define methods after this call's world began.
     unwalked = parsed
     if !isnothing(workload)
-        observed = observe(workload, probes, parsed)
-        unwalked = Context(parsed; observed)
+        observed, census = observe(workload, probes, parsed)
+        unwalked = Context(parsed; observed, census)
     end
     ctx = Base.invokelatest(with_method_graph, unwalked, entries)
     walked_findings = Base.invokelatest(run_checks, ctx, walking)

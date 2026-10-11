@@ -26,34 +26,22 @@ function record_specializations!(existing, method::Method, modules)
     end
 end
 
-"""The specializations of the package's methods, read before the method graph's walk. Load, earlier runs and the
-workload made each one; the walk, which makes one for every method it walks, has not run yet."""
-function existing_specializations(modules)
-    existing = Base.IdSet{Core.MethodInstance}()
-    module_set = Set{Module}(modules)
-    each_loaded_method() do method
-        record_specializations!(existing, method, module_set)
-    end
-    existing
-end
+# A method Julia has specialized: `method_instances` lists what it compiled or inferred for the method.
+has_instance(method::Method) = !isempty(method_instances(method))
 
-"""Whether a specialization ran, or was compiled to run: `existing`, from `existing_specializations`, holds it."""
-specialization_ran(instance::Core.MethodInstance, existing) = instance in existing
-
-function holds_specialization(method::Method, existing)
-    for instance in method_instances(method)
-        specialization_ran(instance, existing) && return true
-    end
-    false
+# `modules` holds the package's modules. A method compiled there, read at the same instant as its instances.
+function holds_compiled(method::Method, modules)
+    method.module in modules || return false
+    has_instance(method)
 end
 
 # A keyword call compiles the body function, so that specialization counts for the method which declares the keywords.
-function is_compiled(method::Method, existing)
-    holds_specialization(method, existing) && return true
+function is_compiled(method::Method, modules)
+    holds_compiled(method, modules) && return true
     body = body_function(method)
     isnothing(body) && return false
     for inner in methods(body)
-        holds_specialization(inner, existing) && return true
+        holds_compiled(inner, modules) && return true
     end
     false
 end
@@ -83,7 +71,7 @@ end
 
 # A call written as Type{Params}(...) compiles the all-Any constructor Julia installs beside the typed one, so the
 # typed constructor at that site ran.
-function credit_typed_constructors!(reached, defined, existing)
+function credit_typed_constructors!(reached, defined, modules)
     sites = Set{Tuple{Symbol,Symbol,Int,Int}}()
     typed = Method[]
     for method in defined
@@ -92,7 +80,7 @@ function credit_typed_constructors!(reached, defined, existing)
             push!(typed, method)
             continue
         end
-        holds_specialization(method, existing) || continue
+        holds_compiled(method, modules) || continue
         push!(sites, (method.name, method.file, method.line, method.nargs))
     end
     for method in typed
@@ -111,17 +99,86 @@ function is_generated(method::Method)
     is_generated_function_type(ft)
 end
 
-# What the package has compiled so far, and the specializations that show it. Read before the method graph's walk,
-# whose specializations would count too.
-function compiled_methods(modules)
-    existing = existing_specializations(modules)
+# `nameof` and `parentmodule` on a function infer as untyped, so each assert selects one method.
+function package_owned_function(method::Method, project)
+    found = method_function(method)
+    isnothing(found) && return nothing
+    value = found::Function
+    owner = parentmodule(value)::Module
+    owner in project || return nothing
+    name = nameof(value)::Symbol
+    is_generated_name(name) && return nothing
+    value
+end
+
+# Functions the package owns among the methods its modules define: the function's module is one of them, and the
+# name is one the source wrote.
+function owned_functions(defined, project)
+    owned = IdSet{Function}()
+    for method in defined
+        value = package_owned_function(method, project)
+        isnothing(value) || push!(owned, value)
+    end
+    owned
+end
+
+method_place(method::Method) = (string(method.file), method.line)
+
+# The function type's module is read here, and the function itself only for a module the package owns.
+# A direct child the package's module list omits keeps its own latest methods beside that.
+function classify_method!(defined, foreign, nested, method::Method, project)
+    is_latest(method) || return
+    if method.module in project
+        push!(defined, method)
+        return
+    end
+    parent = parentmodule(method.module)
+    if parent in project
+        push!(nested, method)
+    end
+    owner = function_type_module(method)
+    isnothing(owner) && return
+    owner in project || return
+    push!(foreign, method)
+end
+
+function methods_on(foreign, owned)
+    added = Method[]
+    for method in foreign
+        found = method_function(method)
+        isnothing(found) && continue
+        value = found::Function
+        value in owned || continue
+        push!(added, method)
+    end
+    added
+end
+
+function finish_methods(defined, foreign, nested, project)
+    sort!(defined, by = method_place)
+    sort!(nested, by = method_place)
+    owned = owned_functions(defined, project)
+    added = methods_on(foreign, owned)
+    (defined = defined, added = added, nested = nested)
+end
+
+# What the package defines and what it has compiled, from one walk. Read before the method graph's walk, whose
+# specializations would count too.
+function read_run_methods(modules)
+    project = Set{Module}(modules)
+    defined = Method[]
+    foreign = Method[]
+    nested = Method[]
+    specializations = Base.IdSet{Core.MethodInstance}()
     reached = Set{Method}()
     each_loaded_method() do method
-        record_compiled!(reached, method, modules, existing)
+        record_specializations!(specializations, method, project)
+        classify_method!(defined, foreign, nested, method, project)
+        record_compiled!(reached, method, project)
     end
-    defined = project_methods(modules)
-    credit_typed_constructors!(reached, defined, existing)
-    (reached, existing)
+    census = finish_methods(defined, foreign, nested, project)
+    credit_typed_constructors!(reached, census.defined, project)
+    (census = census, specializations = specializations, reached = reached)
 end
 
 function defined_callable(method::Method)
@@ -162,20 +219,15 @@ function restored_method(probed::Method)
     chosen
 end
 
-function collect_compiled!(found, functions, modules, existing)
+function compiled_probed(armed::ProbeHandle, modules)
+    found = Method[]
     module_set = Set{Module}(modules)
-    for func in functions
+    for func in armed.functions
         defined = methods(func)
         for method in defined
-            record_compiled!(found, method, module_set, existing)
+            record_compiled!(found, method, module_set)
         end
     end
-end
-
-function compiled_probed(armed::ProbeHandle, modules)
-    existing = existing_specializations(modules)
-    found = Method[]
-    collect_compiled!(found, armed.functions, modules, existing)
     found
 end
 
@@ -187,16 +239,17 @@ function credit_restored!(reached, probed_compiled)
     end
 end
 
-function record_compiled!(reached, method::Method, modules, existing)
+function record_compiled!(reached, method::Method, modules)
     method.module in modules || return
     is_generated(method) && return
     is_live_method(method) || return
-    is_compiled(method, existing) || return
+    is_compiled(method, modules) || return
     push!(reached, method)
 end
 
 """Runs the workload, a zero-argument callable, once with the probes armed (`nothing` probes nothing), and reads
-which of the package's methods it compiled. The gate calls it before it walks the method graph."""
+which of the package's methods it compiled. Returns the `Observation` and the method lists the same walk of the
+method table read. The gate calls it before it walks the method graph."""
 function observe(workload, probes, ctx)
     records = ProbeRecord[]
     waits = WaitRecord[]
@@ -218,7 +271,8 @@ function observe(workload, probes, ctx)
             waits = traced.waits
         end
     end
-    reached, specializations = Base.invokelatest(compiled_methods, modules)
-    Base.invokelatest(credit_restored!, reached, probed_compiled)
-    Observation(reached, specializations, records, waits, elapsed)
+    table = Base.invokelatest(read_run_methods, modules)
+    Base.invokelatest(credit_restored!, table.reached, probed_compiled)
+    observed = Observation(table.reached, table.specializations, records, waits, elapsed)
+    (observed, table.census)
 end

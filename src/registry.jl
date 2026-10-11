@@ -9,81 +9,31 @@ struct Context{D<:Tuple}
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
     defined::Vector{Method}                 # every live method the package's modules define, in source order
     added::Vector{Method}                   # live methods other modules add on functions the package owns
+    nested::Vector{Method}                  # live methods an unranked direct child defines, in source order
     methods::Union{Nothing,MethodGraph}     # calls between methods from the declared entries; nothing when none is declared
     observed::Union{Nothing,Observation}    # what the workload did; nothing before it runs, or with no workload
     derived::D                              # the package's declared derived values, each a `Derived`
 end
 
-# `nameof` and `parentmodule` on a function infer as untyped, so each assert selects one method.
-function package_owned_function(method::Method, project)
-    found = method_function(method)
-    isnothing(found) && return nothing
-    value = found::Function
-    owner = parentmodule(value)::Module
-    owner in project || return nothing
-    name = nameof(value)::Symbol
-    is_generated_name(name) && return nothing
-    value
-end
-
-# Functions the package owns among the methods its modules define: the function's module is one of them, and the
-# name is one the source wrote.
-function owned_functions(defined, project)
-    owned = IdSet{Function}()
-    for method in defined
-        value = package_owned_function(method, project)
-        isnothing(value) || push!(owned, value)
-    end
-    owned
-end
-
-# The function type's module is read here, and the function itself only for a module the package owns.
-function keep_loaded_method!(defined, foreign, method::Method, project)
-    is_latest(method) || return
-    if method.module in project
-        push!(defined, method)
-        return
-    end
-    owner = function_type_module(method)
-    isnothing(owner) && return
-    owner in project || return
-    push!(foreign, method)
-    nothing
-end
-
-function methods_on(foreign, owned)
-    added = Method[]
-    for method in foreign
-        found = method_function(method)
-        isnothing(found) && continue
-        value = found::Function
-        value in owned || continue
-        push!(added, method)
-    end
-    added
-end
-
-# One walk of the method table: the live methods the package's modules define, in source order, and the live
-# methods other modules add on functions those modules own.
+# One walk of the method table: the live methods the package's modules define, in source order, the live
+# methods other modules add on functions those modules own, and the live methods an unranked direct child defines.
 function read_methods(mods)
     project = Set{Module}(mods)
     defined = Method[]
     foreign = Method[]
+    nested = Method[]
     each_loaded_method() do method
-        keep_loaded_method!(defined, foreign, method, project)
+        classify_method!(defined, foreign, nested, method, project)
     end
-    sort!(defined, by = method -> (string(method.file), method.line))
-    owned = owned_functions(defined, project)
-    added = methods_on(foreign, owned)
-    (defined, added)
+    finish_methods(defined, foreign, nested, project)
 end
 
 function Context(index::SourceIndex, root::Module, mods; methods = nothing, derived = ())
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
     modules = package_modules(root, mods)
-    defined, added = read_methods(modules)
-    Context(index, root, mods, sites, callgraphs, defined, added, methods, nothing, derived)
+    defined, added, nested = read_methods(modules)
+    Context(index, root, mods, sites, callgraphs, defined, added, nested, methods, nothing, derived)
 end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
@@ -105,12 +55,11 @@ function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = S
     with_method_graph(unwalked, entries)
 end
 
-# The same context once the workload has run. Restored probes defined methods, so the method list is read again.
-function Context(ctx::Context; observed::Observation)
-    modules = package_modules(ctx)
-    defined, added = read_methods(modules)
-    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, defined, added, ctx.methods, observed,
-            ctx.derived)
+# The same context once the workload has run, with the method lists `observe` read after it: restored probes
+# define methods, and that walk sees them.
+function Context(ctx::Context; observed::Observation, census)
+    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, census.defined, census.added, census.nested,
+            ctx.methods, observed, ctx.derived)
 end
 
 # The context with the calls between methods from `entries`; unchanged when none is declared. The walk makes a
@@ -119,11 +68,11 @@ function with_method_graph(ctx::Context, entries)
     isempty(entries) && return ctx
     project = package_modules(ctx)
     names = value_names(ctx.index)
-    methods = method_graph(entries, project, names)
+    methods = method_graph(entries, project, names, ctx.defined)
     if !isnothing(ctx.observed)
         add_compiled_edges!(methods, ctx.observed.specializations, project)
     end
-    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, methods,
+    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, ctx.nested, methods,
             ctx.observed, ctx.derived)
 end
 
@@ -241,7 +190,7 @@ struct TypeBranches <: Check end
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.
 function run(::Corpus, ctx)
     files = check_corpus(ctx.index)
-    modules = check_module_corpus(package_modules(ctx), ctx.index.rank; repo = ctx.index.repo)
+    modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested; repo = ctx.index.repo)
     vcat(files, modules)
 end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,

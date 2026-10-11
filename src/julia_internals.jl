@@ -17,22 +17,6 @@ end
 nothing called and nothing inferred has none."""
 method_instances(method::Method) = Base.specializations(method)
 
-function keep_project_method!(defined, method::Method, project)
-    method.module in project || return
-    is_latest(method) && push!(defined, method)
-    nothing
-end
-
-# Every live method a checked module defines, on any function, in source order. A context reads the table once.
-function project_methods(mods)
-    project = Set(mods)
-    defined = Method[]
-    each_loaded_method() do method
-        keep_project_method!(defined, method, project)
-    end
-    sort!(defined, by = method -> (string(method.file), method.line))
-end
-
 """Lowering names every binding the source does not write itself (a closure, a keyword body, a gensym, a function's
 type) with a leading `#`; a written identifier holds one only through `var"#..."`."""
 is_generated_name(name::Symbol) = startswith(string(name), "#")

@@ -43,10 +43,11 @@ struct CallLandings{M<:AbstractSet,P<:AbstractVector,C<:AbstractDict}
     by_call::C                # call signature -> the written method and specialization of each landing
 end
 
-function CallLandings(modules, values)
+function CallLandings(modules, values, defined)
     module_set = Set{Module}(modules)
     held = Base.IdSet{Method}()
-    for method in project_methods(modules)
+    for method in defined
+        method.module in module_set || continue
         is_held(method, values) && push!(held, method)
     end
     prefixes = held_signatures(held)
@@ -55,9 +56,9 @@ function CallLandings(modules, values)
 end
 
 """The calls between methods reached from `entries`, each a `Core.MethodInstance` or a `(function, argument types)`
-pair; only methods `modules` define expand, and `values` names the functions a callee unknown at its site can hold."""
-function method_graph(entries, modules, values)
-    landings = CallLandings(modules, values)
+pair. Only methods `modules` define expand; `defined` lists them, and `values` names an unknown callee's functions."""
+function method_graph(entries, modules, values, defined)
+    landings = CallLandings(modules, values, defined)
     previous = nothing
     for _walk in 1:GRAPH_WALKS_MAX
         current = walk_methods(entries, landings)
