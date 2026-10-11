@@ -170,8 +170,7 @@ function bind_target!(state, scope, target, @nospecialize(source))
         for index in eachindex(parts)
             element = nothing
             if is_positional
-                position = Int(index)
-                element = Deferred(TupleStep(), source, position)
+                element = Deferred(TupleStep(), source, index)
             end
             bind_target!(state, scope, parts[index], element)
         end
