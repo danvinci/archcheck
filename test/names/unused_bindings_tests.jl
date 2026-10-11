@@ -66,6 +66,12 @@ const UNUSED_REACH = load_package("UnusedReach", """
         spare = 1
         :(@symbolic 1)
     end
+    module Sub
+    macro void()
+        nothing
+    end
+    end
+    @eval Sub dropped_sub(y) = @void()
     """)
 
 @testset "an unread argument or local is found, including one a package macro's expansion drops; underscore names, unnamed arguments, and a name the expansion holds are exempt" begin
@@ -100,12 +106,13 @@ const UNUSED_REACH = load_package("UnusedReach", """
     @test ev(plain, :runs_at) == "call time"
 end
 
-@testset "a position every method leaves unread under one declared type is ignored; a position whose type dispatches is not" begin
+@testset "a position every method leaves unread under one declared type is ignored, its macros expanded where the method is defined; a position whose type dispatches is not" begin
     ctx = case_context(UNUSED_REACH)
     found = ArchCheck.run(UnusedBindings(), ctx)
     ignored = [f for f in found if f.kind === :ignored_parameter]
     rows = evidence_rows(ignored, :position, :methods)
     expected = [
+        (:ignored_parameter, "dropped_sub:1", "1", "1"),
         (:ignored_parameter, "hinted:1", "1", "1"),
         (:ignored_parameter, "looped:2", "2", "2"),
         (:ignored_parameter, "picks:1", "1", "2"),

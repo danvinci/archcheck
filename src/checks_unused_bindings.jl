@@ -55,17 +55,23 @@ const WORD = r"[A-Za-z_][A-Za-z0-9_]*"
 # expansion failed, may read any.
 const EVERY_NAME = Symbol("\$")
 
-# What one UnusedBindings run reads off macro calls, each call expanded at most once and only when a binding's
-# verdict waits on it.
+# A syntax node and the module its macro calls expand in, which decides the expansion.
+struct ExpandedIn
+    node::JS.SyntaxNode           # a macro call, or a form holding macro calls
+    home::Union{Nothing,Module}   # module the calls expand in; nothing when none is loaded
+end
+
+# What one UnusedBindings run reads off macro calls, each call expanded at most once per module and only when a
+# binding's verdict waits on it.
 struct MacroReads
-    root::Module                                                   # the package, whose loaded modules expand the calls
-    expansions::IdDict{JS.SyntaxNode,Union{Nothing,Set{Symbol}}}   # call -> names its expansion writes; nothing when it threw
-    written::IdDict{JS.SyntaxNode,Set{Symbol}}                     # form -> names its macro calls write
+    root::Module                                                # the package, whose loaded modules expand the calls
+    expansions::IdDict{ExpandedIn,Union{Nothing,Set{Symbol}}}   # call -> names its expansion writes; nothing on a throw
+    written::IdDict{ExpandedIn,Set{Symbol}}                     # form -> names its macro calls write
 end
 
 function MacroReads(root::Module)
-    expansions = IdDict{JS.SyntaxNode,Union{Nothing,Set{Symbol}}}()
-    written = IdDict{JS.SyntaxNode,Set{Symbol}}()
+    expansions = IdDict{ExpandedIn,Union{Nothing,Set{Symbol}}}()
+    written = IdDict{ExpandedIn,Set{Symbol}}()
     MacroReads(root, expansions, written)
 end
 
@@ -129,7 +135,8 @@ function add_written!(names, value::Expr)
 end
 
 function expansion_names!(reads::MacroReads, home, call)
-    get!(reads.expansions, call) do
+    key = ExpandedIn(call, home)
+    get!(reads.expansions, key) do
         isnothing(home) && return nothing
         expansion = macro_expansion(home, call)
         isnothing(expansion) && return nothing
@@ -168,7 +175,10 @@ function macro_names(form, home, reads::MacroReads)
     names
 end
 
-written_names(reads::MacroReads, form, home) = get!(() -> macro_names(form, home, reads), reads.written, form)
+function written_names(reads::MacroReads, form, home)
+    key = ExpandedIn(form, home)
+    get!(() -> macro_names(form, home, reads), reads.written, key)
+end
 
 # The name a finding gives a binding: the nearest named method, macro or callable around it.
 function owner_name(form, fallback)
