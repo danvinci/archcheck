@@ -1,5 +1,5 @@
 # Arguments, locals and parameter positions no code reads, judged on the scoped walk's record of each binding and of
-# each read with the binding it resolves to.
+# each read with the binding it resolves to; a macro from outside the language by what its expansion writes.
 
 # How many reads resolve to each binding, by its declaring identifier, across the package's code.
 function read_counts(index::SourceIndex)
@@ -51,9 +51,23 @@ end
 
 const WORD = r"[A-Za-z_][A-Za-z0-9_]*"
 
-# Stands for every name: code a splice computes into the form's own body, as `@eval` code holds, or a macro from
-# outside Base and Core expands to, may read any.
+# Stands for every name: code a splice computes into the form's own body, as `@eval` code holds, or a macro whose
+# expansion failed, may read any.
 const EVERY_NAME = Symbol("\$")
+
+# What one UnusedBindings run reads off macro calls, each call expanded at most once and only when a binding's
+# verdict waits on it.
+struct MacroReads
+    root::Module                                                   # the package, whose loaded modules expand the calls
+    expansions::IdDict{JS.SyntaxNode,Union{Nothing,Set{Symbol}}}   # call -> names its expansion writes; nothing when it threw
+    written::IdDict{JS.SyntaxNode,Set{Symbol}}                     # form -> names its macro calls write
+end
+
+function MacroReads(root::Module)
+    expansions = IdDict{JS.SyntaxNode,Union{Nothing,Set{Symbol}}}()
+    written = IdDict{JS.SyntaxNode,Set{Symbol}}()
+    MacroReads(root, expansions, written)
+end
 
 # A macro Base or Core binds; its expansion reads only the names its call writes.
 function is_base_macro(call)
@@ -62,9 +76,67 @@ function is_base_macro(call)
     isdefined(Base, name) || isdefined(Core, name)
 end
 
-# Every word a macro call or a command string writes inside a form, raw text included: the macro may read any name
-# it is given.
-function macro_names(form)
+# A macro from outside the language: only its expansion shows what it reads.
+function is_foreign_macro(node)
+    JS.kind(node) == K"macrocall" || return false
+    is_argument_hint(node) && return false
+    !is_base_macro(node)
+end
+
+# The foreign macro calls under `node`, each outside any other.
+function foreign_macro_calls!(calls, node)
+    if is_foreign_macro(node)
+        push!(calls, node)
+        return calls
+    end
+    children = child_nodes(node)
+    isnothing(children) && return calls
+    for child in children
+        foreign_macro_calls!(calls, child)
+    end
+    calls
+end
+
+# The code `macroexpand` makes of a call in `home`; nothing when the package's macro throws. Its output is discarded.
+function macro_expansion(home::Module, call)
+    expression = Expr(call)
+    try
+        redirect_stdout(devnull) do
+            redirect_stderr(devnull) do
+                macroexpand(home, expression)
+            end
+        end
+    catch failure
+        failure isa InterruptException && rethrow()
+        nothing
+    end
+end
+
+# The names expanded code writes: a symbol, a quoted symbol, or a global reference's name.
+add_written!(names, value::Symbol) = push!(names, value)
+add_written!(names, value::QuoteNode) = add_written!(names, value.value)
+add_written!(names, value::GlobalRef) = push!(names, value.name)
+add_written!(names, @nospecialize(_value)) = names
+
+function add_written!(names, value::Expr)
+    for argument in value.args
+        add_written!(names, argument)
+    end
+    names
+end
+
+function expansion_names!(reads::MacroReads, home, call)
+    get!(reads.expansions, call) do
+        isnothing(home) && return nothing
+        expansion = macro_expansion(home, call)
+        isnothing(expansion) && return nothing
+        add_written!(Set{Symbol}(), expansion)
+    end
+end
+
+# Every word a Base macro call or a command string writes inside a form, raw text included, and every name a foreign
+# macro call's expansion in `home` writes.
+function macro_names(form, home, reads::MacroReads)
     names = Set{Symbol}()
     signature = first(child_nodes(form))
     for node in walk_nodes(form)
@@ -75,7 +147,7 @@ function macro_names(form)
         end
         if kind == K"macrocall"
             is_argument_hint(node) && continue
-            is_base_macro(node) || push!(names, EVERY_NAME)
+            is_base_macro(node) || continue
         elseif kind != K"cmdstring"
             continue
         end
@@ -84,8 +156,16 @@ function macro_names(form)
             push!(names, Symbol(word.match))
         end
     end
+    EVERY_NAME in names && return names
+    for call in foreign_macro_calls!(JS.SyntaxNode[], form)
+        expanded = expansion_names!(reads, home, call)
+        isnothing(expanded) && return push!(names, EVERY_NAME)
+        union!(names, expanded)
+    end
     names
 end
+
+written_names(reads::MacroReads, form, home) = get!(() -> macro_names(form, home, reads), reads.written, form)
 
 # The name a finding gives a binding: the nearest named method, macro or callable around it.
 function owner_name(form, fallback)
@@ -104,7 +184,7 @@ function owner_name(form, fallback)
 end
 
 # A binding no read resolves to and no macro call writes, in code a method, macro or closure holds.
-function is_unread(binding::LocalBinding, reads_of, macros)
+function is_unread(binding::LocalBinding, reads_of, reads::MacroReads, home)
     is_judged = binding.kind === :argument || binding.kind === :local
     is_judged || return false
     isnothing(binding.method) && return false
@@ -115,7 +195,7 @@ function is_unread(binding::LocalBinding, reads_of, macros)
     haskey(reads_of, binding.node) && return false
     has_ancestor(binding.node, K"quote", nothing) && return false
     has_ancestor(binding.node, K"macrocall", binding.method) && return false
-    written = get!(() -> macro_names(binding.method), macros, binding.method)
+    written = written_names(reads, binding.method, home)
     EVERY_NAME in written && return false
     !(binding.name in written)
 end
@@ -129,9 +209,10 @@ function unused_finding(file::FileNode, binding::LocalBinding, form)
     Finding(file.mod, kind, file.path, symbol, binding.line, detail, evidence)
 end
 
-function add_unused_findings!(findings, file::FileNode, reads_of, macros)
+function add_unused_findings!(findings, file::FileNode, reads_of, reads::MacroReads)
+    home = loaded_module(reads.root, file.mod)
     for binding in file.scan.bindings
-        is_unread(binding, reads_of, macros) || continue
+        is_unread(binding, reads_of, reads, home) || continue
         form = enclosing_form(binding.node)
         is_generated = binding.kind === :argument && is_generated_form(form)
         is_generated && continue
@@ -167,14 +248,14 @@ function carries_read_parameter(argument, signature, reads_of)
     false
 end
 
-function ignores_argument(argument, signature, written, reads_of)
-    carries_read_parameter(argument, signature, reads_of) && return false
+# The identifier of a position no read resolves to, `:unnamed` for a bare `::T`; nothing when a read does.
+function unread_node(argument, signature, reads_of)
+    carries_read_parameter(argument, signature, reads_of) && return nothing
     node = position_node(argument)
-    node === :unnamed && return true
-    isnothing(node) && return false
-    get(reads_of, node, 0) > 0 && return false
-    EVERY_NAME in written && return false
-    !(node.val in written)
+    node === :unnamed && return node
+    isnothing(node) && return nothing
+    get(reads_of, node, 0) > 0 && return nothing
+    node
 end
 
 function cached_path!(paths, file, repo)
@@ -198,7 +279,7 @@ end
 
 # Each position a method leaves unread, read off its parsed form once; none for a method the parse holds no form
 # for, a `@generated` one, or a vararg tail.
-function unread_positions(method::Method, index::SourceIndex, paths, reads_of)
+function unread_positions(method::Method, index::SourceIndex, paths, reads_of, reads::MacroReads)
     unread = falses(Int(method.nargs) - 1)
     form = site_form(index, method, paths)
     isnothing(form) && return unread
@@ -207,10 +288,16 @@ function unread_positions(method::Method, index::SourceIndex, paths, reads_of)
     parts = call_parts(signature)
     isnothing(parts) && return unread
     arguments = filter(argument -> JS.kind(argument) != K"parameters", parts.arguments)
-    written = macro_names(form)
     last_named = method.isva ? length(unread) - 1 : length(unread)
     for position in 1:min(last_named, length(arguments))
-        unread[position] = ignores_argument(arguments[position], signature, written, reads_of)
+        node = unread_node(arguments[position], signature, reads_of)
+        isnothing(node) && continue
+        if node === :unnamed
+            unread[position] = true
+            continue
+        end
+        written = written_names(reads, form, method.module)
+        unread[position] = !(EVERY_NAME in written) && !(node.val in written)
     end
     unread
 end
@@ -240,12 +327,12 @@ function owned_methods(defined, added, owned)
 end
 
 # Each position every method of a package-owned function leaves unread under one declared type.
-function add_ignored_findings!(findings, value::Function, all_methods, project, index, paths, reads_of)
+function add_ignored_findings!(findings, value::Function, all_methods, project, index, paths, reads_of, reads)
     own = filter(method -> method.module in project, all_methods)
     isempty(own) && return findings
     sorted = sort(own, by = method -> (string(method.file), method.line))
     home = first(sorted)
-    unread = [unread_positions(method, index, paths, reads_of) for method in all_methods]
+    unread = [unread_positions(method, index, paths, reads_of, reads) for method in all_methods]
     widest = maximum(length, unread)
     function_name = written_name(nameof(value))
     owner = module_key(home.module)
@@ -264,16 +351,16 @@ function add_ignored_findings!(findings, value::Function, all_methods, project, 
     findings
 end
 
-function check_unused_bindings(index::SourceIndex, defined, added, project, owned)
+function check_unused_bindings(index::SourceIndex, defined, added, project, owned, root::Module)
     reads_of = read_counts(index)
-    macros = IdDict{JS.SyntaxNode,Set{Symbol}}()
+    reads = MacroReads(root)
     findings = Finding[]
     for file in index.files
-        add_unused_findings!(findings, file, reads_of, macros)
+        add_unused_findings!(findings, file, reads_of, reads)
     end
     paths = Dict{Symbol,String}()
     for (value, all_methods) in owned_methods(defined, added, owned)
-        add_ignored_findings!(findings, value, all_methods, project, index, paths, reads_of)
+        add_ignored_findings!(findings, value, all_methods, project, index, paths, reads_of, reads)
     end
     findings
 end

@@ -54,14 +54,20 @@ const UNUSED_REACH = load_package("UnusedReach", """
         counter = 1
         nothing
     end
+    macro drop(code)
+        esc(code)
+    end
+    dropped(y::Int) = @drop 1
+    dropped(y::Float64) = @drop y
     """)
 
-@testset "an argument or local no read resolves to is found; underscore, unnamed and macro-written names are not" begin
+@testset "an unread argument or local is found, including one a package macro's expansion drops; underscore names, unnamed arguments, and a name the expansion holds are exempt" begin
     ctx = case_context(UNUSED_REACH)
     found = ArchCheck.run(UnusedBindings(), ctx)
     rows = sort([(f.kind, f.symbol, f.line) for f in found if f.kind !== :ignored_parameter])
     expected = [
         (:unused_argument, "@passed:extra", 14),
+        (:unused_argument, "dropped:y", 57),
         (:unused_argument, "hinted:a", 30),
         (:unused_argument, "keyed:extra", 3),
         (:unused_argument, "looped:y", 25),

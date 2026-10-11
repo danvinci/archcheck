@@ -152,7 +152,7 @@ end
 ReachesInternal(; allowed::Tuple{Vararg{Module}} = ()) = ReachesInternal(allowed)
 """Runs in `CHECKS`. A closure assigns a captured local in more than one place, so lowering boxes it."""
 struct BoxedCaptures <: Check end
-"""Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two, and a name a macro call's arguments write counts as read."""
+"""Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two. A name a Base or Core macro call writes counts as read, and so does one any other macro's expansion holds, or every name when that expansion throws."""
 struct UnusedBindings <: Check end
 """Runs in `CHECKS`. A struct field's stored type leaves dispatch open. A container's own element types decide: a concrete element closes it whatever that element holds, so `Vector{Vector{Any}}` is closed."""
 struct AbstractFields <: Check end
@@ -241,7 +241,7 @@ function run(::UnusedBindings, ctx)
     modules = package_modules(ctx)
     project = Set{Module}(modules)
     owned = owned_functions(ctx.defined, project)
-    check_unused_bindings(ctx.index, ctx.defined, ctx.added, project, owned)
+    check_unused_bindings(ctx.index, ctx.defined, ctx.added, project, owned, ctx.root)
 end
 kinds(::UnusedBindings) = (:unused_argument => :advisory, :unused_local => :advisory,
                            :ignored_parameter => :advisory)
