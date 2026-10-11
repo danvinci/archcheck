@@ -1,7 +1,7 @@
 # Imported names: a name a module reads that only a bare `using` brings in, and a name an import list binds that the
 # module leaves unread. The parse says which names the module reads; the loaded module says where each comes from.
 
-"""Runs in `CHECKS`. A module reads a name that a bare `using` alone brings in, or a `using X: a` or `import X: a` list binds a name the module leaves unread. A name that the package's own modules, Base or Core export stays out of the first: the package or Julia owns both sides of it."""
+"""Runs in `CHECKS`. A module reads a name that a bare `using` alone brings in, or a `using X: a` or `import X: a` list binds a name the module leaves unread; a method the module defines through the binding, bare or spliced into an `@eval`, reads it. A name that the package's own modules, Base or Core export stays out of the first: the package or Julia owns both sides of it."""
 struct ImportedNames <: Check end
 
 kinds(::ImportedNames) = (:implicit_import => :advisory, :stale_import => :advisory)
@@ -166,12 +166,62 @@ function implicit_findings!(findings, key, home::Module, reads, imports::ModuleI
     end
 end
 
-function stale_findings!(findings, key, home::Module, reads, imports::ModuleImports, modules::ReachModules)
+# The lines, per repo-relative file, where `home` itself defines methods of the function its binding `name` holds.
+function defining_lines(home::Module, name::Symbol, repo)
+    lines = Dict{String,Set{Int}}()
+    value = getfield(home, name)
+    value isa Function || value isa Type || return lines
+    for method in methods(value, home)
+        path, line = method_site(method, repo)
+        push!(get!(Set{Int}, lines, path), line)
+    end
+    lines
+end
+
+# Whether a definition's signature names its function through the module's binding: bare, or spliced into quoted code
+# (`$op(...)`). A qualified head (`Base.$op`) reaches the function past the binding.
+function names_through_binding(form, name::Symbol)
+    signature = first(child_nodes(form))
+    parts = call_parts(signature)
+    isnothing(parts) && return false
+    head = parts.head
+    JS.kind(head) == K"$" && return true
+    node_symbol(head) === name
+end
+
+# Whether a definition starting on one of `lines` under `node` names its function through the binding. Quoted code is
+# walked too: an `@eval` loop defines from it.
+function defines_through_binding(node, lines, name::Symbol)
+    if is_method_form(node) && source_line(node) in lines
+        names_through_binding(node, name) && return true
+    end
+    children = child_nodes(node)
+    isnothing(children) && return false
+    for child in children
+        defines_through_binding(child, lines, name) && return true
+    end
+    false
+end
+
+# Whether `home` extends the function its binding `name` holds at a site that names it through that binding: the
+# loaded methods say where, the source how. Julia resolved such a definition through the import, so the import is read.
+function extends_through_binding(home::Module, name::Symbol, files, repo)
+    lines = defining_lines(home, name, repo)
+    for file in files
+        at = get(lines, file.path, nothing)
+        isnothing(at) && continue
+        defines_through_binding(file.tree, at, name) && return true
+    end
+    false
+end
+
+function stale_findings!(findings, key, home::Module, reads, imports::ModuleImports, modules::ReachModules, files, repo)
     reported = Set{Tuple{Symbol,Module}}()   # (name, clause module): one finding for a name listed twice
     for listed in imports.listed
         listed.name in reads && continue
         isdefined(home, listed.name) || continue
         Base.ispublic(home, listed.name) && continue
+        extends_through_binding(home, listed.name, files, repo) && continue
         pair = (listed.name, listed.from)
         pair in reported && continue
         push!(reported, pair)
@@ -195,7 +245,7 @@ function check_imported_names(index::SourceIndex, mods, package::Module)
         reads = module_reads(files)
         imports = module_imports(home, files)
         implicit_findings!(findings, key, home, reads, imports, modules)
-        stale_findings!(findings, key, home, reads, imports, modules)
+        stale_findings!(findings, key, home, reads, imports, modules, files, index.repo)
     end
     findings
 end

@@ -2,6 +2,7 @@
 
 # Test is the outside package; `println` comes through it from Base, so a clause's module and a name's owner are two.
 # TestLogger, which Test exports, appears only bound locally, as a symbol, behind a module path, or as a declaration.
+# An eval loop extends `isequal` through the import and `asin` by qualifying it, so only `asin` is listed unread.
 const LISTED_IMPORTS = load_package("ListedImports", """
 using Test
 using Test: @testset, @test_throws, println
@@ -32,6 +33,16 @@ end
 macro wrap(TestLogger)
     TestLogger
 end
+import Base: isequal, asin
+struct Box
+    v::Int
+end
+for op in (:isequal,)
+    @eval \$op(a::Box, b::Box) = \$op(a.v, b.v)
+end
+for name in (:asin,)
+    @eval Base.\$name(box::Box) = box
+end
 """, Pair{String,String}[], "[deps]\nTest = \"8dfed614-e22c-5e08-85e1-65c5234f0b40\"\n")
 
 @testset "a module reads a name only a bare using brings in, or lists a name it leaves unread" begin
@@ -44,6 +55,7 @@ end
         (:implicit_import, "TestSetException", "Test", "Test", 2),
         (:stale_import, "@testset", "Test", "Test", 3),
         (:stale_import, "ambiguities", "Test", "Test", 4),
+        (:stale_import, "asin", "Base", "Base", 31),
         (:stale_import, "println", "Test", "Base", 3),
     ]
 end
