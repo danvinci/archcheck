@@ -55,10 +55,11 @@ const WORD = r"[A-Za-z_][A-Za-z0-9_]*"
 # expansion failed, may read any.
 const EVERY_NAME = Symbol("\$")
 
-# A syntax node and the module its macro calls expand in, which decides the expansion.
+# A syntax node, the module its macro calls expand in, and the expansion's hygiene, which together decide it.
 struct ExpandedIn
     node::JS.SyntaxNode           # a macro call, or a form holding macro calls
     home::Union{Nothing,Module}   # module the calls expand in; nothing when none is loaded
+    is_hygienic::Bool             # the expansion runs the legacy hygiene pass, as `macroexpand` does by default
 end
 
 # What one UnusedBindings run reads off macro calls, each call expanded at most once per module and only when a
@@ -109,13 +110,13 @@ const EXPANSION_LOCK = ReentrantLock()
 
 # The code `macroexpand` makes of a call in `home`, as `Some`, since a macro may expand to `nothing`; nothing when the
 # package's macro throws. What it prints is discarded.
-function macro_expansion(home::Module, call)
+function macro_expansion(home::Module, call, is_hygienic::Bool)
     expression = Expr(call)
     try
         lock(EXPANSION_LOCK) do
             redirect_stdout(devnull) do
                 redirect_stderr(devnull) do
-                    expanded = macroexpand(home, expression)
+                    expanded = macroexpand(home, expression; legacyscope = is_hygienic)
                     Some(expanded)
                 end
             end
@@ -139,11 +140,11 @@ function add_written!(names, value::Expr)
     names
 end
 
-function expansion_names!(reads::MacroReads, home, call)
-    key = ExpandedIn(call, home)
+function expansion_names!(reads::MacroReads, home, call, is_hygienic::Bool)
+    key = ExpandedIn(call, home, is_hygienic)
     get!(reads.expansions, key) do
         isnothing(home) && return nothing
-        expansion = macro_expansion(home, call)
+        expansion = macro_expansion(home, call, is_hygienic)
         isnothing(expansion) && return nothing
         add_written!(Set{Symbol}(), something(expansion))
     end
@@ -151,7 +152,7 @@ end
 
 # Every word a Base macro call or a command string writes inside a form, raw text included, and every name a foreign
 # macro call's expansion in `home` writes.
-function macro_names(form, home, reads::MacroReads)
+function macro_names(form, home, reads::MacroReads, is_hygienic::Bool)
     names = Set{Symbol}()
     signature = first(child_nodes(form))
     for node in walk_nodes(form)
@@ -173,16 +174,26 @@ function macro_names(form, home, reads::MacroReads)
     end
     EVERY_NAME in names && return names
     for call in foreign_macro_calls!(JS.SyntaxNode[], form)
-        expanded = expansion_names!(reads, home, call)
+        expanded = expansion_names!(reads, home, call, is_hygienic)
         isnothing(expanded) && return push!(names, EVERY_NAME)
         union!(names, expanded)
     end
     names
 end
 
-function written_names(reads::MacroReads, form, home)
-    key = ExpandedIn(form, home)
-    get!(() -> macro_names(form, home, reads), reads.written, key)
+function written_names(reads::MacroReads, form, home, is_hygienic::Bool)
+    key = ExpandedIn(form, home, is_hygienic)
+    get!(() -> macro_names(form, home, reads, is_hygienic), reads.written, key)
+end
+
+# Whether a macro call in `form` writes `name`. Legacy hygiene only renames a macro's own locals and qualifies its
+# globals, so a name the cheaper expansion without it lacks stays absent, and only a name it holds waits on that pass.
+function is_written(reads::MacroReads, form, home, name::Symbol)
+    unscoped = written_names(reads, form, home, false)
+    EVERY_NAME in unscoped && return true
+    name in unscoped || return false
+    hygienic = written_names(reads, form, home, true)
+    EVERY_NAME in hygienic || name in hygienic
 end
 
 # The name a finding gives a binding: the nearest named method, macro or callable around it.
@@ -213,9 +224,7 @@ function is_unread(binding::LocalBinding, reads_of, reads::MacroReads, home)
     haskey(reads_of, binding.node) && return false
     has_ancestor(binding.node, K"quote", nothing) && return false
     has_ancestor(binding.node, K"macrocall", binding.method) && return false
-    written = written_names(reads, binding.method, home)
-    EVERY_NAME in written && return false
-    !(binding.name in written)
+    !is_written(reads, binding.method, home, binding.name)
 end
 
 function unused_finding(file::FileNode, binding::LocalBinding, form)
@@ -305,8 +314,7 @@ function unread_positions(method::Method, index::SourceIndex, recorded, reads_of
             unread[position] = true
             continue
         end
-        written = written_names(reads, form, method.module)
-        unread[position] = !(EVERY_NAME in written) && !(node.val in written)
+        unread[position] = !is_written(reads, form, method.module, node.val)
     end
     unread
 end
