@@ -113,19 +113,6 @@ function stray_call(x::Int)
     guarded(x)
 end
 
-# overlapping_call: one question asked twice of an immutable value, and the callee loops
-function spin(xs::Tuple{Vararg{Int}})
-    total = 0
-    for value in xs
-        total = total + value
-    end
-    total
-end
-
-function ask_twice(xs::NTuple{3,Int})
-    spin(xs) + spin(xs)
-end
-
 # file_sinkable: the only callee lives in one earlier file
 function sink_home(x::Int)
     leaf_value(x)

@@ -274,7 +274,9 @@ function recorded_paths(repo::String, method_lists)
     RecordedPaths(repo, paths)
 end
 
+# The repo-relative path of a file a method or a statement records; empty for code that records none.
 function site_path(recorded::RecordedPaths, file::Symbol)
+    file === Symbol("") && return ""
     held = get(recorded.paths, file, nothing)
     isnothing(held) || return held
     recorded_path(file, recorded.repo)

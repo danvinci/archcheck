@@ -184,28 +184,6 @@ function argtype_of(argument)
     nothing
 end
 
-# The one name a positional argument binds at its slot. A splat, a destructured tuple and a bare `::T` bind none.
-function argname_of(argument)
-    JS.kind(argument) == K"..." && return nothing
-    names = Symbol[]
-    _argname!(names, argument)
-    length(names) == 1 || return nothing
-    only(names)
-end
-
-# One reading per positional argument, in order. The keyword block is skipped.
-function read_positionals(read, signature)
-    found = Union{Symbol,Nothing}[]
-    parts = call_parts(signature)
-    isnothing(parts) && return found
-    for argument in parts.arguments
-        JS.kind(argument) == K"parameters" && continue
-        value = read(argument)
-        push!(found, value)
-    end
-    found
-end
-
 # The name bound by the first child of a bound, a default, or a splat.
 function named_head!(names, node)
     children = child_nodes(node)

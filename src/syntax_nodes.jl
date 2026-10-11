@@ -227,16 +227,6 @@ function walk_value_children!(walk, node)
     end
 end
 
-# Every symbol anywhere under a node, collected into `out`.
-function all_symbols!(out, node)
-    node.val isa Symbol && push!(out, node.val)
-    children = child_nodes(node)
-    isnothing(children) && return
-    for child in children
-        all_symbols!(out, child)
-    end
-end
-
 # The body of a `function` form or a short-form definition: its second child.
 function method_body(node)
     children = child_nodes(node)

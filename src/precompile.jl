@@ -4,7 +4,6 @@ function precompile_checks()
     readers = ((run, Tuple{Any}), (kinds, Tuple{}))
     named_here = ("src/precompile.jl",)
     configured = (
-        OverlappingCalls(),
         UnreadWaits(),
         ReaderSet(Check, readers),
         CallerWhitelist((:precompile_checks,), (), named_here),

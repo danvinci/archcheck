@@ -146,7 +146,7 @@ const PASSED_HELPER = load_package("PassedHelper", """
     """)
 
 # Calls the walk's inference judges: one no method takes, one into a stub, a keyword forward, a dropped pure value,
-# a guard kept for its exception, a stateful call written twice and a pure one written twice.
+# and a guard kept for its exception, at a concrete argument or at a default.
 const CALL_FACTS = load_package("CallFacts", """
     function hook end
     pair(x::Int, y::Int) = x + y
@@ -177,21 +177,6 @@ const CALL_FACTS = load_package("CallFacts", """
         admits(kind)
         x
     end
-    function advance(counter::Vector{Int})
-        for _step in 1:3
-            counter[1] += 1
-        end
-        counter[1]
-    end
-    advances(counter::Vector{Int}) = advance(counter) + advance(counter)
-    function summed(n::Int)
-        total = 0
-        for step in 1:n
-            total += step
-        end
-        total
-    end
-    sums(n::Int) = summed(n) + summed(n)
     dest(x::Int8) = x
     dest(x::Int16) = x
     dest(x::Int32) = x
@@ -228,8 +213,6 @@ function call_facts_context()
         (pkg.guards, Tuple{Int}),
         (pkg.any_shade, Tuple{Any}),
         (pkg.hue_shade, Tuple{pkg.Hue}),
-        (pkg.advances, Tuple{Vector{Int}}),
-        (pkg.sums, Tuple{Int}),
         (pkg.wide_spread, Tuple{Union{Tuple{Int8,Int8},Tuple{Integer}}}),
         (pkg.open_spread, Tuple{Tuple{Integer}}),
         (pkg.open_spread, Tuple{Tuple{String}}),
@@ -631,17 +614,6 @@ end
     backward = ArchCheck.run(InferredCalls(), backward_context)
     @test evidence_rows(forward, :returns) == [(:dropped_value, "compares", "Bool")]
     @test evidence_rows(backward, :returns) == evidence_rows(forward, :returns)
-end
-
-@testset "a stateful call written twice stays quiet, and a pure one carries its effects" begin
-    found = ArchCheck.run(OverlappingCalls(), CALL_FACTS_CONTEXT)
-    symbols = Set(finding.symbol for finding in found)
-    @test !("advances" in symbols)
-    @test "sums" in symbols
-    for finding in found
-        effects = ev(finding, :effects)
-        @test startswith(effects, "+c,+e")
-    end
 end
 
 # A default argument lowers to a call of the full method. At an empty parameter that signature is `Union{}`.

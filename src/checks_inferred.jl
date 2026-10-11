@@ -16,7 +16,7 @@ function run(::InferredCalls, ctx)
     findings = Finding[]
     for (caller, facts) in graph.calls
         for fact in facts
-            path = fact_path(fact, recorded)
+            path = site_path(recorded, fact.file)
             if is_reported_failure(fact)
                 push!(findings, failing_finding(caller, fact, path))
             end

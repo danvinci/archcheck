@@ -181,3 +181,14 @@ function record_call!(walk, node, scope)
     isnothing(naming) && return
     record_written!(walk, naming.callee, naming.qualifier, node, scope)
 end
+
+# A recorded call as it reads in a finding: the qualified callee, the arguments, then the keywords.
+function call_text(call::CallSite)
+    name = string(call.callee)
+    if !isempty(call.qualifier)
+        name = string(call.qualifier, ".", name)
+    end
+    opened = string(name, "(", call.arguments)
+    isempty(call.keywords) && return string(opened, ")")
+    string(opened, "; ", call.keywords, ")")
+end

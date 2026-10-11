@@ -2,8 +2,7 @@
 # function into one node; this one keeps them apart.
 
 """What the walk's inference proved about one call a walked method writes, merged over its instances and its method's
-declared signature, so a bit holds for every argument the method accepts. Terminates, which a loop claim reads as
-failing, holds at every instance passing concrete arguments, since abstract ones taint it."""
+declared signature, so a bit holds for every argument the method accepts."""
 struct CallFact
     file::Symbol            # file the call's line sits in, as the code records it; empty when it records none
     line::Int               # source line of the call; 0 when the code records none
@@ -14,7 +13,6 @@ struct CallFact
     failing::String         # the call signatures no method matches, `;`-joined; empty when a method matches
     is_stub::Bool           # the called function has no method at all
     is_forward::Bool        # keywords passed through a splat whose names inference does not know
-    is_concrete::Bool       # some instance passes concrete arguments
     is_effect_free::Bool    # writes no state
     is_terminating::Bool    # terminates
     is_nothrow::Bool        # cannot throw
@@ -22,7 +20,6 @@ struct CallFact
     is_generated::Bool      # a method the call matches is `@generated`
     is_value::Bool          # returns, and returns a value other than `nothing`
     returns::String         # the inferred return type at the first instance walked; empty unless it drops a pure value
-    targets::Vector{Method} # written methods the dispatch matched at every statement and instance merged here
 end
 
 """Calls between methods. An edge joins a caller to a method a call can land on: the one inference resolved, or, for
@@ -470,8 +467,7 @@ function is_builtin_type(@nospecialize(held))
 end
 
 function veto_fact(file, line, callee, via, is_used)
-    CallFact(file, line, callee, via, is_used, false, "", false, false, false, false, false, false, false,
-             false, false, "", Method[])
+    CallFact(file, line, callee, via, is_used, false, "", false, false, false, false, false, false, false, false, "")
 end
 
 # The dispatches of one statement's call, each a `MethodMatchInfo` (Compiler/src/stmtinfo.jl): a constant-propagated
@@ -510,10 +506,9 @@ function call_fact(frame, position, branches, route)
     failing = is_failing ? join((type_text(branch.atype) for branch in branches), "; ") : ""
     is_stub = is_failing && has_no_method(called)
     is_forward = is_keyword && !has_known_names(parameters[2])
-    is_concrete = all(branch -> Base.isdispatchtuple(branch.atype), branches)
     flags = frame.ssaflags[position]
     is_effect_free = has_flag(flags, Core.Compiler.IR_FLAG_EFFECT_FREE)
-    is_terminating = !is_concrete || has_flag(flags, Core.Compiler.IR_FLAG_TERMINATES)
+    is_terminating = has_flag(flags, Core.Compiler.IR_FLAG_TERMINATES)
     is_nothrow = has_flag(flags, Core.Compiler.IR_FLAG_NOTHROW)
     is_consistent = has_flag(flags, Core.Compiler.IR_FLAG_CONSISTENT)
     is_generated = any(matches_generated, branches)
@@ -522,21 +517,8 @@ function call_fact(frame, position, branches, route)
     is_dropped = !is_used && is_effect_free
     returns = is_dropped ? type_text(returned) : ""
     callee = callee_slot_name(called)
-    targets = matched_methods(branches)
-    CallFact(file, line, callee, via, is_used, is_failing, failing, is_stub, is_forward, is_concrete,
-             is_effect_free, is_terminating, is_nothrow, is_consistent, is_generated, is_value, returns, targets)
-end
-
-# Each method a branch's dispatch matched, as the source wrote it, once.
-function matched_methods(branches)
-    found = Method[]
-    for branch in branches
-        for match in branch.results.matches
-            written = written_method(match.method)
-            written in found || push!(found, written)
-        end
-    end
-    found
+    CallFact(file, line, callee, via, is_used, is_failing, failing, is_stub, is_forward, is_effect_free,
+             is_terminating, is_nothrow, is_consistent, is_generated, is_value, returns)
 end
 
 # A `MethodMatchInfo` holds the dispatch's matches in `results.matches` and, per match, the `CodeInstance` inference
@@ -605,42 +587,18 @@ end
 function merged_fact(known::CallFact, fact::CallFact)
     is_failing = known.is_failing && fact.is_failing
     failing = is_failing ? known.failing : ""
-    # The line is the finest site the code records, so a merged fact keeps only the methods every call there takes.
-    targets = intersect(known.targets, fact.targets)
     CallFact(known.file, known.line, known.callee, known.via,
              known.is_used || fact.is_used,
              is_failing, failing,
              known.is_stub && fact.is_stub,
              known.is_forward && fact.is_forward,
-             known.is_concrete || fact.is_concrete,
              known.is_effect_free && fact.is_effect_free,
              known.is_terminating && fact.is_terminating,
              known.is_nothrow && fact.is_nothrow,
              known.is_consistent && fact.is_consistent,
              known.is_generated || fact.is_generated,
              known.is_value && fact.is_value,
-             known.returns,
-             targets)
-end
-
-# The repo-relative file a fact's call sits in, as an indexed file names it; empty when the code records none.
-function fact_path(fact::CallFact, recorded::RecordedPaths)
-    fact.file === Symbol("") && return ""
-    site_path(recorded, fact.file)
-end
-
-"""Every call fact the graph holds, by the repo-relative file, line and callee name of its call."""
-function facts_by_site(graph::MethodGraph, recorded::RecordedPaths)
-    found = Dict{Tuple{String,Int,Symbol},Vector{CallFact}}()
-    for facts in values(graph.calls)
-        for fact in facts
-            path = fact_path(fact, recorded)
-            key = (path, fact.line, fact.callee)
-            at = get!(Vector{CallFact}, found, key)
-            push!(at, fact)
-        end
-    end
-    found
+             known.returns)
 end
 
 """A call fact's effect bits as inference prints them: `+` holds, `!` fails, for consistent, effect-free, nothrow and

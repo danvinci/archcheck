@@ -118,6 +118,16 @@ function repeat_key(record)
     RepeatKey(record.name, record.caller, file, line)
 end
 
+function group_by(items, ::Type{K}, key_of) where K
+    grouped = Dict{K,Vector{eltype(items)}}()
+    for item in items
+        key = key_of(item)::K
+        bucket = get!(Vector{eltype(items)}, grouped, key)
+        push!(bucket, item)
+    end
+    grouped
+end
+
 function group_repeats(records, slots)
     repeated = records[slots]
     group_by(repeated, RepeatKey, repeat_key)

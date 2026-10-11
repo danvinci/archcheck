@@ -309,19 +309,6 @@ function argument_shape(signature::Expr)
     ArgumentShape(arguments, positional, keywords)
 end
 
-const JOIN_NAMES = (:fetch, :wait)
-
-# The join names a method leaves unbound, read from its parse: there each one names Base's `fetch` or `wait`.
-function free_joins(form)
-    bound = Set{Symbol}()
-    bound_names!(bound, form)
-    free = Symbol[]
-    for name in JOIN_NAMES
-        name in bound || push!(free, name)
-    end
-    free
-end
-
 is_wait_name(name, site) = name in site.free_joins
 
 # The name a join is written by, `wait` or `Base.wait`; a quoted `:wait` is a symbol value and names none.
