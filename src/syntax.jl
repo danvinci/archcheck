@@ -60,7 +60,11 @@ struct FileScan
     forms::Dict{MethodSite,JS.SyntaxNode}                        # each method -> its definition form, nested methods included
     reads::Vector{NameRead}                                      # every name the code reads, in walk order
     bindings::Vector{LocalBinding}                                    # every local binding the code opens, in walk order
+    resolved::IdDict{JS.SyntaxNode,JS.SyntaxNode}                # each identifier naming a local -> that local's declaring identifier
 end
+
+# The declaring identifier of the local an identifier the walk met names; nothing for a free name.
+local_binding(scan::FileScan, node::JS.SyntaxNode) = get(scan.resolved, node, nothing)
 
 function empty_scan()
     funcs = Symbol[]
@@ -75,7 +79,9 @@ function empty_scan()
     forms = Dict{MethodSite,JS.SyntaxNode}()
     reads = NameRead[]
     bindings = LocalBinding[]
-    FileScan(funcs, constructors, types, refs, modrefs, line, tupletail, imports, callsites, forms, reads, bindings)
+    resolved = IdDict{JS.SyntaxNode,JS.SyntaxNode}()
+    FileScan(funcs, constructors, types, refs, modrefs, line, tupletail, imports, callsites, forms, reads, bindings,
+             resolved)
 end
 
 # `nothing` on failure, so a caller accounts for it.

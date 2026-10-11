@@ -81,11 +81,13 @@ end
 # The computation ran and named no type.
 struct NoComputedType end
 
+# What a scope types a name by: a local's declaring identifier, or a global's name.
+const TypeKey = Union{Symbol,JS.SyntaxNode}
+
 # One step of a deferred binding. The parameter is the deferred value a step may hold.
 struct ReceiverStep{D}
-    names::Dict{Symbol,Union{Type,D}}  # frozen scope names
-    locals::Set{Symbol}                # frozen scope locals
-    node::JS.SyntaxNode                # expression this step types
+    names::IdDict{TypeKey,Union{Type,D}}   # frozen scope types
+    node::JS.SyntaxNode                    # expression this step types
 end
 
 struct IteratedStep{D}
@@ -129,16 +131,8 @@ function computed_result(state, deferred::Deferred)
     deferred.result
 end
 
-# Names typed within one scope.
-struct Scope
-    types::Dict{Symbol,Union{Type,Deferred}}   # name -> declared type, or its value's type deferred to a read
-    locals::Set{Symbol}                        # names a local binding may hold; a call through one reaches no global
-end
-function Base.copy(scope::Scope)
-    types = copy(scope.types)
-    locals = copy(scope.locals)
-    Scope(types, locals)
-end
+# Names typed within one scope: each binding's declared type, or its value's type deferred to a read.
+const ScopeTypes = IdDict{TypeKey,Union{Type,Deferred}}
 
 # What inference gave for each (callee, signature) a scan asked about: one concrete type, or nothing. Keyed by
 # identity, so a callee's own `hash` stays uncalled.
@@ -150,10 +144,20 @@ const IterateSteps = IdDict{Any,Union{Nothing,DataType}}
 # One file's reads, walked in the namespace of the module that owns the file.
 struct ReadState{E,C,S}
     mod::Module                      # the file's module, where annotations and callees resolve
+    scan::FileScan                   # the index record naming the local each identifier names
     reads::Vector{E}                 # reads on typed receivers
     inferred::C                      # InferredTypes shared by every file of one run, whose world stays fixed
     steps::S                         # iterate signature -> the (element, state) type, or nothing; one run, one world
 end
+
+# The key an identifier's binding is typed under: its local's declaring identifier, or its name when it is free.
+function type_key(state, node)::TypeKey
+    binding = local_binding(state.scan, node)
+    isnothing(binding) || return binding
+    node.val::Symbol
+end
+
+is_local(state, node) = !isnothing(local_binding(state.scan, node))
 
 # The value a dotted path binds in `mod` when every binding along it is constant; nothing otherwise.
 function constant_value(mod::Module, path)
@@ -230,23 +234,24 @@ function type_head(@nospecialize(applied))
     unwrapped.name.wrapper
 end
 
-function bind_annotated!(types, mod, arg, typevars)
+function bind_annotated!(state, types, arg, typevars)
     kind = JS.kind(arg)
     if kind == K"="
         children = child_nodes(arg)
         target = first(children)
-        return bind_annotated!(types, mod, target, typevars)
+        return bind_annotated!(state, types, target, typevars)
     end
     kind == K"::" || return
     children = child_nodes(arg)
     length(children) == 2 || return
-    name = children[1].val
-    name isa Symbol || return
+    named = children[1]
+    named.val isa Symbol || return
     node = children[2]
     opens_on_typevar(node, typevars) && return
-    declared = written_type(mod, node)
+    declared = written_type(state.mod, node)
     isnothing(declared) && return
-    types[name] = declared
+    key = type_key(state, named)
+    types[key] = declared
 end
 
 # The type a field read on T yields: the field's declared type, or for a Union the Union of each member's. A member
@@ -268,7 +273,8 @@ end
 # Union), or a call or an index whose inferred result is one concrete type.
 function receiver_type(state, scope, node)
     if node.val isa Symbol
-        bound = get(scope.types, node.val, nothing)
+        key = type_key(state, node)
+        bound = get(scope, key, nothing)
         return resolved(state, bound)
     end
     kind = JS.kind(node)
@@ -284,12 +290,12 @@ function receiver_type(state, scope, node)
 end
 
 # The type of a literal, or of the constant a global name binds; nothing for anything else.
-function value_type(state, scope, node)
+function value_type(state, node)
     JS.kind(node) == K"string" && return String
     value = node.val
     isnothing(value) && return nothing
     value isa Symbol || return typeof(value)
-    value in scope.locals && return nothing
+    is_local(state, node) && return nothing
     bound = constant_value(state.mod, (value,))
     isnothing(bound) && return nothing
     Core.Typeof(bound)
@@ -299,7 +305,7 @@ end
 function argument_type(state, scope, node)
     known = receiver_type(state, scope, node)
     if isnothing(known)
-        known = value_type(state, scope, node)
+        known = value_type(state, node)
     end
     isnothing(known) && return Any
     has_free_variables(known) ? Any : known
@@ -375,6 +381,15 @@ function inferred_result(state, scope, f, operands)
     known_inferred_type(state, Core.kwcall, signature)
 end
 
+# The identifier a dotted path starts at: `a` in `a.b.c`.
+function path_root(node)
+    current = node
+    while JS.kind(current) == K"."
+        current = first(child_nodes(current))
+    end
+    current
+end
+
 # A call through a global function no local binding shadows, typed by inference.
 function call_type(state, scope, node)
     children = child_nodes(node)
@@ -392,7 +407,8 @@ function call_type(state, scope, node)
     end
     path = dotted_names(head)
     isnothing(path) && return nothing
-    first(path) in scope.locals && return nothing
+    root = path_root(head)
+    is_local(state, root) && return nothing
     fn = constant_value(state.mod, path)
     isnothing(fn) && return nothing
     inferred_result(state, scope, fn, operands)
@@ -441,10 +457,7 @@ function tuple_element(state, @nospecialize(destructured), position)
 end
 
 # Run the one step this deferred value holds. The receiver step rebuilds the scope frozen at the binding.
-function step_value(state, step::ReceiverStep)
-    frozen = Scope(step.names, step.locals)
-    receiver_type(state, frozen, step.node)
-end
+step_value(state, step::ReceiverStep) = receiver_type(state, step.names, step.node)
 
 function step_value(state, step::IteratedStep)
     iterated_element(state, step.source)
@@ -456,10 +469,13 @@ end
 
 # The type an assignment or a loop binds from an expression: an alias shares its name's entry; a field chain, a call
 # or an index defers its type, computed in the scope as it stands here, to the first read that needs it.
-function value_source(scope, node)
-    node.val isa Symbol && return get(scope.types, node.val, nothing)
+function value_source(state, scope, node)
+    if node.val isa Symbol
+        key = type_key(state, node)
+        return get(scope, key, nothing)
+    end
     kind = JS.kind(node)
     (kind == K"call" || kind == K"ref" || kind == K".") || return nothing
     frozen = copy(scope)
-    Deferred(ReceiverStep{Deferred}(frozen.types, frozen.locals, node))
+    Deferred(ReceiverStep{Deferred}(frozen, node))
 end

@@ -49,15 +49,11 @@ function declare!(found::Assigned{Bindings}, node)
     found
 end
 
-declare!(found::Assigned, node) = declare!(found.assigned, node)
-
 # An assignment reuses a binding an enclosing local scope holds; a `local` line makes a new one.
 function adopt!(bound, found::Assigned)
     union!(bound, found.declared)
     adopt_assigned!(bound, found.assigned)
 end
-
-adopt_assigned!(bound::Set{Symbol}, assigned::Set{Symbol}) = union!(bound, assigned)
 
 function adopt_assigned!(bound::Bindings, assigned::Bindings)
     for (name, node) in assigned.declared

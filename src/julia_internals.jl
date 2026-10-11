@@ -200,6 +200,22 @@ end
 # `Base.method_argnames` lists the name lowering gave each argument slot, the function's own slot first.
 argument_names(method::Method) = Base.method_argnames(method)
 
+# The arguments a method leaves unspecialized: bit `k` of `Method.nospecialize` marks the argument in slot `k + 2`,
+# past the function's own slot (julia.h), wherever `@nospecialize` wrote it.
+function unspecialized_names(method::Method)
+    mask = method.nospecialize
+    names = Symbol[]
+    mask == 0 && return names
+    slots = argument_names(method)
+    for position in 2:length(slots)
+        bit = position - 2
+        bit < 32 || break
+        marked = (mask >> bit) & 1 == 1
+        marked && push!(names, slots[position])
+    end
+    names
+end
+
 # The keyword method `Core.kwcall` holds for a method that declares keywords.
 function keyword_method(method::Method)
     declares_keywords(method) || return nothing

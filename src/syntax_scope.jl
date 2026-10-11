@@ -1,4 +1,4 @@
-# Which names are local to a child, and each method body with the names it binds. The walk that reads them lives
+# Which names are local to a child, and each method body a piece of code writes. The walk that reads them lives
 # beside this.
 
 function is_nested_scope(node)
@@ -112,12 +112,15 @@ function collect_scope_globals!(names, node)
     end
 end
 
+# A list of nodes keeps each binding's identifier itself.
+declare!(nodes::Vector{JS.SyntaxNode}, node) = push!(nodes, node)
+
 # A `local` line declares into its own set where the scope's statements keep one apart.
 local_names(found::Assigned) = found.declared
 local_names(bound) = bound
 
-# The walk passes bindings; a method body passes a name set. An untyped copy infers as a vector.
-function nested_bound(outer::Union{Set{Symbol},Bindings}, extra::Union{Set{Symbol},Bindings}, body::JS.SyntaxNode)
+# The bindings a nested scope holds: the scope around it, its own binders, and its body's assignments.
+function nested_bound(outer::Bindings, extra::Bindings, body::JS.SyntaxNode)
     bound = copy(outer)
     union!(bound, extra)
     found = assignments(outer)
@@ -345,42 +348,12 @@ function child_locals(node, index, outer)
     outer
 end
 
-# The lambda arguments and loop variables this child binds itself, including a name the outer scope already holds.
-function child_bindings(node::JS.SyntaxNode, index::Int)
-    names = Set{Symbol}()
-    children = child_nodes(node)
-    isnothing(children) && return names
-    kind = JS.kind(node)
-    is_lambda = kind == K"->" || kind == K"do"
-    if is_lambda && index > 1 && !isempty(children)
-        _argname!(names, children[1])
-        return names
-    end
-    if kind == K"for" && index == length(children)
-        last_spec = index - 1
-        for spec_index in 1:last_spec
-            iteration_names!(names, children[spec_index])
-        end
-    end
-    names
-end
-
 struct MethodBody
     name::Symbol          # method name
     line::Int             # source line of the method
     file::String          # repo-relative path
     mod::Symbol           # owning module
     body::JS.SyntaxNode   # body syntax
-    bound::Set{Symbol}    # names this body binds
-end
-
-function child_index(parent, node)
-    children = child_nodes(parent)
-    isnothing(children) && return nothing
-    for index in eachindex(children)
-        children[index] === node && return index
-    end
-    nothing
 end
 
 function node_inside(node, ancestor)
@@ -390,24 +363,6 @@ function node_inside(node, ancestor)
         current = current.parent
     end
     false
-end
-
-function bound_of(node, root, root_bound, memo)
-    haskey(memo, node) && return memo[node]
-    if node === root || isnothing(node.parent)
-        memo[node] = root_bound
-        return root_bound
-    end
-    parent = node.parent
-    parent_bound = bound_of(parent, root, root_bound, memo)
-    index = child_index(parent, node)
-    if isnothing(index)
-        memo[node] = parent_bound
-        return parent_bound
-    end
-    inner = child_locals(parent, index, parent_bound)
-    memo[node] = inner
-    inner
 end
 
 # A method written in a default argument sits in the signature, outside the body.
@@ -432,12 +387,9 @@ function method_name_of(sig)
     callable_receiver(sig)
 end
 
-# Every method written in one piece of code, nested ones included, each with the names its body binds.
+# Every method written in one piece of code, nested ones included.
 function method_bodies(root, path::String, mod::Symbol)
     found = MethodBody[]
-    root_bound = Set{Symbol}()
-    memo = IdDict{JS.SyntaxNode,Set{Symbol}}()
-    memo[root] = root_bound
     for node in walk_nodes(root)
         is_method_form(node) || continue
         in_method_body(node, root) || continue
@@ -447,10 +399,8 @@ function method_bodies(root, path::String, mod::Symbol)
         signature = children[1]
         name = method_name_of(signature)
         isnothing(name) && continue
-        enclosing = bound_of(node, root, root_bound, memo)
-        bound = body_locals(signature, body, enclosing)
         line = source_line(node)
-        record = MethodBody(name, line, path, mod, body, bound)
+        record = MethodBody(name, line, path, mod, body)
         push!(found, record)
     end
     found

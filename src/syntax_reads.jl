@@ -121,6 +121,7 @@ end
 # since code built from it may read the local.
 function note_local_read!(walk::CodeWalk, node, name, binding, scope)
     binding === node && return
+    walk.scan.resolved[node] = binding
     line = source_line(node)
     read = NameRead(name, binding, nothing, nothing, scope.target, scope.method, line, scope.in_signature, false, false)
     push!(walk.scan.reads, read)

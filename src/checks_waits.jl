@@ -36,12 +36,12 @@ function direct_form(call)
     nothing
 end
 
-# The bare name of Base's join, unbound in the method; a parameter named `wait` is the caller's value.
-is_free_join(node, bound) = node.val in (:fetch, :wait) && !(node.val in bound)
+# The bare name of Base's join, naming no local; a parameter named `wait` is the caller's value.
+is_free_join(node, scan) = node.val in (:fetch, :wait) && isnothing(local_binding(scan, node))
 
-function passes_join(call, bound)
+function passes_join(call, scan)
     passed = passed_values(call)
-    any(value -> is_free_join(value, bound), passed)
+    any(value -> is_free_join(value, scan), passed)
 end
 
 function emit_node!(findings, file, site, form, node)
@@ -53,26 +53,24 @@ function emit_node!(findings, file, site, form, node)
 end
 
 # A form recorded on its own site is walked from that site; a local method contributes its body.
-function walk_unread!(findings, file, site, node, known, bound)
+function walk_unread!(findings, file, site, node, known)
     if is_method_form(node)
         node in known && return
         body = method_body(node)
         isnothing(body) && return
-        inner = child_locals(node, 2, bound)
-        walk_unread!(findings, file, site, body, known, inner)
+        walk_unread!(findings, file, site, body, known)
         return
     end
     kind = JS.kind(node)
-    if (kind == K"call" || kind == K"dotcall") && passes_join(node, bound)
+    if (kind == K"call" || kind == K"dotcall") && passes_join(node, file.scan)
         emit_node!(findings, file, site, :passed, node)
     elseif is_sync_macro(node)
         emit_node!(findings, file, site, :sync, node)
     end
     children = child_nodes(node)
     isnothing(children) && return
-    for index in eachindex(children)
-        child_bound = child_locals(node, index, bound)
-        walk_unread!(findings, file, site, children[index], known, child_bound)
+    for child in children
+        walk_unread!(findings, file, site, child, known)
     end
 end
 
@@ -95,8 +93,7 @@ function run(check::UnreadWaits, ctx)
             site.name in check.allowed && continue
             body = method_body(node)
             isnothing(body) && continue
-            bound = child_locals(node, 2, Set{Symbol}())
-            walk_unread!(findings, file, site, body, known, bound)
+            walk_unread!(findings, file, site, body, known)
         end
     end
     findings

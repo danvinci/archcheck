@@ -96,6 +96,7 @@ function open_bindings!(walk, outer::Bindings, inner::Bindings, scope)
         get(outer.declared, name, nothing) === node && continue
         node in filed && continue
         push!(filed, node)
+        walk.scan.resolved[node] = node
         line = source_line(node)
         kind = binding_kind(node)
         binding = LocalBinding(name, node, line, kind, scope.target, scope.method)
@@ -173,6 +174,19 @@ function walk_assign_lhs!(scan, node, scope)
     targets = collect_lhs!(JS.SyntaxNode[], node)
     for target in targets
         walk_scoped!(scan, target, scope)
+    end
+end
+
+# An assignment's bare targets name the local they assign. A `let` binding resolves here to the local it shadows
+# until the scope entering the `let` body files it as its own.
+function note_targets!(walk, lhs, scope)
+    targets = JS.SyntaxNode[]
+    _argname!(targets, lhs)
+    for target in targets
+        name = target.val::Symbol
+        binding = get(scope.bound.declared, name, nothing)
+        isnothing(binding) && continue
+        get!(walk.scan.resolved, target, binding)
     end
 end
 
@@ -486,6 +500,7 @@ function scope_assign!(scan, node, scope)
     end
     read = read_scope(scope, scope.bound)
     walk_assign_lhs!(scan, children[1], read)
+    note_targets!(scan, children[1], scope)
     rhs_bound = child_locals(node, 2, scope.bound)
     rhs = read_scope(scope, rhs_bound)
     walk_scoped!(scan, children[2], rhs)

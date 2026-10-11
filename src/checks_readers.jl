@@ -33,9 +33,11 @@ struct MethodWalk{I<:DerivedItem}
     limits::Vector{Finding}             # exits that count only when no converter receives the value
 end
 
+const HeldLocals = Base.IdSet{JS.SyntaxNode}
+
 struct HeldStep
-    held::Set{Symbol}   # locals holding the value
-    bridged::Bool       # a converter received the value in this method
+    held::HeldLocals   # declaring identifiers of the locals holding the value
+    bridged::Bool      # a converter received the value in this method
 end
 
 function run(::DerivedReaders, ctx)
@@ -275,23 +277,22 @@ function read_source!(item, ctx)
         known = Base.IdSet{JS.SyntaxNode}(forms)
         for (site, form) in file.scan.forms
             walk = MethodWalk(item, file, site, known, home, Finding[])
-            walk_body!(walk, form, Set{Symbol}())
+            walk_body!(walk, form)
         end
     end
 end
 
 # Walks a method's body; its limits count only when no converter received the value there.
-function walk_body!(walk, form, outer)
+function walk_body!(walk, form)
     body = method_body(form)
     isnothing(body) && return
-    bound = child_locals(form, 2, outer)
     held = seeded_held(walk.item, form)
-    stepped = walk_node(walk, body, bound, held)
+    stepped = walk_node(walk, body, held)
     stepped.bridged || append!(walk.item.findings, walk.limits)
 end
 
 function seeded_held(item, form)
-    held = Set{Symbol}()
+    held = HeldLocals()
     wrapper = item.wrapper
     isnothing(wrapper) && return held
     struct_name = nameof(wrapper)
@@ -303,24 +304,24 @@ function seeded_held(item, form)
     isnothing(args) && return held
     for arg in args
         argtype_of(arg) === struct_name || continue
-        name = bound_name(arg)
-        isnothing(name) || push!(held, name)
+        declared = bound_identifier(arg)
+        isnothing(declared) || push!(held, declared)
     end
     held
 end
 
-function bound_name(node)
-    names = Symbol[]
-    _argname!(names, node)
-    isempty(names) && return nothing
-    first(names)
+# The identifier the first name a binding form binds is written at.
+function bound_identifier(node)
+    identifiers = JS.SyntaxNode[]
+    _argname!(identifiers, node)
+    isempty(identifiers) && return nothing
+    first(identifiers)
 end
 
-function symbol_held(node, held::Set{Symbol})
-    value = node.val
-    value isa Symbol || return false
-    name = value::Symbol
-    name in held
+# Whether an identifier names a local that holds the value.
+function symbol_held(walk, node, held::HeldLocals)
+    binding = local_binding(walk.file.scan, node)
+    !isnothing(binding) && binding in held
 end
 
 function callee_of(node)
@@ -330,7 +331,7 @@ function callee_of(node)
 end
 
 function keeps_held(walk, rhs, held)
-    rhs.val isa Symbol && return rhs.val in held
+    rhs.val isa Symbol && return symbol_held(walk, rhs, held)
     JS.kind(rhs) == K"call" || return false
     written = callee_of(rhs)
     isnothing(written) && return false
@@ -350,7 +351,7 @@ function note_struct_call!(walk, node, written, held)
     end
     written.callee === :getfield || return false
     for value in passed_values(node)
-        symbol_held(value, held) || continue
+        symbol_held(walk, value, held) || continue
         note_field!(walk, node, "getfield")
         return true
     end
@@ -369,89 +370,86 @@ function note_receive!(walk, node, resolved, written)
     false
 end
 
-function walk_node(walk, node, bound, held)
+function walk_node(walk, node, held)
     if is_method_form(node)
-        return walk_local_method(walk, node, bound, held)
+        return walk_local_method(walk, node, held)
     end
     kind = JS.kind(node)
     children = child_nodes(node)
     isnothing(children) && return HeldStep(held, false)
-    kind == K"=" && return walk_assign(walk, node, children, bound, held)
-    (kind == K"return" || kind == K"...") && return walk_leave(walk, node, children, bound, held)
-    kind == K"dotcall" && return walk_broadcast(walk, node, children, bound, held)
-    kind == K"call" && return walk_call(walk, node, bound, held)
+    kind == K"=" && return walk_assign(walk, node, children, held)
+    (kind == K"return" || kind == K"...") && return walk_leave(walk, node, children, held)
+    kind == K"dotcall" && return walk_broadcast(walk, node, children, held)
+    kind == K"call" && return walk_call(walk, node, held)
     if kind == K"."
         read = walk_field(walk, node, children, held)
         isnothing(read) || return read
     end
-    walk_scope(walk, node, children, bound, held)
+    walk_scope(walk, node, children, held)
 end
 
 # A local method holds its own locals and limits; a form recorded on its own site is walked from there.
-function walk_local_method(walk, node, bound, held)
+function walk_local_method(walk, node, held)
     node in walk.known && return HeldStep(held, false)
     inner = MethodWalk(walk.item, walk.file, walk.site, walk.known, walk.home, Finding[])
-    walk_body!(inner, node, bound)
+    walk_body!(inner, node)
     HeldStep(held, false)
 end
 
-function walk_assign(walk, node, children, bound, held)
+# An assignment to a local drops it from the held set, and keeps it there when the value it takes is held.
+function walk_assign(walk, node, children, held)
     length(children) < 2 && return HeldStep(held, false)
     lhs = children[1]
     rhs = children[end]
-    rhs_bound = child_locals(node, length(children), bound)
-    stepped = walk_node(walk, rhs, rhs_bound, held)
+    stepped = walk_node(walk, rhs, held)
     if JS.kind(lhs) == K"."
-        symbol_held(rhs, held) && note_limit!(walk, node, "field")
+        symbol_held(walk, rhs, held) && note_limit!(walk, node, "field")
         return HeldStep(held, stepped.bridged)
     end
-    name = bound_name(lhs)
-    isnothing(name) && return HeldStep(held, stepped.bridged)
-    held_names = held::Set{Symbol}
-    next = delete!(copy(held_names), name)
-    keeps_held(walk, rhs, held) && push!(next, name)
+    target = bound_identifier(lhs)
+    binding = isnothing(target) ? nothing : local_binding(walk.file.scan, target)
+    isnothing(binding) && return HeldStep(held, stepped.bridged)
+    next = delete!(copy(held), binding)
+    keeps_held(walk, rhs, held) && push!(next, binding)
     HeldStep(next, stepped.bridged)
 end
 
-function walk_leave(walk, node, children, bound, held)
+function walk_leave(walk, node, children, held)
     isempty(children) && return HeldStep(held, false)
     inner = children[1]
-    if symbol_held(inner, held)
+    if symbol_held(walk, inner, held)
         leave = JS.kind(node) == K"return" ? "return" : "splat"
         note_limit!(walk, node, leave)
         return HeldStep(held, false)
     end
-    inner_bound = child_locals(node, 1, bound)
-    walk_node(walk, inner, inner_bound, held)
+    walk_node(walk, inner, held)
 end
 
-function walk_broadcast(walk, node, children, bound, held)
+function walk_broadcast(walk, node, children, held)
     bridged = false
     hit = false
-    for index in eachindex(children)
-        child = children[index]
-        if symbol_held(child, held)
+    for child in children
+        if symbol_held(walk, child, held)
             hit = true
             continue
         end
-        child_bound = child_locals(node, index, bound)
-        stepped = walk_node(walk, child, child_bound, held)
+        stepped = walk_node(walk, child, held)
         bridged = bridged || stepped.bridged
     end
     hit && note_limit!(walk, node, "broadcast")
     HeldStep(held, bridged)
 end
 
-function walk_call(walk, node, bound, held)
+function walk_call(walk, node, held)
     written = callee_of(node)
     resolved = resolve_name(walk.home, written)
     handled = note_struct_call!(walk, node, written, held)
     bridged = false
     for value in passed_values(node)
-        if symbol_held(value, held) && !handled
+        if symbol_held(walk, value, held) && !handled
             bridged = note_receive!(walk, node, resolved, written) || bridged
         else
-            stepped = walk_node(walk, value, bound, held)
+            stepped = walk_node(walk, value, held)
             bridged = bridged || stepped.bridged
         end
     end
@@ -463,31 +461,22 @@ function walk_field(walk, node, children, held)
     isnothing(item.wrapper) && return nothing
     walk.file.mod === item.home && return nothing
     length(children) < 2 && return nothing
-    symbol_held(children[1], held) || return nothing
+    symbol_held(walk, children[1], held) || return nothing
     member = children[2]
     member.val isa Symbol || return nothing
     note_field!(walk, node, string(member.val))
     HeldStep(held, false)
 end
 
-# A block passes each statement's held set to the next; a let passes its bindings into its body. A name a child
-# binds itself, or that its scope introduces, shadows the held local there.
-function walk_scope(walk, node, children, bound, held)
+# A block passes each statement's held set to the next; a let passes its bindings into its body. A local a child
+# scope opens is a binding of its own, so it holds nothing the walk tracks.
+function walk_scope(walk, node, children, held)
     kind = JS.kind(node)
     bridged = false
     current = held
     last_index = length(children)
     for index in eachindex(children)
-        child_bound = child_locals(node, index, bound)::Set{Symbol}
-        names = child_bindings(node, index)
-        if !(kind == K"let" && index == last_index)
-            parent_bound = bound::Set{Symbol}
-            introduced = setdiff(child_bound, parent_bound)
-            union!(names, introduced)
-        end
-        active = current::Set{Symbol}
-        child_held = setdiff(active, names)
-        stepped = walk_node(walk, children[index], child_bound, child_held)
+        stepped = walk_node(walk, children[index], current)
         bridged = bridged || stepped.bridged
         if kind == K"block" || (kind == K"let" && index < last_index)
             current = stepped.held

@@ -1,42 +1,28 @@
 # foreign-field: a field read on another module's struct, unless a public type documents the field. Receivers are
 # typed by annotations, aliases, field chains, and inference when it gives one concrete type.
 
-# Locals are those `child_locals` records for this child. The type dict stays shared, so a binding made
-# earlier in the walk remains visible.
-function child_scope(scope, node, index)
-    locals = child_locals(node, index, scope.locals)
-    Scope(scope.types, locals)
-end
-
 # Annotations from the signature, on a fresh type dict. The signature's default values stay unread.
-function method_types(mod, node, outer::Scope)
-    types = copy(outer.types)
+function method_types(state, node, outer)
+    types = copy(outer)
     children = child_nodes(node)
     child_count(children) == 0 && return types
     sig = first(children)
     typevars = Symbol[]
     where_vars!(typevars, sig)
-    for name in typevars
-        delete!(types, name)
-    end
     parts = call_parts(sig)
     isnothing(parts) && return types
-    argument_names = call_argnames!(Symbol[], parts)
-    for name in argument_names
-        delete!(types, name)
-    end
     if JS.kind(parts.head) == K"::"
-        bind_annotated!(types, mod, parts.head, typevars)
+        bind_annotated!(state, types, parts.head, typevars)
     end
     for arg in parts.arguments
         if JS.kind(arg) == K"parameters"
             parameters = child_nodes(arg)
             isnothing(parameters) && continue
             for item in parameters
-                bind_annotated!(types, mod, item, typevars)
+                bind_annotated!(state, types, item, typevars)
             end
         else
-            bind_annotated!(types, mod, arg, typevars)
+            bind_annotated!(state, types, arg, typevars)
         end
     end
     types
@@ -48,43 +34,29 @@ function walk_tail!(state, scope, node)
     isnothing(children) && return
     last_index = length(children)::Int
     for index in 2:last_index
-        inner = child_scope(scope, node, index)
-        walk_field_reads!(state, inner, children[index])
+        walk_field_reads!(state, scope, children[index])
     end
 end
 
 function walk_method!(state, scope, node)
-    types = method_types(state.mod, node, scope)
-    typed = Scope(types, scope.locals)
+    typed = method_types(state, node, scope)
     walk_tail!(state, typed, node)
 end
 
+# A closure's assignments stay inside it.
 function walk_closure!(state, scope, node)
     children = child_nodes(node)
-    types = copy(scope.types)
-    params = Symbol[]
-    _argname!(params, first(children))
-    for name in params
-        delete!(types, name)
-    end
-    locals = child_locals(node, 2, scope.locals)
-    inner = Scope(types, locals)
+    inner = copy(scope)
     walk_field_reads!(state, inner, children[2])
 end
 
-# Iterator specs bind before the body. A target's type is dropped once the body has been walked.
+# Iterator specs bind before the body.
 function walk_iterated!(state, scope, node, spec_range, body_index)
     children = child_nodes(node)
-    targets = Symbol[]
     for index in spec_range
-        spec_scope = child_scope(scope, node, index)
-        bind_iteration!(state, spec_scope, targets, children[index])
+        bind_iteration!(state, scope, children[index])
     end
-    body_scope = child_scope(scope, node, body_index)
-    walk_field_reads!(state, body_scope, children[body_index])
-    for target in targets
-        delete!(scope.types, target)
-    end
+    walk_field_reads!(state, scope, children[body_index])
 end
 
 function walk_for!(state, scope, node)
@@ -104,41 +76,35 @@ end
 
 function walk_assignment!(state, scope, node)
     children = child_nodes(node)
-    rhs = child_scope(scope, node, 2)
-    walk_field_reads!(state, rhs, children[2])
-    source = value_source(rhs, children[2])
+    walk_field_reads!(state, scope, children[2])
+    source = value_source(state, scope, children[2])
     bind_target!(state, scope, children[1], source)
 end
 
 # One iterator's collection is read in the names already bound. The target is typed after that read.
-function bind_iteration!(state, scope, targets, node)
+function bind_iteration!(state, scope, node)
     children = child_nodes(node)
     isnothing(children) && return
     kind = JS.kind(node)
     if (kind == K"in" || kind == K"=") && length(children) == 2
-        collection_scope = child_scope(scope, node, 2)
         collection = children[2]
-        walk_field_reads!(state, collection_scope, collection)
-        source = value_source(collection_scope, collection)
+        walk_field_reads!(state, scope, collection)
+        source = value_source(state, scope, collection)
         element = nothing
         if !isnothing(source)
             element = Deferred(IteratedStep{Deferred}(source))
         end
-        target = children[1]
-        bind_target!(state, scope, target, element)
-        _argname!(targets, target)
+        bind_target!(state, scope, children[1], element)
         return
     end
     if kind == K"iteration"
-        for index in eachindex(children)
-            inner = child_scope(scope, node, index)
-            bind_iteration!(state, inner, targets, children[index])
+        for child in children
+            bind_iteration!(state, scope, child)
         end
         return
     end
     if kind == K"filter"
-        inner = child_scope(scope, node, 1)
-        bind_iteration!(state, inner, targets, first(children))
+        bind_iteration!(state, scope, first(children))
         walk_tail!(state, scope, node)
         return
     end
@@ -147,18 +113,18 @@ end
 
 # Unspecialized: the source is a type, a deferred value, or nothing, and each would compile its own walk.
 function bind_target!(state, scope, target, @nospecialize(source))
-    name = target.val
     kind = JS.kind(target)
-    if name isa Symbol
+    if target.val isa Symbol
+        key = type_key(state, target)
         if isnothing(source)
-            delete!(scope.types, name)
+            delete!(scope, key)
         else
-            scope.types[name] = source
+            scope[key] = source
         end
         return
     end
     if kind == K"::"
-        bind_annotated!(scope.types, state.mod, target, Symbol[])
+        bind_annotated!(state, scope, target, Symbol[])
         return
     end
     if kind == K"tuple"
@@ -176,10 +142,11 @@ function bind_target!(state, scope, target, @nospecialize(source))
         end
         return
     end
-    names = Symbol[]
-    _argname!(names, target)
-    for bound_name in names
-        delete!(scope.types, bound_name)
+    identifiers = JS.SyntaxNode[]
+    _argname!(identifiers, target)
+    for identifier in identifiers
+        key = type_key(state, identifier)
+        delete!(scope, key)
     end
     walk_field_reads!(state, scope, target)
 end
@@ -204,9 +171,8 @@ end
 function walk_children!(state, scope, node)
     children = child_nodes(node)
     isnothing(children) && return
-    for index in eachindex(children)
-        inner = child_scope(scope, node, index)
-        walk_field_reads!(state, inner, children[index])
+    for child in children
+        walk_field_reads!(state, scope, child)
     end
 end
 
@@ -239,12 +205,10 @@ function walk_field_reads!(state, scope, node)
 end
 
 # Every field read in a parsed file on a receiver the scan types, in the module's namespace.
-function field_reads(tree, mod::Module, inferred::InferredTypes, steps::IterateSteps)
-    state = ReadState(mod, FieldRead[], inferred, steps)
-    types = Dict{Symbol,Union{Type,Deferred}}()
-    locals = Set{Symbol}()
-    scope = Scope(types, locals)
-    walk_field_reads!(state, scope, tree)
+function field_reads(file::FileNode, mod::Module, inferred::InferredTypes, steps::IterateSteps)
+    state = ReadState(mod, file.scan, FieldRead[], inferred, steps)
+    scope = ScopeTypes()
+    walk_field_reads!(state, scope, file.tree)
     state
 end
 
@@ -312,7 +276,7 @@ function check_foreign_fields(index::SourceIndex, mods)
         M = get(by_key, file.mod, nothing)
         isnothing(M) && continue
         # a read through a Union reads the field on each member
-        for access in field_reads(file.tree, M, inferred, steps).reads, member in union_members(access.type)
+        for access in field_reads(file, M, inferred, steps).reads, member in union_members(access.type)
             S = declared_datatype(member)
             isnothing(S) && continue
             is_abstract_read = isabstracttype(S)

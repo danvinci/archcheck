@@ -272,7 +272,7 @@ kinds(::DeclaredExtensions) = (:private_extension => :error,)
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
 kinds(::ForeignFields) = (:foreign_field => :advisory,)
 
-run(::TypeBranches, ctx) = check_type_branches(ctx.index)
+run(::TypeBranches, ctx) = check_type_branches(ctx.index, ctx.defined, ctx.index.repo)
 kinds(::TypeBranches) = (:type_branch => :advisory,)
 
 run(::FileBackEdges, ctx) = check_file_backedges(ctx.index, ctx.mods, ctx.root)

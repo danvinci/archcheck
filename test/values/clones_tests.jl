@@ -129,6 +129,12 @@ end
 const CLONE_BOUND_BUILT = bound_source()
 const CLONE_BOUND = clone_case("CloneBound", "bound.jl", CLONE_BOUND_BUILT.source)
 
+const CLONE_KEYWORD_NODES = expression_nodes("solve(v1 + KEEPER + 41; atol = v1)")
+const CLONE_KEYWORD = clone_case("CloneKeyword", "keyword.jl",
+    "kw_a(p) = solve(p + KEEPER + 41; atol = p)\n" *
+    "kw_b(q) = solve(q + KEEPER + 41; rtol = q)\n" *
+    "kw_c(r) = solve(r + KEEPER + 41; atol = r)\n")
+
 const CLONE_ONCE_NODES = expression_nodes("v1 + KEEPER + 41")
 const CLONE_ONCE = clone_case("CloneOnce", "once.jl",
     "only(v1) = (v1 + KEEPER + 41) + (v1 + KEEPER + 41)\n")
@@ -167,6 +173,12 @@ end
     large_label = string(large_nodes)
     expected_sizes = Set([small_label, large_label])
     @test sizes == expected_sizes
+end
+
+@testset "a keyword's name is no local, so a changed keyword is not a clone" begin
+    found = clone_found(CLONE_KEYWORD, CLONE_KEYWORD_NODES)
+    group = only(found)
+    @test ev(group, :methods) == "src/keyword.jl:kw_a src/keyword.jl:kw_c"
 end
 
 @testset "two copies in one method are not a clone group" begin

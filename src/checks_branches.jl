@@ -2,67 +2,68 @@
 
 const TYPE_COMPARISONS = (:(==), :(===), :(!=), :(!==), :(<:))
 
-function check_type_branches(index::SourceIndex)
+# The arguments each loaded method leaves unspecialized, by repo-relative file, line and name.
+function unspecialized_arguments(defined, repo)
+    found = Set{Tuple{String,Int,Symbol}}()
+    for method in defined
+        names = unspecialized_names(method)
+        isempty(names) && continue
+        file = recorded_path(method.file, repo)
+        for name in names
+            push!(found, (file, method.line, name))
+        end
+    end
+    found
+end
+
+# The declaring identifiers of every argument a piece of code binds.
+function argument_identifiers(scan::FileScan)
+    found = Base.IdSet{JS.SyntaxNode}()
+    for binding in scan.bindings
+        binding.kind === :argument && push!(found, binding.node)
+    end
+    found
+end
+
+function check_type_branches(index::SourceIndex, defined, repo)
     findings = Finding[]
+    unspecialized = unspecialized_arguments(defined, repo)
     for file in index.files
-        walk = BranchWalk(findings, file)
-        visit_type_branch!(walk, file.tree, false, "", Symbol[])
+        arguments = argument_identifiers(file.scan)
+        walk = BranchWalk(findings, file, arguments, unspecialized)
+        visit_type_branch!(walk, file.tree, false)
     end
     findings
 end
 
-# One file's walk: where findings go and the file they name.
+# One file's walk: where findings go, the file they name, and the arguments a test may judge.
 struct BranchWalk
-    findings::Vector{Finding}   # every type branch found, in walk order
-    file::FileNode              # the code being walked
+    findings::Vector{Finding}                       # every type branch found, in walk order
+    file::FileNode                                  # the code being walked
+    arguments::Base.IdSet{JS.SyntaxNode}            # declaring identifiers of the code's arguments
+    unspecialized::Set{Tuple{String,Int,Symbol}}    # file, method line and name of each unspecialized argument
+end
+
+# A named method's signature holds no branch the method takes.
+function has_signature_call(node)
+    is_method_form(node) || return false
+    signature = first(child_nodes(node))
+    !isnothing(signature_call(signature))
 end
 
 # `is_discarded` says the node's value is discarded, where && and || pick a path.
-function visit_type_branch!(walk::BranchWalk, node, is_discarded::Bool, owner::String, params::Vector{Symbol})
+function visit_type_branch!(walk::BranchWalk, node, is_discarded::Bool)
     children = child_nodes(node)
     isnothing(children) && return
     kind = JS.kind(node)
-    if kind == K"->" || kind == K"do"
-        visit_cleared!(walk, node, 1:length(children), is_discarded)
-    elseif kind == K"function"
-        visit_method_scope!(walk, node, children, is_discarded)
-    elseif kind == K"="
-        visit_assign!(walk, node, children, is_discarded, owner, params)
-    elseif kind == K"for"
-        last_index = length(children)
-        visit_loop!(walk, node, 1:(last_index - 1), last_index, is_discarded, owner, params)
-    elseif kind == K"generator"
-        visit_loop!(walk, node, 2:length(children), 1, is_discarded, owner, params)
-    elseif is_branch_kind(kind)
-        record_type_branch!(walk, children, owner, params)
-        visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
-    elseif kind == K"&&" || kind == K"||"
-        if is_discarded
-            record_type_branch!(walk, children, owner, params)
-        end
-        visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
-    else
-        visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
+    is_condition = kind == K"&&" || kind == K"||"
+    if is_branch_kind(kind) || (is_discarded && is_condition)
+        record_type_branch!(walk, children)
     end
-end
-
-# The child at `index` of `node`, visited with its own discard flag.
-function visit_child!(walk::BranchWalk, node, index, node_is_discarded, owner, params)
-    children = child_nodes(node)
-    child_is_discarded = child_discarded(node, index, node_is_discarded)
-    visit_type_branch!(walk, children[index], child_is_discarded, owner, params)
-end
-
-function visit_children!(walk::BranchWalk, node, indices, is_discarded, owner, params)
-    for index in indices
-        visit_child!(walk, node, index, is_discarded, owner, params)
-    end
-end
-
-# An anonymous function and a do-block bind their own parameters, hiding the method's.
-function visit_cleared!(walk::BranchWalk, node, indices, is_discarded)
-    for index in indices
-        visit_child!(walk, node, index, is_discarded, "", Symbol[])
+    first_index = has_signature_call(node) ? 2 : 1
+    for index in first_index:length(children)
+        child_is_discarded = child_discarded(node, index, is_discarded)
+        visit_type_branch!(walk, children[index], child_is_discarded)
     end
 end
 
@@ -73,78 +74,45 @@ function method_name(call)
     String(text)
 end
 
-function unwrap_binding(item)
-    bound = item
-    while JS.kind(bound) in (K"=", K"...", K"::")
-        children = child_nodes(bound)
-        bound = first(children)
+# The method, macro or closure whose arguments are the locals around `node`.
+function argument_form(node)
+    current = node.parent
+    while !isnothing(current)
+        is_argument_form(current) && return current
+        current = current.parent
     end
-    bound
+    nothing
 end
 
-# A tuple parameter binds the names inside the tuple, which the method does not test as its own.
-function keep_parameter!(params, item)
-    bound = unwrap_binding(item)
-    JS.kind(bound) == K"tuple" && return
-    _argname!(params, item)
-end
-
-function parameter_items(call)
-    children = child_nodes(call)
-    items = JS.SyntaxNode[]
-    for argument in children[2:end]
-        if JS.kind(argument) == K"parameters"
-            nested = child_nodes(argument)
-            append!(items, nested)
-        else
-            push!(items, argument)
-        end
+# An argument identifier the call binds whole, outside its callee slot and any destructured tuple.
+function is_whole_argument(identifier, call)
+    head = call_parts(call).head
+    current = identifier
+    parent = current.parent
+    while !isnothing(parent)
+        JS.kind(parent) == K"tuple" && return false
+        parent === call && return current !== head
+        current = parent
+        parent = current.parent
     end
-    items
+    false
 end
 
-function method_parameters(call)
-    params = Symbol[]
-    for item in parameter_items(call)
-        keep_parameter!(params, item)
-    end
-    params
-end
-
-function visit_method_body!(walk::BranchWalk, node, children, is_discarded, call)
-    owner = method_name(call)
-    params = method_parameters(call)
-    visit_children!(walk, node, 2:length(children), is_discarded, owner, params)
-end
-
-function visit_method_scope!(walk::BranchWalk, node, children, is_discarded)
-    signature = children[1]
-    call = signature_call(signature)
-    if isnothing(call)
-        visit_cleared!(walk, node, 1:length(children), is_discarded)
-        return
-    end
-    visit_method_body!(walk, node, children, is_discarded, call)
-end
-
-function visit_assign!(walk::BranchWalk, node, children, is_discarded, owner, params)
-    if is_method_form(node)
-        visit_method_scope!(walk, node, children, is_discarded)
-        return
-    end
-    visit_children!(walk, node, 1:length(children), is_discarded, owner, params)
-end
-
-# A loop's specs bind names that hide the method's parameters inside its body.
-function visit_loop!(walk::BranchWalk, node, spec_indices, body_index, is_discarded, owner, params)
-    children = child_nodes(node)
-    targets = Symbol[]
-    for index in spec_indices
-        bound_names!(targets, children[index])
-    end
-    visit_children!(walk, node, spec_indices, is_discarded, owner, params)
-    kept = setdiff(params, targets)
-    visit_child!(walk, node, body_index, is_discarded, owner, kept)
+# The signature call of the named method whose own specialized argument `subject` names, when the test sits in that
+# method's body and in no form nested in it; nothing for any other subject.
+function tested_method(walk::BranchWalk, subject, test)
+    binding = local_binding(walk.file.scan, subject)
+    isnothing(binding) && return nothing
+    binding in walk.arguments || return nothing
+    form = argument_form(binding)
+    isnothing(form) && return nothing
+    has_signature_call(form) || return nothing
+    argument_form(test) === form || return nothing
+    call = signature_call(first(child_nodes(form)))
+    is_whole_argument(binding, call) || return nothing
+    site = (walk.file.path, source_line(form), binding.val)
+    site in walk.unspecialized && return nothing
+    call
 end
 
 function branch_statements(branch)
@@ -208,25 +176,21 @@ function type_subjects(test)
     call_subjects(test, parts)
 end
 
-function tested_parameter(subjects, params)
-    for subject in subjects
-        subject.val in params && return subject.val
-    end
-    nothing
-end
-
-function record_type_branch!(walk::BranchWalk, children, owner, params)
+function record_type_branch!(walk::BranchWalk, children)
     file = walk.file
     test = children[1]
     branch = children[2]
     is_throw_guard(branch) && return
-    subjects = type_subjects(test)
-    parameter = tested_parameter(subjects, params)
-    isnothing(parameter) && return
-    location = JS.source_location(test)
-    line = Int(location[1])
-    detail = "a runtime type test on the method's own parameter picks the path"
-    symbol = string(owner, ":", parameter)
-    finding = Finding(file.mod, :type_branch, file.path, symbol, line, detail)
-    push!(walk.findings, finding)
+    for subject in type_subjects(test)
+        call = tested_method(walk, subject, test)
+        isnothing(call) && continue
+        location = JS.source_location(test)
+        line = Int(location[1])
+        detail = "a runtime type test on the method's own parameter picks the path"
+        owner = method_name(call)
+        symbol = string(owner, ":", subject.val)
+        finding = Finding(file.mod, :type_branch, file.path, symbol, line, detail)
+        push!(walk.findings, finding)
+        return
+    end
 end

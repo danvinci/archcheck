@@ -32,6 +32,16 @@ function logged(shape)
     shape isa Shape && println(shape)
     nothing
 end
+function hinted(shape, scale)
+    @nospecialize shape
+    shape isa Shape ? scale : -scale
+end
+signed_hint(@nospecialize(shape)) = shape isa Shape ? 1 : 2
+function rebound(shape)
+    let shape = first(shape)
+        shape isa Shape ? 1 : 2
+    end
+end
 """
 
 const BRANCH_BODIES = load_package("BranchBodies", """
@@ -43,6 +53,7 @@ function source_line(source, fragment)
     findfirst(line -> occursin(fragment, line), lines)
 end
 
+# A parameter the loaded method leaves unspecialized, and a local rebinding its name, stay unjudged.
 @testset "a runtime type test on a method's own parameter picks the path" begin
     ctx = case_context(BRANCH_BODIES)
     found = ArchCheck.run(TypeBranches(), ctx)

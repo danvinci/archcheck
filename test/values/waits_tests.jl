@@ -1,4 +1,5 @@
-# Each unread join form. A fetch whose value is read, and a method on the allowlist, stay quiet.
+# Each unread join form. A fetch whose value is read, a method on the allowlist, and a local spelled like a join
+# stay quiet, an enclosing method's local included.
 
 function wait_rows(found)
     rows = Tuple{String,Symbol,String,String,Int,Symbol}[]
@@ -59,6 +60,11 @@ function carried(records, wait)
 end
 function signed(fetch)
     identity(1)
+end
+function enclosed(tasks)
+    wait = identity
+    inner() = foreach(wait, tasks)
+    inner
 end
 """)
 
