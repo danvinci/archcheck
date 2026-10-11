@@ -183,6 +183,11 @@ const CALL_HAND_FILES = [
     end
     """,
     "outside.jl" => "ready_fn(x) = identity(x)\nconst ready = ready_fn(1)\nfunction stub end\n",
+    "quoted.jl" => """
+    function minus_one(x)
+        Base.:-(x, 1)
+    end
+    """,
 ]
 
 function callsite_hand()
@@ -282,5 +287,11 @@ end
 @testset "a call outside any method is not a call site" begin
     got = rows_by_site(CALL_HAND_SCANS["outside.jl"])
     expected = Dict(MethodSite(:ready_fn, 1) => [(:identity, "", "x", "", 1, 0)])
+    @test got == expected
+end
+
+@testset "a quoted operator member names the callee" begin
+    got = rows_by_site(CALL_HAND_SCANS["quoted.jl"])
+    expected = Dict(MethodSite(:minus_one, 1) => [(:-, "Base", "x, 1", "", 2, 0)])
     @test got == expected
 end

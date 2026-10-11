@@ -21,6 +21,7 @@ struct WrittenCallee
 end
 
 # Callee text exists for a bare name, a type application (`S{T}`) and a dotted name.
+# A quoted member (`:-`) is that dotted name.
 function name_of_head(head)
     if head.val isa Symbol
         return WrittenCallee(head.val, "")
@@ -40,11 +41,14 @@ function name_of_head(head)
         return WrittenCallee(member.val, "")
     end
     length(children) == 2 || return nothing
-    member = children[2]
-    member.val isa Symbol || return nothing
+    name = node_symbol(children[2])
+    if isnothing(name)
+        name = quoted_member(head)
+    end
+    isnothing(name) && return nothing
     raw = JS.sourcetext(children[1])
     qualifier = collapse_source(raw)
-    WrittenCallee(member.val, qualifier)
+    WrittenCallee(name, qualifier)
 end
 
 function keyword_name(node)
