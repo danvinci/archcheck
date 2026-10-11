@@ -6,12 +6,12 @@ const CONTENT_DEPTH_MAX = 24
 const READ_DEPTH_MAX = 3
 const READ_WIDTH_MAX = 256
 
-function content_hash(value)
+function content_hash(@nospecialize(value))
     memo = IdDict{Any,UInt}()
     hash_value(value, zero(UInt), memo, 0)
 end
 
-function hash_value(value, seed::UInt, memo, depth::Int)
+function hash_value(@nospecialize(value), seed::UInt, memo, depth::Int)
     if depth > CONTENT_DEPTH_MAX
         return hash(:depth, seed)
     end
@@ -31,16 +31,16 @@ end
 # since its `hash` may call the probed code or rest on methods the type leaves undefined.
 const HASHED_LEAVES = Union{Base.BitInteger,Base.IEEEFloat,BigInt,BigFloat,Symbol,String,Char,Nothing,Bool}
 
-function hash_content(value::HASHED_LEAVES, seed::UInt, _memo, _depth::Int)
+function hash_content(@nospecialize(value::HASHED_LEAVES), seed::UInt, _memo, _depth::Int)
     hash(value, seed)
 end
 
-function hash_content(value::Union{Module,Function,Type,Task,Channel,Base.AbstractLock,Ptr,IO}, seed::UInt, _memo, _depth::Int)
+function hash_content(@nospecialize(value::Union{Module,Function,Type,Task,Channel,Base.AbstractLock,Ptr,IO}), seed::UInt, _memo, _depth::Int)
     identity = objectid(value)
     hash(identity, seed)
 end
 
-function hash_content(value::Array, seed::UInt, memo, depth::Int)
+function hash_content(@nospecialize(value::Array), seed::UInt, memo, depth::Int)
     element = eltype(value)
     bits = isbitstype(element)
     bits || return hash_items(value, seed, memo, depth)
@@ -55,15 +55,15 @@ function hash_content(value::Array, seed::UInt, memo, depth::Int)
     hash(mixed, seed)
 end
 
-function hash_content(value::Union{AbstractArray,AbstractSet}, seed::UInt, memo, depth::Int)
+function hash_content(@nospecialize(value::Union{AbstractArray,AbstractSet}), seed::UInt, memo, depth::Int)
     hash_items(value, seed, memo, depth)
 end
 
-function hash_content(value::AbstractDict, seed::UInt, memo, depth::Int)
+function hash_content(@nospecialize(value::AbstractDict), seed::UInt, memo, depth::Int)
     hash_pairs(value, seed, memo, depth)
 end
 
-function hash_content(value, seed::UInt, memo, depth::Int)
+function hash_content(@nospecialize(value), seed::UInt, memo, depth::Int)
     bits = isbits(value)
     bits || return hash_fields(value, seed, memo, depth)
     kind = typeof(value)
@@ -77,20 +77,19 @@ function hash_content(value, seed::UInt, memo, depth::Int)
     hash(typed_bytes, seed)
 end
 
-# The elements a container holds; an unassigned array slot holds none.
-held_items(value::AbstractArray) = (value[index] for index in eachindex(value) if isassigned(value, index))
-held_items(value::Tuple) = value
-
-function hash_items(value::AbstractArray, seed::UInt, memo, depth::Int)
+# An unassigned array slot holds no element.
+function hash_items(@nospecialize(value::AbstractArray), seed::UInt, memo, depth::Int)
     acc = hash(typeof(value), seed)
     deeper = depth + 1
-    for item in held_items(value)
+    for index in eachindex(value)
+        isassigned(value, index) || continue
+        item = value[index]
         acc = hash_value(item, acc, memo, deeper)
     end
     acc
 end
 
-function hash_items(value::AbstractSet, seed::UInt, memo, depth::Int)
+function hash_items(@nospecialize(value::AbstractSet), seed::UInt, memo, depth::Int)
     acc = hash(typeof(value), seed)
     deeper = depth + 1
     for item in value
@@ -99,7 +98,7 @@ function hash_items(value::AbstractSet, seed::UInt, memo, depth::Int)
     acc
 end
 
-function hash_pairs(value, seed::UInt, memo, depth::Int)
+function hash_pairs(@nospecialize(value), seed::UInt, memo, depth::Int)
     acc = hash(typeof(value), seed)
     deeper = depth + 1
     for pair in value
@@ -111,7 +110,7 @@ function hash_pairs(value, seed::UInt, memo, depth::Int)
     acc
 end
 
-function hash_fields(value, seed::UInt, memo, depth::Int)
+function hash_fields(@nospecialize(value), seed::UInt, memo, depth::Int)
     acc = hash(typeof(value), seed)
     deeper = depth + 1
     count = nfields(value)
@@ -123,27 +122,38 @@ function hash_fields(value, seed::UInt, memo, depth::Int)
     acc
 end
 
-is_skipped_read(::Union{Module,Function,Type,Symbol,String}) = true
-is_skipped_read(::Any) = false
+is_skipped_read(@nospecialize(value)) = value isa Union{Module,Function,Type,Symbol,String}
 
-is_read_container(::AbstractArray) = true
-is_read_container(::Tuple) = true
-is_read_container(::Any) = false
+is_read_container(@nospecialize(value)) = value isa Union{AbstractArray,Tuple}
 
-function collect_reads!(found, value, depth::Int)
+function collect_reads!(found, @nospecialize(value), depth::Int)
     isbits(value) && return found
     is_skipped_read(value) && return found
     push!(found, objectid(value))
     depth >= READ_DEPTH_MAX && return found
     is_read_container(value) || return found
     length(value) > READ_WIDTH_MAX && return found
-    for item in held_items(value)
-        collect_reads!(found, item, depth + 1)
+    deeper = depth + 1
+    read_items!(found, value, deeper)
+end
+
+function read_items!(found, @nospecialize(value::AbstractArray), depth::Int)
+    for index in eachindex(value)
+        isassigned(value, index) || continue
+        item = value[index]
+        collect_reads!(found, item, depth)
     end
     found
 end
 
-function read_ids(values)
+function read_items!(found, @nospecialize(value::Tuple), depth::Int)
+    for item in value
+        collect_reads!(found, item, depth)
+    end
+    found
+end
+
+function read_ids(@nospecialize(values))
     found = Set{UInt}()
     for value in values
         collect_reads!(found, value, 0)
@@ -151,7 +161,7 @@ function read_ids(values)
     collect(found)
 end
 
-function result_identity(result)
+function result_identity(@nospecialize(result))
     isbits(result) && return UInt(0)
     objectid(result)
 end

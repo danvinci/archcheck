@@ -81,10 +81,9 @@ function ProbeSession(slow_s::Float64)
     ProbeSession(slow_s, ProbeRecord[], WaitRecord[], ReentrantLock(), parent, ROOT_INVOCATION.id)
 end
 
-is_channel(::Channel) = true
-is_channel(::Any) = false
+is_channel(@nospecialize(value)) = value isa Channel
 
-function is_argument_result(result, arguments)
+function is_argument_result(@nospecialize(result), @nospecialize(arguments))
     isbits(result) && return false
     for argument in arguments
         argument === result && return true
@@ -92,7 +91,7 @@ function is_argument_result(result, arguments)
     false
 end
 
-function arguments_fed(arguments)
+function arguments_fed(@nospecialize(arguments))
     for argument in arguments
         is_channel(argument) && return true
     end
@@ -196,7 +195,7 @@ function declared_key_hash(compute, session::ProbeSession, key_name::String, pro
 end
 
 # Returns this call's invocation, which a task the call spawns takes as its parent.
-function probe_enter(session::ProbeSession, name::Symbol, file::String, line::Int, arguments::Tuple,
+function probe_enter(session::ProbeSession, name::Symbol, file::String, line::Int, @nospecialize(arguments::Tuple),
         key_hash::Union{Nothing,UInt}, is_probed::Bool)
     is_recording(session) && return session.parent[]
     frames = opened_frames(session)
@@ -210,7 +209,7 @@ function probe_enter(session::ProbeSession, name::Symbol, file::String, line::In
     Invocation(name, number)
 end
 
-function make_record(frame::OpenFrame, result, stopped::Float64, body::DataType)
+function make_record(@nospecialize(frame::OpenFrame), @nospecialize(result), stopped::Float64, body::DataType)
     arguments = frame.arguments
     argument_hash = content_hash(arguments)
     keyed = frame.key_hash
@@ -245,15 +244,27 @@ function push_wait(session::ProbeSession, record::WaitRecord)
     nothing
 end
 
-function probe_leave(session::ProbeSession, result, body::DataType)
+# The record is taken under the recording mark, which its caller found unset. Its values stay unspecialized and no
+# closure carries them, so the record path compiles once for every argument and result type a run meets.
+function take_record(session::ProbeSession, @nospecialize(frame::OpenFrame), @nospecialize(result), stopped::Float64,
+        body::DataType)
+    marker = Recording(session)
+    storage = task_local_storage()
+    storage[marker] = true
+    try
+        return make_record(frame, result, stopped, body)
+    finally
+        delete!(storage, marker)
+    end
+end
+
+function probe_leave(session::ProbeSession, @nospecialize(result), body::DataType)
     is_recording(session) && return nothing
     frame = close_frame(session)
     stopped = time()
     duration = stopped - frame.started
     duration >= session.slow_s || return nothing
-    record = unrecorded(session) do
-        make_record(frame, result, stopped, body)
-    end
+    record = take_record(session, frame, result, stopped, body)
     push_record(session, record)
     nothing
 end
