@@ -3,7 +3,6 @@
 """Everything one run of the gate builds for a check to read."""
 struct Context{D<:Tuple}
     index::SourceIndex                      # the one parse of src/ and the entry dirs
-    graph::ModuleGraph                      # module rank + cross-module references
     root::Module                            # the package module itself
     mods::Vector{Module}                    # loaded modules at every depth, root and extensions too, rank order
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
@@ -80,12 +79,11 @@ function read_methods(mods)
 end
 
 function Context(index::SourceIndex, root::Module, mods; methods = nothing, derived = ())
-    graph = build_module_graph(index)
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
     modules = package_modules(root, mods)
     defined, added = read_methods(modules)
-    Context(index, graph, root, mods, sites, callgraphs, defined, added, methods, nothing, derived)
+    Context(index, root, mods, sites, callgraphs, defined, added, methods, nothing, derived)
 end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
@@ -111,7 +109,7 @@ end
 function Context(ctx::Context; observed::Observation)
     modules = package_modules(ctx)
     defined, added = read_methods(modules)
-    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, defined, added, ctx.methods, observed,
+    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, defined, added, ctx.methods, observed,
             ctx.derived)
 end
 
@@ -125,7 +123,7 @@ function with_method_graph(ctx::Context, entries)
     if !isnothing(ctx.observed)
         add_compiled_edges!(methods, ctx.observed.specializations, project)
     end
-    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, methods,
+    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, methods,
             ctx.observed, ctx.derived)
 end
 
@@ -249,16 +247,16 @@ end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,
                    :unranked_file => :error, :unranked_module => :error)
 
-run(check::ModuleBackEdges, ctx) = check_backedges(ctx.graph, nameof(ctx.root); strict = check.strict)
+run(check::ModuleBackEdges, ctx) = check_backedges(ctx.index, nameof(ctx.root); strict = check.strict)
 kinds(::ModuleBackEdges) = (:back_edge => :error,)
 
-run(check::ModuleCycles, ctx) = check_cycles(ctx.graph, nameof(ctx.root); strict = check.strict)
+run(check::ModuleCycles, ctx) = check_cycles(ctx.index, nameof(ctx.root); strict = check.strict)
 kinds(::ModuleCycles) = (:cycle => :error,)
 
 run(::ContractsPurity, ctx) = check_contracts_logic(ctx.index)
 kinds(::ContractsPurity) = (:contracts_logic => :error,)
 
-run(check::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.graph.rank; strict = check.strict)
+run(check::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.index.rank; strict = check.strict)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
 
 run(check::ModulePiracy, ctx) = check_module_piracy(ctx.defined, ctx.root; repo = ctx.index.repo, strict = check.strict)
@@ -309,7 +307,7 @@ kinds(::ReaderSet) = (:reader_set => :error,)
 run(check::ScanSeeds, ctx) = check_scan_seeds(ctx.index; directories = check.directories)
 kinds(::ScanSeeds) = (:scan_seed => :advisory,)
 
-run(check::Independent, ctx) = check_independent(ctx.graph, check.modules)
+run(check::Independent, ctx) = check_independent(ctx.index, check.modules)
 kinds(::Independent) = (:sibling_edge => :error,)
 
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
@@ -342,7 +340,7 @@ phase(::FileSinkable) = :graph
 function run(::Sinkable, ctx)
     body_calls = Dict(m => cg.refs for (m, cg) in ctx.callgraphs)
     grouped = methods_by_function(ctx.defined)
-    sink = check_sinkable(ctx.mods, ctx.graph.rank, body_calls, ctx.sites, grouped, ctx.root; repo = ctx.index.repo)
+    sink = check_sinkable(ctx.mods, ctx.index.rank, body_calls, ctx.sites, grouped, ctx.root; repo = ctx.index.repo)
     vcat(sink, check_extract_candidates(sink))
 end
 kinds(::Sinkable) = (:sinkable => :advisory, :extract_candidate => :advisory)

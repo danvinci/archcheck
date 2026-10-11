@@ -234,18 +234,18 @@ end
 
 # The references the layering rules judge. A package may let its modules use what encloses them; `strict` holds
 # every module to the layering.
-function layered_refs(graph::ModuleGraph, root::Symbol, strict::Bool)
-    strict && return graph.refs
-    filter(ref -> !reaches_enclosing(ref, root), graph.refs)
+function layered_refs(index, root::Symbol, strict::Bool)
+    strict && return index.refs
+    filter(ref -> !reaches_enclosing(ref, root), index.refs)
 end
 
 # Any cross-module reference whose target does not finish loading strictly before its source.
-function check_backedges(graph::ModuleGraph, root::Symbol; strict::Bool)
+function check_backedges(index, root::Symbol; strict::Bool)
     findings = Finding[]
-    for ref in layered_refs(graph, root, strict)
-        is_backedge(graph.rank, ref.from, ref.to) || continue
-        from_rank = graph.rank[ref.from]
-        to_rank = graph.rank[ref.to]
+    for ref in layered_refs(index, root, strict)
+        is_backedge(index.rank, ref.from, ref.to) || continue
+        from_rank = index.rank[ref.from]
+        to_rank = index.rank[ref.to]
         from_text = join(from_rank, ".")
         to_text = join(to_rank, ".")
         order = from_text * "->" * to_text
@@ -301,13 +301,13 @@ function find_cycles(nodes, adjacent::AbstractDict)
 end
 
 # A cycle at module zoom. A down-only graph is already acyclic.
-function check_cycles(graph::ModuleGraph, root::Symbol; strict::Bool)
+function check_cycles(index, root::Symbol; strict::Bool)
     adjacent = Dict{Symbol,Vector{Symbol}}()
-    for ref in layered_refs(graph, root, strict)
+    for ref in layered_refs(index, root, strict)
         targets = get!(adjacent, ref.from, Symbol[])
         push!(targets, ref.to)
     end
-    nodes = collect(keys(graph.rank))
+    nodes = collect(keys(index.rank))
     loops = find_cycles(nodes, adjacent)
     findings = Finding[]
     for loop in loops
@@ -332,14 +332,14 @@ function is_within_module(key::Symbol, owner::Symbol)
 end
 
 # A reference from one member of the set, or a module nested in it, to another member's tree.
-function check_independent(graph::ModuleGraph, modules)
+function check_independent(index, modules)
     for mod in modules
-        if !haskey(graph.rank, mod)
+        if !haskey(index.rank, mod)
             throw(ArgumentError("Independent names $mod, which the module graph does not rank"))
         end
     end
     findings = Finding[]
-    for ref in graph.refs
+    for ref in index.refs
         source_at = findfirst(member -> is_within_module(ref.from, member), modules)
         target_at = findfirst(member -> is_within_module(ref.to, member), modules)
         isnothing(source_at) && continue
