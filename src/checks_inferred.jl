@@ -1,7 +1,7 @@
 # Calls the method graph's own inference judges: one no method can take, and a pure value the code drops.
 
 """Configured through `gate(...; checks)`, and the gate needs `entries`. A call no method matches at any argument type
-inference allows, or a discarded call that writes nothing, cannot throw and returns a value."""
+inference allows, or a discarded call that writes nothing, cannot throw and returns a value at a concrete type."""
 struct InferredCalls <: Check end
 
 kinds(::InferredCalls) = (:failing_call => :advisory, :dropped_value => :advisory)
@@ -48,9 +48,11 @@ end
 # keywords the callee takes none of.
 is_reported_failure(fact::CallFact) = fact.is_failing && !fact.is_stub && !fact.is_forward
 
-# A generated callee runs its generator on the call, the one effect its bits leave out.
+# A generated callee runs its generator on the call, the one effect its bits leave out. Nothrow on an abstract
+# instance holds by convention, so a dropped value needs a concrete instance.
 function is_dropped_value(fact::CallFact)
     fact.is_used && return false
+    fact.is_concrete || return false
     fact.is_effect_free || return false
     fact.is_nothrow || return false
     fact.is_value || return false

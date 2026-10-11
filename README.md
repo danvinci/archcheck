@@ -41,7 +41,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `ReaderSet` | a concrete subtype missing a method its supertype requires |
 | `OptAnalysis` | a listed call whose inferred code dispatches at runtime or boxes a local |
 | `OverlappingCalls` | two calls on one path that ask one question, each proven by inference to write nothing and give equal results for equal arguments |
-| `InferredCalls` | a call no method matches at any argument type inference allows (`failing_call`), or a discarded call that writes nothing, cannot throw and returns a value (`dropped_value`) |
+| `InferredCalls` | a call no method matches at any argument type inference allows (`failing_call`), or a discarded call that writes nothing, cannot throw and returns a value at a concrete argument type (`dropped_value`) |
 | `KeptBuilders` | a builder's result dropped where another method keeps it with `get!` |
 | `SentinelReturns` | a public function returning `nothing`, `Inf`, `NaN` or `missing` |
 | `StringPayloads` | a string-keyed dictionary whose values have no single layout |
