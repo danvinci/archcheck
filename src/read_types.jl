@@ -81,35 +81,30 @@ end
 # The computation ran and named no type.
 struct NoComputedType end
 
-# One step of a deferred binding. The three steps are the whole set, so the value stays one concrete type.
-struct ReceiverStep end
-struct IteratedStep end
-struct TupleStep end
+# One step of a deferred binding. The parameter is the deferred value a step may hold.
+struct ReceiverStep{D}
+    names::Dict{Symbol,Union{Type,D}}  # frozen scope names
+    locals::Set{Symbol}                # frozen scope locals
+    node::JS.SyntaxNode                # expression this step types
+end
 
-const DeferredStep = Union{ReceiverStep,IteratedStep,TupleStep}
+struct IteratedStep{D}
+    source::Union{Type,D}              # collection this step takes an element from
+end
 
-# A bound value's type, computed on the first read that needs it, so inference runs only for values read through.
-# An empty holder means the computation ran and named no type. An absent holder means it has not run.
+struct TupleStep{D}
+    source::Union{Type,D}              # tuple this step takes an element from
+    position::Int                      # element index, 1-based
+end
+
+# A bound value's type, computed on the first read. The three steps are the whole set, so this stays one type.
 mutable struct Deferred
-    const step::DeferredStep     # receiver_type, iterated_element, or tuple_element
-    const source::Union{Nothing,Type,Deferred}  # the value that step reads; absent for a receiver step
-    const position::Int          # tuple index, 1-based; 0 for a receiver or an iterated step
-    const names::Union{Nothing,Dict{Symbol,Union{Type,Deferred}}}  # frozen scope names for a receiver step
-    const locals::Union{Nothing,Set{Symbol}}  # frozen scope locals for a receiver step
-    const node::Union{Nothing,JS.SyntaxNode}  # expression a receiver step types
+    const step::Union{ReceiverStep{Deferred},IteratedStep{Deferred},TupleStep{Deferred}}  # the step this value holds
     result::Union{Nothing,NoComputedType,ComputedType}  # absent until the step has run
+end
 
-    function Deferred(::ReceiverStep, names::Dict{Symbol,Union{Type,Deferred}}, locals::Set{Symbol}, node::JS.SyntaxNode)
-        new(ReceiverStep(), nothing, 0, names, locals, node, nothing)
-    end
-
-    function Deferred(::IteratedStep, source::Union{Type,Deferred})
-        new(IteratedStep(), source, 0, nothing, nothing, nothing, nothing)
-    end
-
-    function Deferred(::TupleStep, source::Union{Type,Deferred}, position::Int)
-        new(TupleStep(), source, position, nothing, nothing, nothing, nothing)
-    end
+function Deferred(step::Union{ReceiverStep{Deferred},IteratedStep{Deferred},TupleStep{Deferred}})
+    Deferred(step, nothing)
 end
 
 # A binding's type: a declared type as it is, a deferred one computed on first use.
@@ -125,7 +120,7 @@ end
 function computed_result(state, deferred::Deferred)
     held = deferred.result
     isnothing(held) || return held
-    value = step_value(state, deferred, deferred.step)
+    value = step_value(state, deferred.step)
     if isnothing(value)
         deferred.result = NoComputedType()
     else
@@ -446,20 +441,17 @@ function tuple_element(state, @nospecialize(destructured), position)
 end
 
 # Run the one step this deferred value holds. The receiver step rebuilds the scope frozen at the binding.
-function step_value(state, deferred, ::ReceiverStep)
-    names = deferred.names::Dict{Symbol,Union{Type,Deferred}}
-    locals = deferred.locals::Set{Symbol}
-    node = deferred.node::JS.SyntaxNode
-    frozen = Scope(names, locals)
-    receiver_type(state, frozen, node)
+function step_value(state, step::ReceiverStep)
+    frozen = Scope(step.names, step.locals)
+    receiver_type(state, frozen, step.node)
 end
 
-function step_value(state, deferred, ::IteratedStep)
-    iterated_element(state, deferred.source)
+function step_value(state, step::IteratedStep)
+    iterated_element(state, step.source)
 end
 
-function step_value(state, deferred, ::TupleStep)
-    tuple_element(state, deferred.source, deferred.position)
+function step_value(state, step::TupleStep)
+    tuple_element(state, step.source, step.position)
 end
 
 # The type an assignment or a loop binds from an expression: an alias shares its name's entry; a field chain, a call
@@ -469,5 +461,5 @@ function value_source(scope, node)
     kind = JS.kind(node)
     (kind == K"call" || kind == K"ref" || kind == K".") || return nothing
     frozen = copy(scope)
-    Deferred(ReceiverStep(), frozen.types, frozen.locals, node)
+    Deferred(ReceiverStep{Deferred}(frozen.types, frozen.locals, node))
 end

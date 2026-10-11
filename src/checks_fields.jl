@@ -122,7 +122,7 @@ function bind_iteration!(state, scope, targets, node)
         source = value_source(collection_scope, collection)
         element = nothing
         if !isnothing(source)
-            element = Deferred(IteratedStep(), source)
+            element = Deferred(IteratedStep{Deferred}(source))
         end
         target = children[1]
         bind_target!(state, scope, target, element)
@@ -170,7 +170,7 @@ function bind_target!(state, scope, target, @nospecialize(source))
         for index in eachindex(parts)
             element = nothing
             if is_positional
-                element = Deferred(TupleStep(), source, index)
+                element = Deferred(TupleStep{Deferred}(source, index))
             end
             bind_target!(state, scope, parts[index], element)
         end
