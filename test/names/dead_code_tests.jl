@@ -195,6 +195,13 @@ function typed_owner()
 end
 neg_typed_local() = 1
 pos_make() = PosMarker()
+struct PosBuilt
+    value::Int   # the built value
+    global function struct_global_owner(x::Int)
+        new(pos_struct_global_helper(x))
+    end
+end
+pos_struct_global_helper(x) = x
 """
 
 # Exported, so each owner is a root and a name its code reads stays live.
@@ -203,6 +210,7 @@ const LOCAL_BINDING_OWNERS = (
     "earlier_owner", "keyed_same_owner", "hid_owner", "anon_owner", "destruct_owner", "where_owner",
     "global_owner", "callback_owner", "branch_owner", "try_owner", "lambda_owner", "let_owner",
     "nested_global_owner", "gen_owner", "ordered_owner", "nest_owner", "indexed_owner", "typed_owner",
+    "struct_global_owner",
 )
 
 const LOCAL_BINDINGS = load_package("LocalBindings", """
@@ -227,6 +235,7 @@ const LOCAL_BINDING_LIVE = (
     "pos_law_helper", "pos_leaf", "pos_ext_helper", "pos_where_helper", "pos_foreign_helper",
     "pos_lambda_helper", "pos_let_helper", "pos_gen_helper", "pos_leaf_j", "pos_produce",
     "pos_inner_helper", "pos_store", "pos_make", "pos_global_helper", "pos_callback_helper",
+    "pos_struct_global_helper",
 )
 
 @testset "a definition only dead code names is dead, and its evidence names them" begin

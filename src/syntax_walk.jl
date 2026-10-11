@@ -480,11 +480,17 @@ function scope_generator!(scan, node::JS.SyntaxNode, scope)
     walk_scoped!(scan, children[1], element_scope)
 end
 
+# A `global` method defines a module function wherever it is written, a struct body or a function included, so it
+# opens at the top; a `local` one stays nested where it is.
 function scope_declaration!(scan, node, scope)
     children = child_nodes(node)
     isnothing(children) && return
+    is_global = JS.kind(node) == K"global"
     for declaration in children
-        if JS.kind(declaration) == K"="
+        if is_method_form(declaration)
+            method_scope = is_global ? opening_scope(nothing, 0, nothing) : scope
+            walk_scoped!(scan, declaration, method_scope)
+        elseif JS.kind(declaration) == K"="
             walk_scoped!(scan, declaration, scope)
         else
             walk_assign_lhs!(scan, declaration, scope)
