@@ -83,8 +83,9 @@ function is_foreign_macro(node)
     !is_base_macro(node)
 end
 
-# The foreign macro calls under `node`, each outside any other.
+# The foreign macro calls under `node` that run with the form: outside quoted code, each outside any other.
 function foreign_macro_calls!(calls, node)
+    JS.kind(node) == K"quote" && return calls
     if is_foreign_macro(node)
         push!(calls, node)
         return calls

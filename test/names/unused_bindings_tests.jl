@@ -59,6 +59,13 @@ const UNUSED_REACH = load_package("UnusedReach", """
     end
     dropped(y::Int) = @drop 1
     dropped(y::Float64) = @drop y
+    macro symbolic(name::Symbol)
+        esc(name)
+    end
+    function quoted()
+        spare = 1
+        :(@symbolic 1)
+    end
     """)
 
 @testset "an unread argument or local is found, including one a package macro's expansion drops; underscore names, unnamed arguments, and a name the expansion holds are exempt" begin
@@ -83,6 +90,7 @@ const UNUSED_REACH = load_package("UnusedReach", """
         (:unused_local, "assigns:step", 9),
         (:unused_local, "bumps:counter", 51),
         (:unused_local, "picked:kind", 18),
+        (:unused_local, "quoted:spare", 63),
         (:unused_local, "shadows:kept", 45),
     ]
     @test rows == expected
