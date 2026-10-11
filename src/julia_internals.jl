@@ -305,6 +305,34 @@ function binding_owner(home::Module, name::Symbol)::Union{Module,Nothing}
     end
 end
 
+"""Each file the load of `package` included, in start order, with its module path below `package`; nothing without a
+cache file or once a file changed. `Base.pkgorigins` names the cache, `Base.parse_cache_header` its sources."""
+function recorded_includes(package::Module)
+    id = Base.PkgId(package)
+    origin = get(Base.pkgorigins, id, nothing)
+    isnothing(origin) && return nothing
+    cachefile = origin.cachepath
+    isnothing(cachefile) && return nothing
+    _, (_, sources, _) = Base.parse_cache_header(cachefile)
+    found = Tuple{String,Vector{String}}[]
+    for source in sources
+        # The entry file carries the empty `PkgId`; the load reads it before any include.
+        isempty(source.id.name) && continue
+        is_unchanged(source) || return nothing
+        path = normpath(source.filename)
+        push!(found, (path, source.modpath))
+    end
+    found
+end
+
+# A cached source is the file on disk when its size and CRC-32C match; `Base._crc32c` is the checksum loading uses.
+function is_unchanged(source)
+    isfile(source.filename) || return false
+    filesize(source.filename) == source.fsize || return false
+    checksum = open(Base._crc32c, source.filename)
+    checksum == source.hash
+end
+
 # Whether this process is building a package image, from `Base.generating_output`; code run then is cached.
 is_building_image() = Base.generating_output()
 

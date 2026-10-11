@@ -38,14 +38,10 @@ end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
 function Context(pkg::Module; src = joinpath(pkgdir(pkg), "src"), entry_dirs = String[], entries = (), derived = ())
-    pkg_name = string(nameof(pkg))
-    spine = joinpath(src, pkg_name * ".jl")
-    root = nameof(pkg)
     parses = package_parses(src)
     parse_package!(parses, source_root(src), entry_dirs)
-    dir2mod = package_layout(parses, spine, root)
     extensions = loaded_extensions(pkg, parses.repo)
-    index = build_source_index(parses, src, dir2mod; entry_dirs, package = pkg, extensions)
+    index = build_source_index(parses, src; entry_dirs, package = pkg, extensions)
     ordered = sort(collect(keys(index.rank)), by = m -> index.rank[m])
     mods = Module[]
     for key in ordered
@@ -122,7 +118,7 @@ function run_static_checks(ctx, checks)
     findings
 end
 
-"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or of a path computed at load, or a file the spine leaves unranked that no loaded method records and that sits outside every directory a nonliteral include names. A loaded module the spine leaves unranked whose `module` line or a method of it Julia records in the repository, when no loaded method records that file. A module another package's macro fills with its own code holds no package source."""
+"""Runs in `CHECKS`. A file that fails to parse; for a load Julia kept no include record of, an include of a missing file or of a path computed at load; a src/ file no include call in loaded code names, outside every directory such a computed include names; an include Julia recorded that no include call the parse reads ran. A loaded module the index leaves unranked whose `module` line or a method of it Julia records in the repository, outside the files no include names. A module another package's macro fills with its own code holds no package source."""
 struct Corpus <: Check end
 """Runs in `CHECKS`. A module references another that finishes loading at the same rank or later. A reference to an enclosing module counts only with `strict`, which holds every module to the layering."""
 struct ModuleBackEdges <: Check
@@ -205,24 +201,12 @@ struct ForeignFields <: Check end
 """Runs in `CHECKS`. A runtime type test on a method's own parameter picks a path."""
 struct TypeBranches <: Check end
 
-# Repo-relative path of each file a method in `loaded` records. Julia records the file because loading included it.
-function loaded_source_files(loaded, repo)
-    paths = Set{String}()
-    for method in loaded
-        site = method_site(method, repo)
-        path = first(site)
-        push!(paths, normpath(path))
-    end
-    paths
-end
-
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.
 function run(::Corpus, ctx)
-    recording = vcat(ctx.defined, ctx.nested)
-    recorded = loaded_source_files(recording, ctx.index.repo)
-    files = check_corpus(ctx.index, recorded)
-    included = loose_included_files(ctx.index, recorded)
-    modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested, included; repo = ctx.index.repo)
+    root = nameof(ctx.root)
+    files = check_corpus(ctx.index, root)
+    unincluded = Set(normpath(path) for path in ctx.index.unincluded)
+    modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested, unincluded; repo = ctx.index.repo)
     vcat(files, modules)
 end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,

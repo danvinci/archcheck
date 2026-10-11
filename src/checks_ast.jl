@@ -165,22 +165,9 @@ function lies_in_directory(path, directories)
     false
 end
 
-# Loose files a loaded method records: the spine left them unranked, and Julia included them.
-function loose_included_files(index, recorded)
-    included = Set{String}()
-    for file in index.files
-        file.filerank == 0 || continue
-        is_wrapper(file) && continue
-        path = normpath(file.path)
-        path in recorded || continue
-        push!(included, path)
-    end
-    included
-end
-
-# Every .jl the tool touches is a ranked member, a module wrapper, or a hole. A file a loaded method records was
-# included; one under a directory a nonliteral include names may have been, and that include is the finding.
-function check_corpus(index, loaded)
+# Every .jl the tool touches is a ranked member, a module wrapper, or a hole. A file under a directory a nonliteral
+# include names may be one it loads, and that include is the finding.
+function check_corpus(index, root::Symbol)
     directories = [noted.directory for noted in index.nonliteral if !isempty(noted.directory)]
     findings = Finding[]
     for (owner, path) in index.unparsed
@@ -194,13 +181,15 @@ function check_corpus(index, loaded)
         detail = "include argument is not a string literal"
         push!(findings, Finding(noted.owner, :nonliteral_include, noted.file, "", noted.line, detail))
     end
+    for path in index.unincluded
+        lies_in_directory(normpath(path), directories) && continue
+        detail = "no include call in loaded code names it"
+        push!(findings, Finding(root, :unranked_file, path, "", 0, detail))
+    end
     for file in index.files
         file.filerank == 0 || continue
         is_wrapper(file) && continue
-        path = normpath(file.path)
-        path in loaded && continue
-        lies_in_directory(path, directories) && continue
-        detail = "nothing in the module includes it, at any depth"
+        detail = "the load includes it from no include call the walk reads"
         push!(findings, Finding(file.mod, :unranked_file, file.path, "", 0, detail))
     end
     findings

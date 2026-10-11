@@ -253,14 +253,25 @@ function run(check::CallerWhitelist, ctx)
     findings
 end
 
+# The module enclosing every module whose code the directory holds; nothing when no one of them encloses the rest.
+function directory_module(index, directory, root::Symbol)
+    owners = Set{Symbol}()
+    for file in index.files
+        is_under(file.path, directory) && push!(owners, file.mod)
+    end
+    for candidate in owners
+        candidate === root && return root
+        all(owner -> is_within_module(owner, candidate), owners) && return candidate
+    end
+    nothing
+end
+
 function run(check::SentinelReturns, ctx)
     findings = Finding[]
     seen = Set{Tuple{String,String}}()
-    src_root = joinpath(ctx.index.repo, "src")
     for directory in check.directories
         require_covered(ctx.index, directory)
-        probe = joinpath(ctx.index.repo, directory, "_.jl")
-        root_key = module_of(probe, src_root, ctx.index.dir2mod)
+        root_key = directory_module(ctx.index, directory, nameof(ctx.root))
         for file in ctx.index.files
             is_under(file.path, directory) || continue
             children = child_nodes(file.tree)

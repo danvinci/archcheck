@@ -43,8 +43,9 @@ end
 struct SourceIndex
     repo::String                            # the root every path below is relative to
     rank::Dict{Symbol,Vector{Int}}          # module, nested ones by dotted key -> its load position in each enclosing module
-    dir2mod::Dict{String,Symbol}            # src subdir -> module
     files::Vector{FileNode}                 # every module-owned source file
+    opened::IdDict{JS.SyntaxNode,Vector{Int}}   # each include call the load ran -> the code it opened, by place in `files`
+    unincluded::Vector{String}              # repo-relative src/ files no include call in loaded code names, parsed
     refs::Vector{ModRef}                    # cross-module references, from the same parse
     external::Set{Symbol}                   # names referenced from entry dirs other than test/ and unloaded extensions
     scripts::Vector{EntryCode}              # each code root of the entry-dir files outside src/ and of unloaded extensions
@@ -74,10 +75,12 @@ struct IndexBuild
     loaded::Dict{Symbol,Module}                               # each ranked module this Julia loaded, by key
     extensions::Vector{Pair{Symbol,String}}                   # loaded extension -> its absolute entry file
     ranks::Dict{Symbol,Vector{Int}}                           # module -> its load position in each enclosing module
-    dir2mod::Dict{String,Symbol}                              # src subdir -> module, nested by dotted key
-    openers::Dict{String,Tuple{Symbol,String}}                # a directory module's absolute entry file -> its key, directory
     parses::Parses                                            # every file's one parse, shared with the layout
     placements::Vector{Placement}                             # loaded code in load order
+    unmatched::Vector{Placement}                              # recorded includes no include call the walk reads ran
+    opened::IdDict{JS.SyntaxNode,Vector{Int}}                 # include call -> the placements it opened
+    resolved::Base.IdSet{JS.SyntaxNode}                       # computed include calls a record resolved
+    unincluded::Vector{String}                                # repo-relative src/ files no include in loaded code names
     nodes::Vector{FileNode}                                   # code accepted into the index
     refs::Vector{ModRef}                                      # cross-module references from the same parse
     aliases::Dict{Symbol,Dict{Symbol,Symbol}}                 # module -> each name its `as` clauses bind -> module it names
@@ -90,12 +93,12 @@ struct IndexBuild
     scripts::Vector{EntryCode}                                # code roots outside src/: entry dirs and unloaded extensions
 end
 
-# One module's load walk: the module, its rank, the directories its nested directory modules own, and how many of
-# its load events are placed so far.
+# One module's load walk: the module, its rank, the record of the load it belongs to, and how many of its load events
+# are placed so far.
 struct LoadUnit
     owner::Symbol                 # module the walked code belongs to
     rank::Vector{Int}             # rank its children extend
-    nested::Vector{String}        # absolute directories of directory modules inside it
+    record::LoadRecord            # the includes Julia recorded for this load, or none
     count::Base.RefValue{Int}     # load events placed so far
 end
 
@@ -160,24 +163,10 @@ function parse_package!(parses::Parses, src_root::String, entry_dirs)
     parses
 end
 
-# The directories of the directory modules inside `moddir`, which place their own files.
-function nested_dirs(build::IndexBuild, moddir)
-    inner = String[]
-    for dir in keys(build.dir2mod)
-        dir == SINGLE_MODULE_DIR && continue
-        joined = joinpath(build.src_root, dir)
-        other = normpath(joined)
-        other == moddir && continue
-        is_within(other, moddir) && push!(inner, other)
-    end
-    inner
-end
-
-function start_index(parses::Parses, src_root::AbstractString, dir2mod, package::Module, extensions)
+function start_index(parses::Parses, src_root::AbstractString, package::Module, extensions)
     rooted = source_root(src_root)
     root = nameof(package)
-    dirs = nest_modules(parses, rooted, dir2mod)
-    build = IndexBuild(
+    IndexBuild(
         parses.repo,
         rooted,
         root,
@@ -185,10 +174,12 @@ function start_index(parses::Parses, src_root::AbstractString, dir2mod, package:
         Dict{Symbol,Module}(),
         extensions,
         Dict{Symbol,Vector{Int}}(),
-        dirs,
-        Dict{String,Tuple{Symbol,String}}(),
         parses,
         Placement[],
+        Placement[],
+        IdDict{JS.SyntaxNode,Vector{Int}}(),
+        Base.IdSet{JS.SyntaxNode}(),
+        String[],
         FileNode[],
         ModRef[],
         Dict{Symbol,Dict{Symbol,Symbol}}(),
@@ -200,15 +191,6 @@ function start_index(parses::Parses, src_root::AbstractString, dir2mod, package:
         Set{Symbol}(),
         EntryCode[],
     )
-    for (dir, key) in dirs
-        key === root && continue
-        joined = joinpath(rooted, dir)
-        moddir = normpath(joined)
-        entry = wrapper_of(parses, moddir)
-        isnothing(entry) && continue
-        build.openers[normpath(entry)] = (key, moddir)
-    end
-    build
 end
 
 function next_position!(unit::LoadUnit)
@@ -223,36 +205,61 @@ function child_rank(parent::Vector{Int}, position::Int)
     push!(extended, position)
 end
 
-# An inline module is keyed by its dotted path below the package, as a directory module is.
+# A module block's module is keyed by its dotted path below the package: its name alone below the root.
 function inline_key(build::IndexBuild, owner::Symbol, name::Symbol)
     owner === build.root && return name
     Symbol(owner, ".", name)
 end
 
-# A module opens at its entry file: the entry's module body is its code at position 0, and what that code loads
-# takes the positions after.
-function open_module!(build::IndexBuild, key::Symbol, rank::Vector{Int}, entry::String, nested)
+# The record of the load that made `loaded`, each module path keyed as the walk keys the module blocks it opens.
+function include_record(build::IndexBuild, loaded::Module, top::Symbol)
+    recorded = recorded_includes(loaded)
+    isnothing(recorded) && return NoRecord()
+    includes = RecordedInclude[]
+    for (path, modpath) in recorded
+        key = top
+        for name in modpath
+            key = inline_key(build, key, Symbol(name))
+        end
+        push!(includes, RecordedInclude(path, key))
+    end
+    IncludeRecord(includes, Ref(0))
+end
+
+function add_placement!(build::IndexBuild, placement::Placement)
+    push!(build.placements, placement)
+    length(build.placements)
+end
+
+# A load's entry opens its module: the entry's module body is its code at position 0, and what that code loads takes
+# the positions after.
+function open_module!(build::IndexBuild, key::Symbol, rank::Vector{Int}, entry::String, record::LoadRecord)
     push!(build.visited, entry)
-    tree = parsed_tree(build.parses,entry)
+    tree = parsed_tree(build.parses, entry)
     if isnothing(tree)
         rel = relpath(entry, build.repo)
         push!(build.unparsed, (key, rel))
         return
     end
     code = entry_code(tree)
-    push!(build.placements, Placement(key, entry, 0, code))
-    unit = LoadUnit(key, rank, nested, Ref(0))
+    add_placement!(build, Placement(key, entry, 0, code))
+    unit = LoadUnit(key, rank, record, Ref(0))
     walk_code!(build, unit, code, entry)
+    place_unmatched!(build, record)
 end
 
-# Load order: each include and each module block takes the next position in the walking module, and the walk
-# enters it there, as Julia loads it.
+# Load order: each include that runs and each module block takes the next position in the walking module, and the
+# walk enters it there, as Julia loads it.
 function walk_code!(build::IndexBuild, unit::LoadUnit, code, file)
-    for event in load_events(code)
+    events = live_load_events(code)
+    for (position, event) in enumerate(events)
         if is_module_block(event)
             place_block!(build, unit, event, file)
-        else
-            place_include!(build, unit, event, file)
+            continue
+        end
+        opened = place_include!(build, unit, events, position, file)
+        if !isempty(opened)
+            build.opened[event] = opened
         end
     end
 end
@@ -276,67 +283,141 @@ function nonliteral_include(owner::Symbol, rel::String, line::Int, argument)
     NonliteralInclude(owner, rel, line, directory)
 end
 
-# A directory module's entry opens that module where it is included. A file inside another directory module's
-# directory is that module's to place; any other file joins the including module. An include of an expression or
-# of a file absent on disk is noted where the walk meets it.
-function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
+# The code an include call opens: the files it runs, each where the load places it. A computed include opens no file
+# without a record.
+function place_include!(build::IndexBuild, unit::LoadUnit, events, position, file)
+    call = events[position]
+    target = literal_target(call, file)
+    isnothing(target) && return place_computed!(build, unit, unit.record, events, position, file)
+    runs_include(build, unit, unit.record, target) || return Int[]
+    placed = place_file!(build, unit, target)
+    isnothing(placed) ? Int[] : [placed]
+end
+
+# The absolute file a literal include call in `file` names; nothing for a computed one.
+function literal_target(call, file)
     argument = first(call_args(call))
     spec = include_spec(argument)
-    line = source_line(call)
-    rel = relpath(file, build.repo)
-    if isnothing(spec)
-        noted = nonliteral_include(unit.owner, rel, line, argument)
-        push!(build.nonliteral, noted)
-        return
-    end
+    isnothing(spec) && return nothing
     joined = joinpath(dirname(file), spec)
-    target = normpath(joined)
-    if !isfile(target)
-        push!(build.missing, (unit.owner, rel, spec, line))
-        return
+    normpath(joined)
+end
+
+runs_include(_build, unit::LoadUnit, record::IncludeRecord, target) = take_include!(record, unit.owner, target)
+
+# Without a record an include runs when its file is on disk. A loaded extension's entry is its extension's to place,
+# where a fallback include for older Julia names it too.
+function runs_include(build::IndexBuild, _unit, ::NoRecord, target)
+    isfile(target) || return false
+    !any(extension -> last(extension) == target, build.extensions)
+end
+
+# A computed include runs the recorded includes into its module that follow, under the directory its literal pieces
+# name, up to a file a later literal include of the same code names.
+function place_computed!(build::IndexBuild, unit::LoadUnit, record::IncludeRecord, events, position, file)
+    call = events[position]
+    push!(build.resolved, call)
+    directory = computed_directory(call, file)
+    later = literal_targets(events, position, file)
+    opened = Int[]
+    while true   # bounded: each pass matches one recorded include
+        upcoming = next_include(record)
+        isnothing(upcoming) && break
+        upcoming.key === unit.owner || break
+        is_within(upcoming.path, directory) || break
+        upcoming.path in later && break
+        record.matched[] += 1
+        placed = place_file!(build, unit, upcoming.path)
+        isnothing(placed) || push!(opened, placed)
     end
-    # A loaded extension's entry is its extension's to place, where a fallback include for older Julia names it too.
-    any(extension -> last(extension) == target, build.extensions) && return
-    if haskey(build.openers, target)
-        target in build.visited && return
-        key, moddir = build.openers[target]
-        position = next_position!(unit)
-        rank = child_rank(unit.rank, position)
-        build.ranks[key] = rank
-        nested = nested_dirs(build, moddir)
-        open_module!(build, key, rank, target, nested)
-        return
+    opened
+end
+
+place_computed!(_build, _unit, ::NoRecord, _events, _position, _file) = Int[]
+
+# The absolute directory a computed include's literal pieces name; the including file's own without any.
+function computed_directory(call, file)
+    argument = first(call_args(call))
+    named = named_include_directory(argument)
+    isnothing(named) && return dirname(file)
+    joined = joinpath(dirname(file), named)
+    normpath(joined)
+end
+
+# The files the literal includes after `position` name.
+function literal_targets(events, position, file)
+    targets = Set{String}()
+    for event in events[(position + 1):end]
+        is_include_call(event) || continue
+        target = literal_target(event, file)
+        isnothing(target) || push!(targets, target)
     end
-    skips_nested(target, unit.nested) && return
+    targets
+end
+
+# A file holding only a module block opens that module where it is included; any other file joins the including
+# module. The placement the file's code took, or nothing when a module already holds it or it will not parse.
+function place_file!(build::IndexBuild, unit::LoadUnit, target)
     key = (unit.owner, target)
-    key in build.placed && return
+    key in build.placed && return nothing
     push!(build.placed, key)
     push!(build.visited, target)
     position = next_position!(unit)
-    tree = parsed_tree(build.parses,target)
+    tree = parsed_tree(build.parses, target)
     if isnothing(tree)
         rel = relpath(target, build.repo)
         push!(build.unparsed, (unit.owner, rel))
-        return
+        return nothing
     end
-    push!(build.placements, Placement(unit.owner, target, position, tree))
+    block = sole_module_block(tree)
+    isnothing(block) || return open_block!(build, unit, block, target, position)
+    placed = add_placement!(build, Placement(unit.owner, target, position, tree))
     walk_code!(build, unit, tree, target)
+    placed
 end
 
 function place_block!(build::IndexBuild, unit::LoadUnit, block, file)
-    name = module_name(block)
-    isnothing(name) && return
     position = next_position!(unit)
+    open_block!(build, unit, block, file, position)
+end
+
+# A module block opens its module at `position` in the walking module: its body is the module's code at position 0.
+function open_block!(build::IndexBuild, unit::LoadUnit, block, file, position)
+    name = module_name(block)
+    isnothing(name) && return nothing
     key = inline_key(build, unit.owner, name)
     rank = child_rank(unit.rank, position)
     build.ranks[key] = rank
     body = module_body(block)
-    push!(build.placements, Placement(key, file, 0, body))
-    inner = LoadUnit(key, rank, unit.nested, Ref(0))
+    placed = add_placement!(build, Placement(key, file, 0, body))
+    inner = LoadUnit(key, rank, unit.record, Ref(0))
     walk_code!(build, inner, body, file)
+    placed
 end
 
-# The root opens at the spine, first in load order; every module the spine declares ranks inside it.
+# A recorded include no call the walk reads ran joins the index unranked, in the module the record names.
+function place_unmatched!(build::IndexBuild, record::IncludeRecord)
+    while true   # bounded: each pass takes one recorded include
+        upcoming = next_include(record)
+        isnothing(upcoming) && break
+        record.matched[] += 1
+        key = (upcoming.key, upcoming.path)
+        key in build.placed && continue
+        push!(build.placed, key)
+        push!(build.visited, upcoming.path)
+        tree = parsed_tree(build.parses, upcoming.path)
+        if isnothing(tree)
+            rel = relpath(upcoming.path, build.repo)
+            push!(build.unparsed, (upcoming.key, rel))
+            continue
+        end
+        push!(build.unmatched, Placement(upcoming.key, upcoming.path, 0, tree))
+    end
+end
+
+place_unmatched!(_build, ::NoRecord) = nothing
+
+# The root opens at the spine, first in load order; every module the spine opens ranks inside it.
 function walk_package!(build::IndexBuild)
     spine_name = string(build.root) * ".jl"
     joined = joinpath(build.src_root, spine_name)
@@ -344,8 +425,8 @@ function walk_package!(build::IndexBuild)
     isfile(spine) || return
     rank = [1]
     build.ranks[build.root] = rank
-    nested = nested_dirs(build, build.src_root)
-    open_module!(build, build.root, rank, spine, nested)
+    record = include_record(build, build.package, build.root)
+    open_module!(build, build.root, rank, spine, record)
 end
 
 # Julia loads an extension once the package and its triggers have loaded, so each ranks after the whole package.
@@ -353,30 +434,14 @@ function walk_extensions!(build::IndexBuild)
     for (position, (key, entry)) in enumerate(build.extensions)
         rank = [1 + position]
         build.ranks[key] = rank
-        open_module!(build, key, rank, entry, String[])
+        extension = Base.get_extension(build.package, key)::Module
+        record = include_record(build, extension, key)
+        open_module!(build, key, rank, entry, record)
     end
 end
 
 # A module's rank; empty for a module no load walk reaches.
 module_rank(build::IndexBuild, owner::Symbol) = get(build.ranks, owner, Int[])
-
-# The includes of code no load walk reached: an expression, or a file absent on disk.
-function note_includes!(build::IndexBuild, owner::Symbol, path, rel, tree)
-    for (arg, line) in include_calls(tree)
-        spec = include_spec(arg)
-        if isnothing(spec)
-            noted = nonliteral_include(owner, rel, line, arg)
-            push!(build.nonliteral, noted)
-        else
-            parent = dirname(path)
-            joined = joinpath(parent, spec)
-            target = normpath(joined)
-            if !isfile(target)
-                push!(build.missing, (owner, rel, spec, line))
-            end
-        end
-    end
-end
 
 # The ranked modules this Julia loaded, once every load walk has ranked them.
 function load_modules!(build::IndexBuild)
@@ -439,14 +504,16 @@ function placed_node(placement::Placement, build::IndexBuild)
     file_node(build, placement.owner, placement.path, placement.position, is_entry, placement.code)
 end
 
-# A file no load walk reached, unranked under the module whose directory holds it.
-loose_node(placement::Placement, build::IndexBuild) =
+# A recorded include the walk could not place, unranked under the module the record names.
+unmatched_node(placement::Placement, build::IndexBuild) =
     file_node(build, placement.owner, placement.path, 0, false, placement.code)
 
-# Loaded code in load order.
+# Loaded code in load order, so a placement's position is its place in `nodes`; unmatched includes after.
 function index_placements!(build::IndexBuild)
-    nodes = ordered_results(placed_node, FileNode, build.placements, build)
-    append!(build.nodes, nodes)
+    placed = ordered_results(placed_node, FileNode, build.placements, build)
+    append!(build.nodes, placed)
+    unmatched = ordered_results(unmatched_node, FileNode, build.unmatched, build)
+    append!(build.nodes, unmatched)
 end
 
 # Module references resolve once every module is known, the inline ones included, and once every module's renames
@@ -478,45 +545,68 @@ function code_roots(tree)
     roots
 end
 
-function note_unowned_includes!(build::IndexBuild, path, tree)
-    rel = relpath(path, build.repo)
-    name = basename(path)
-    stem = first(splitext(name))
-    owner = Symbol(stem)
-    for root in code_roots(tree)
-        note_includes!(build, owner, path, rel, root)
+# Every include call in loaded code, in branches the load skips and in method bodies too: a literal one names a file,
+# or a hole when the file is not on disk; a computed one no record resolved is a hole. The files named, returned.
+function note_includes!(build::IndexBuild)
+    named = Set{String}()
+    for placement in build.placements
+        for event in load_events(placement.code)
+            is_include_call(event) || continue
+            note_include!(build, named, placement, event)
+        end
     end
+    named
 end
 
-# A source file no load walk reached joins the index unranked, under the module whose directory holds it.
-function add_loose_files!(build::IndexBuild)
-    tracked = tracked_files(build.src_root)
-    loose = Placement[]
-    for full in julia_files(build.src_root)
-        name = basename(full)
-        full in build.visited && continue
-        if !isnothing(tracked) && !(full in tracked)
-            continue
-        end
-        push!(build.visited, full)
-        owner = module_of(full, build.src_root, build.dir2mod)
-        tree = parsed_tree(build.parses,full)
-        if isnothing(tree)
-            rel = relpath(full, build.repo)
-            unowned = isnothing(owner) ? Symbol(first(splitext(name))) : owner
-            push!(build.unparsed, (unowned, rel))
-            continue
-        end
-        if isnothing(owner)
-            note_unowned_includes!(build, full, tree)
-            continue
-        end
-        push!(loose, Placement(owner, full, 0, tree))
-        rel = relpath(full, build.repo)
-        note_includes!(build, owner, full, rel, tree)
+function note_include!(build::IndexBuild, named, placement::Placement, call)
+    target = literal_target(call, placement.path)
+    if !isnothing(target) && isfile(target)
+        push!(named, target)
+        return
     end
-    nodes = ordered_results(loose_node, FileNode, loose, build)
-    append!(build.nodes, nodes)
+    rel = relpath(placement.path, build.repo)
+    line = source_line(call)
+    argument = first(call_args(call))
+    if isnothing(target)
+        call in build.resolved && return
+        noted = nonliteral_include(placement.owner, rel, line, argument)
+        push!(build.nonliteral, noted)
+        return
+    end
+    spec = include_spec(argument)
+    push!(build.missing, (placement.owner, rel, spec, line))
+end
+
+# The tracked src/ files the load did not include.
+function unloaded_sources(build::IndexBuild)
+    tracked = tracked_files(build.src_root)
+    unloaded = String[]
+    for path in julia_files(build.src_root)
+        path in build.visited && continue
+        isnothing(tracked) || path in tracked || continue
+        push!(unloaded, path)
+    end
+    unloaded
+end
+
+# An unloaded src/ file is read as an entry script outside test/ is, so a definition only it reads stays live. One no
+# include in loaded code names is a hole; one an include names runs on another Julia, or when that call runs.
+function read_unloaded_sources!(build::IndexBuild, modules::ReachModules, named)
+    for path in unloaded_sources(build)
+        push!(build.visited, path)
+        rel = relpath(path, build.repo)
+        tree = parsed_tree(build.parses, path)
+        if isnothing(tree)
+            push!(build.unparsed, (build.root, rel))
+            continue
+        end
+        path in named || push!(build.unincluded, rel)
+        codes = outside_codes(modules, rel, :Entry, tree)
+        for code in codes
+            add_external!(build, code)
+        end
+        append!(build.scripts, codes)
+    end
 end
 
 # An entry-dir file joins `scripts` unless the index holds it as source. Outside test/ its names join `external`, and
@@ -640,8 +730,9 @@ function source_index(build::IndexBuild)
     SourceIndex(
         build.repo,
         build.ranks,
-        build.dir2mod,
         build.nodes,
+        build.opened,
+        build.unincluded,
         build.refs,
         build.external,
         build.scripts,
@@ -652,16 +743,17 @@ function source_index(build::IndexBuild)
     )
 end
 
-function build_source_index(parses::Parses, src_root::AbstractString, dir2mod; entry_dirs = String[],
-                            package::Module, extensions = Pair{Symbol,String}[])
-    build = start_index(parses, src_root, dir2mod, package, extensions)
+function build_source_index(parses::Parses, src_root::AbstractString; entry_dirs = String[], package::Module,
+                            extensions = Pair{Symbol,String}[])
+    build = start_index(parses, src_root, package, extensions)
     walk_package!(build)
     walk_extensions!(build)
     load_modules!(build)
     index_placements!(build)
-    add_loose_files!(build)
     add_refs!(build)
+    named = note_includes!(build)
     modules = outside_modules(build)
+    read_unloaded_sources!(build, modules, named)
     read_entry_dirs!(build, modules, entry_dirs)
     read_unloaded_extensions!(build, modules)
     source_index(build)

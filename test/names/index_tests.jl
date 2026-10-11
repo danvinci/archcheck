@@ -17,20 +17,21 @@ include("known.jl")
     "forgotten.jl" => "b() = 2\n",
 ])
 
+# Without a record the parse cannot tell whether the load takes a branch only the load decides, so it reads both.
 const MISSING_CHILD = load_package("MissingChild", """
 include("mm/Mm.jl")
 using .Mm
-""", ["mm/Mm.jl" => "module Mm\nif false\ninclude(\"missing.jl\")\nend\nend\n"])
+""", ["mm/Mm.jl" => "module Mm\nif isdefined(@__MODULE__, :UNSET)\ninclude(\"missing.jl\")\nend\nend\n"])
 
 const MISSING_SPINE = load_package("MissingSpine", """
-if false
+if isdefined(@__MODULE__, :UNSET)
 include("missing.jl")
 end
 include("present.jl")
 """, ["present.jl" => "a() = 1\n"])
 
 const DYNAMIC_INCLUDE = load_package("DynamicInclude", """
-if false
+if isdefined(@__MODULE__, :UNSET)
 include(joinpath(@__DIR__, "known.jl"))
 end
 """, ["known.jl" => "a() = 1\n"])
@@ -77,7 +78,7 @@ const OUTSIDE_DIR = load_package("OutsideDir", """
 include("geometry/Geometry.jl")
 using .Geometry
 """, [
-    "geometry/Geometry.jl" => "module Geometry\nif false\ninclude(\"../missing.jl\")\ninclude(joinpath(@__DIR__, \"../dyn.jl\"))\ninclude(\"../bad.jl\")\nend\nend\n",
+    "geometry/Geometry.jl" => "module Geometry\nif isdefined(@__MODULE__, :UNSET)\ninclude(\"../missing.jl\")\ninclude(joinpath(@__DIR__, \"../dyn.jl\"))\ninclude(\"../bad.jl\")\nend\nend\n",
     "bad.jl" => "function wrecked(x\n",
 ])
 
@@ -117,23 +118,6 @@ include(
     "same.jl" => "same_helper() = 1\n",
     "inside.jl" => "inside_helper() = 1\n",
     "split.jl" => "split_helper() = 1\n",
-])
-
-const NAMED_ENTRY = load_package("NamedEntry", """
-include("mm/Entry.jl")
-using .Mm
-""", [
-    "mm/Entry.jl" => "module Mm\ninclude(\"known.jl\")\nend\n",
-    "mm/known.jl" => "a() = 1\n",
-])
-
-const CAPITAL_HELPER = load_package("CapitalHelper", """
-include("Helper.jl")
-""", ["Helper.jl" => "a() = 1\n"])
-
-const AMBIGUOUS_SPINE = load_package("AmbiguousSpine", "ready() = 1\n", [
-    "Aye.jl" => "a() = 1\n",
-    "Bee.jl" => "b() = 2\n",
 ])
 
 const UNPARSED_FILE = load_package("UnparsedFile", """
@@ -188,6 +172,37 @@ using .Inner
     "aa/Entry.jl" => "module Aa\nf() = 1\nend\n",
     "bb/inner/Inner.jl" => "module Inner\ng() = 1\nend\n",
 ])
+
+# A cached load: a module file, an inline module, a computed include loop, a branch the load skips, an include a call
+# at load runs, and a file no include names.
+const RECORDED_LOAD = load_package("RecordedLoad", """
+include("wrap/Wrap.jl")
+include("helpers.jl")
+module Inline
+include("inline/a.jl")
+end
+for part in ("one", "two")
+    include(joinpath("parts", part * ".jl"))
+end
+if isdefined(@__MODULE__, :UNSET)
+    include("never.jl")
+end
+function load_late()
+    include("late.jl")
+end
+load_late()
+""", [
+    "wrap/Wrap.jl" => "module Wrap\ninclude(\"inner.jl\")\nend\n",
+    "wrap/inner.jl" => "wrapped() = 1\n",
+    "helpers.jl" => "helper() = 1\n",
+    "inline/a.jl" => "inlined() = 1\n",
+    "parts/one.jl" => "first_part() = second_part()\n",
+    "parts/two.jl" => "include(\"deep.jl\")\nsecond_part() = 2\n",
+    "parts/deep.jl" => "deep_part() = 3\n",
+    "never.jl" => "never_loaded() = 0\n",
+    "orphan.jl" => "orphaned() = 0\n",
+    "late.jl" => "late_part() = 4\n",
+]; cached = true)
 
 # Each seed plants one generated file that will not parse: loading skips its include and the parse sees it.
 @testset "the index accounts for every generated file" begin
@@ -302,16 +317,6 @@ end
     @test endswith(back.symbol, "split.jl")
 end
 
-@testset "the wrapper is the entry file the directory leaves unincluded" begin
-    @test isempty(corpus_of(NAMED_ENTRY))
-    @test isempty(corpus_of(CAPITAL_HELPER))
-    corpus = corpus_of(AMBIGUOUS_SPINE)
-    kinds = Set(finding.kind for finding in corpus)
-    @test kinds == Set([:unranked_file])
-    holes = Set(basename(finding.file) for finding in corpus)
-    @test holes == Set(["Aye.jl", "Bee.jl"])
-end
-
 @testset "a source file that will not parse is recorded and its definitions are absent" begin
     corpus = corpus_of(UNPARSED_FILE)
     hole = only(corpus)
@@ -347,10 +352,36 @@ end
     @test isempty(corpus_of(SCORE_PAIR))
 end
 
-@testset "the module name comes from the using that follows the include" begin
+@testset "a file holding one module block opens that module where it is included" begin
     index = index_of(SPINE_ORDER)
-    @test index.dir2mod["aa"] === :Aa
-    @test index.dir2mod["bb/inner"] === :Inner
     @test index.rank[:Aa] == [1, 1]
     @test index.rank[:Inner] == [1, 2]
+end
+
+@testset "a cached load places each file in the module and order Julia's record names" begin
+    index = index_of(RECORDED_LOAD)
+    placed = Set((file.mod, file.path, file.filerank) for file in index.files)
+    spine = joinpath("src", "RecordedLoad.jl")
+    @test placed == Set([
+        (:RecordedLoad, spine, 0),
+        (:Wrap, joinpath("src", "wrap", "Wrap.jl"), 0),
+        (:Wrap, joinpath("src", "wrap", "inner.jl"), 1),
+        (:RecordedLoad, joinpath("src", "helpers.jl"), 2),
+        (:Inline, spine, 0),
+        (:Inline, joinpath("src", "inline", "a.jl"), 1),
+        (:RecordedLoad, joinpath("src", "parts", "one.jl"), 4),
+        (:RecordedLoad, joinpath("src", "parts", "two.jl"), 5),
+        (:RecordedLoad, joinpath("src", "parts", "deep.jl"), 6),
+        (:RecordedLoad, joinpath("src", "late.jl"), 0),
+    ])
+    holes = Set((finding.kind, finding.file) for finding in corpus_of(RECORDED_LOAD))
+    orphan = joinpath("src", "orphan.jl")
+    late = joinpath("src", "late.jl")
+    @test holes == Set([(:unranked_file, orphan), (:unranked_file, late)])
+    ctx = case_context(RECORDED_LOAD)
+    found = ArchCheck.run(FileBackEdges(), ctx)
+    back = only(found)
+    @test endswith(back.file, "one.jl")
+    @test endswith(back.symbol, "two.jl")
+    @test ev(back, :include_order) == "4->5"
 end

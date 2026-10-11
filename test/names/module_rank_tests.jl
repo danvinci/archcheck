@@ -244,7 +244,7 @@ end
 end
 
 @testset "an inline module is ranked and owns its own code" begin
-    cases = ((INLINE_CHILD, Symbol("Aa.Inline"), "Aa", "1.1.2->1.1"), (INLINE_ROOT, :Tokens, "InlineRoot", "1.2->1"))
+    cases = ((INLINE_CHILD, Symbol("Aa.Inline"), "Aa", "1.1.2->1.1"), (INLINE_ROOT, :Tokens, "InlineRoot", "1.1->1"))
     for (case, inline, parent, order) in cases
         ctx = case_context(case)
         corpus = ArchCheck.run(Corpus(), ctx)
@@ -262,7 +262,7 @@ end
     ctx = case_context(INLINE_ORDER)
     @test isempty(ArchCheck.run(Corpus(), ctx))
     rows = module_edge_rows(INLINE_ORDER)
-    @test rows == [(:back_edge, "Late", "1.1->1.3", "qualified")]
+    @test rows == [(:back_edge, "Late", "1.1->1.2", "qualified")]
     body = only(file for file in ctx.index.files if file.path == joinpath("src", "late_body.jl"))
     @test body.mod === :Late
 end

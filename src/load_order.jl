@@ -1,172 +1,5 @@
-# The package's load as the parse reads it: which branches this Julia runs, where each include starts, and where
-# the load first binds each name of each module.
-
-# ---- branches this Julia decides while it loads ----
-
-# A `v"..."` literal's version; nothing for any other node.
-function version_literal(node)
-    JS.kind(node) == K"macrocall" || return nothing
-    children = child_nodes(node)
-    child_count(children) == 2 || return nothing
-    children[1].val === :v || return nothing
-    text = static_string(children[2])
-    isnothing(text) && return nothing
-    tryparse(VersionNumber, text)
-end
-
-# The version a comparison operand stands for: the running Julia's `VERSION`, or a literal's.
-function operand_version(node)
-    node.val === :VERSION && return VERSION
-    path = dotted_names(node)
-    path == [:Base, :VERSION] && return VERSION
-    version_literal(node)
-end
-
-function compare_versions(operator, left::VersionNumber, right::VersionNumber)::Union{Nothing,Bool}
-    operator === :< && return left < right
-    operator === :<= && return left <= right
-    operator === :> && return left > right
-    operator === :>= && return left >= right
-    operator === :(==) && return left == right
-    operator === :!= && return left != right
-    nothing
-end
-
-function version_comparison(node)::Union{Nothing,Bool}
-    JS.is_infix_op_call(node) || return nothing
-    children = child_nodes(node)
-    child_count(children) == 3 || return nothing
-    left = operand_version(children[1])
-    right = operand_version(children[3])
-    isnothing(left) && return nothing
-    isnothing(right) && return nothing
-    compare_versions(children[2].val, left, right)
-end
-
-# `isdefined(Base, :name)` or `isdefined(Core, :name)`, answered by the running Julia.
-function base_isdefined(node)::Union{Nothing,Bool}
-    children = child_nodes(node)
-    child_count(children) == 3 || return nothing
-    children[1].val === :isdefined || return nothing
-    holder = children[2].val
-    holder === :Base || holder === :Core || return nothing
-    JS.kind(children[3]) == K"quote" || return nothing
-    quoted = child_nodes(children[3])
-    child_count(quoted) == 1 || return nothing
-    name = node_symbol(quoted[1])
-    isnothing(name) && return nothing
-    loaded = holder === :Base ? Base : Core
-    isdefined(loaded, name)
-end
-
-function static_and(node)::Union{Nothing,Bool}
-    children = child_nodes(node)
-    left = static_condition(children[1])
-    right = static_condition(children[2])
-    left === false && return false
-    right === false && return false
-    left === true && return right
-    nothing
-end
-
-function static_or(node)::Union{Nothing,Bool}
-    children = child_nodes(node)
-    left = static_condition(children[1])
-    right = static_condition(children[2])
-    left === true && return true
-    right === true && return true
-    left === false && return right
-    nothing
-end
-
-function static_not(node)::Union{Nothing,Bool}
-    children = child_nodes(node)
-    child_count(children) == 2 || return nothing
-    children[1].val === :! || return nothing
-    operand = static_condition(children[2])
-    isnothing(operand) && return nothing
-    !operand
-end
-
-# The value an `if` condition takes on this Julia when a literal, a `VERSION` comparison or `isdefined` on Base or
-# Core decides it; nothing when only the load can.
-function static_condition(node)::Union{Nothing,Bool}
-    value = node.val
-    value isa Bool && return value
-    kind = JS.kind(node)
-    kind == K"&&" && return static_and(node)
-    kind == K"||" && return static_or(node)
-    kind == K"call" || return nothing
-    JS.is_prefix_op_call(node) && return static_not(node)
-    compared = version_comparison(node)
-    isnothing(compared) || return compared
-    base_isdefined(node)
-end
-
-# The parts of an `if` or `elseif` the load runs: the taken branch when this Julia decides the condition, else all.
-function live_branches(node::JS.SyntaxNode)
-    children = child_nodes(node)
-    condition = static_condition(children[1])
-    branches = children[2:end]
-    isnothing(condition) && return branches
-    condition && return branches[1:1]
-    length(branches) < 2 && return JS.SyntaxNode[]
-    rest = branches[2]
-    JS.kind(rest) == K"elseif" && return live_branches(rest)
-    [rest]
-end
-
-# The children the load runs: the live branches of a conditional, every child of anything else.
-function live_children(node)
-    kind = JS.kind(node)
-    kind == K"if" && return live_branches(node)
-    kind == K"elseif" && return live_branches(node)
-    children = child_nodes(node)
-    isnothing(children) && return JS.SyntaxNode[]
-    children
-end
-
-# Whether a child of an `if` or `elseif` runs when this Julia loads it: the condition does, an `elseif` does unless an
-# earlier condition is decided true, and a branch does when the load takes it.
-function is_live_child(conditional, child)
-    children = child_nodes(conditional)
-    child === first(children) && return true
-    if JS.kind(child) == K"elseif"
-        condition = static_condition(first(children))
-        return condition !== true
-    end
-    any(branch -> branch === child, live_branches(conditional))
-end
-
-# Whether `node` sits, below `root`, in a branch this Julia skips while it loads, judged by the load's own rule.
-function in_skipped_branch(node, root)
-    child = node
-    current = node.parent
-    while !isnothing(current) && child !== root
-        kind = JS.kind(current)
-        is_conditional = kind == K"if" || kind == K"elseif"
-        is_conditional && !is_live_child(current, child) && return true
-        child = current
-        current = current.parent
-    end
-    false
-end
-
-# What loaded code includes and opens, in source order, past branches this Julia skips and method bodies, which
-# include only when called.
-function collect_live_events!(events, node)
-    JS.kind(node) == K"quote" && return events
-    is_method_form(node) && return events
-    for child in live_children(node)
-        if is_module_block(child) || is_include_call(child)
-            push!(events, child)
-        end
-        collect_live_events!(events, child)
-    end
-    events
-end
-
-live_load_events(root) = collect_live_events!(JS.SyntaxNode[], root)
+# The package's load as the parse reads it: where each include starts, and where the load first binds each name
+# of each module.
 
 # ---- where the load binds each name ----
 
@@ -357,30 +190,11 @@ load first binds each name."""
 struct LoadWalk
     index::SourceIndex                              # the codes walked
     root::Symbol                                    # the package's module key
-    openers::Dict{String,Vector{Int}}               # repo-relative path -> the codes that open the file, one per module
     bodies::IdDict{JS.SyntaxNode,Int}               # a code's syntax -> its position
     loads::Dict{Int,CodeLoad}                       # code -> its place, once the walk has left it
     order::Vector{Int}                              # codes in the order the load enters them
     entered::Set{Int}                               # codes the walk has entered
     names::Dict{Symbol,Dict{Symbol,NameBinding}}    # module key -> each name -> where the load first binds it
-end
-
-# The codes that open each file: those whose syntax starts first, a directory module's entry before its blocks.
-function file_openers(index::SourceIndex)
-    earliest = Dict{String,Int}()
-    for file in index.files
-        byte = JS.first_byte(file.tree)
-        known = get(earliest, file.path, typemax(Int))
-        earliest[file.path] = min(known, byte)
-    end
-    openers = Dict{String,Vector{Int}}()
-    for (position, file) in enumerate(index.files)
-        byte = JS.first_byte(file.tree)
-        byte == earliest[file.path] || continue
-        listed = get!(Vector{Int}, openers, file.path)
-        push!(listed, position)
-    end
-    openers
 end
 
 function code_bodies(index::SourceIndex)
@@ -389,24 +203,6 @@ function code_bodies(index::SourceIndex)
         bodies[file.tree] = position
     end
     bodies
-end
-
-# The code an include call loads: the file's opener in the including module, else the module whose entry it is.
-function include_target(walk::LoadWalk, position::Int, call)
-    file = walk.index.files[position]
-    argument = first(call_args(call))
-    spec = include_spec(argument)
-    isnothing(spec) && return nothing
-    absolute = joinpath(walk.index.repo, file.path)
-    joined = joinpath(dirname(absolute), spec)
-    normalized = normpath(joined)
-    target = relpath(normalized, walk.index.repo)
-    candidates = get(walk.openers, target, Int[])
-    isempty(candidates) && return nothing
-    for candidate in candidates
-        walk.index.files[candidate].mod === file.mod && return candidate
-    end
-    first(candidates)
 end
 
 # A module's own code binds the module's name in the module that encloses it, as the load opens it.
@@ -439,18 +235,21 @@ function bind_sites!(walk::LoadWalk, position::Int, sites, pending::Int, byte::I
     pending
 end
 
-# A module block runs in place; an include starts one more include, then runs the file it names.
-function event_load!(walk::LoadWalk, position::Int, event, started::Int)
+const NO_CODES = Int[]
+
+# A module block runs in place; an include starts one more include for each file it runs, then runs that file.
+function event_load!(walk::LoadWalk, event, started::Int)
     if is_module_block(event)
         body = module_body(event)
         inner = get(walk.bodies, body, nothing)
         isnothing(inner) && return started
         return walk_load!(walk, inner, started)
     end
-    counted = started + 1
-    target = include_target(walk, position, event)
-    isnothing(target) && return counted
-    walk_load!(walk, target, counted)
+    opened = get(walk.index.opened, event, NO_CODES)
+    for target in opened
+        started = walk_load!(walk, target, started + 1)
+    end
+    started
 end
 
 # Runs one code as the load does: its bindings and its include calls and module blocks in source order. Returns the
@@ -468,7 +267,7 @@ function walk_load!(walk::LoadWalk, position::Int, started::Int)
     for event in live_load_events(file.tree)
         byte = JS.first_byte(event)
         pending = bind_sites!(walk, position, sites, pending, byte, started)
-        started = event_load!(walk, position, event, started)
+        started = event_load!(walk, event, started)
         push!(steps, LoadStep(byte, started))
     end
     bind_sites!(walk, position, sites, pending, typemax(Int), started)
@@ -487,11 +286,10 @@ function load_roots(index::SourceIndex)
 end
 
 function load_walk(index::SourceIndex, root::Symbol)
-    openers = file_openers(index)
     bodies = code_bodies(index)
     loads = Dict{Int,CodeLoad}()
     names = Dict{Symbol,Dict{Symbol,NameBinding}}()
-    walk = LoadWalk(index, root, openers, bodies, loads, Int[], Set{Int}(), names)
+    walk = LoadWalk(index, root, bodies, loads, Int[], Set{Int}(), names)
     started = 0
     for position in load_roots(index)
         started = walk_load!(walk, position, started)

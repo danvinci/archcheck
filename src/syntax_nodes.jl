@@ -40,6 +40,23 @@ function module_blocks(root)
     blocks
 end
 
+# A wrapper holds its module as the one module block at its top level; its code is that block's body.
+function entry_code(tree)
+    blocks = module_blocks(tree)
+    length(blocks) == 1 || return tree
+    block = only(blocks)
+    module_body(block)
+end
+
+# The module block a file holds as its only statement; nothing for a file holding any other code.
+function sole_module_block(tree)
+    blocks = module_blocks(tree)
+    length(blocks) == 1 || return nothing
+    statements = child_nodes(tree)
+    child_count(statements) == 1 || return nothing
+    only(blocks)
+end
+
 # An identifier node's value. Anything else names no symbol.
 function node_symbol(node)::Union{Nothing,Symbol}
     value = node.val

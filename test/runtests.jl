@@ -27,9 +27,10 @@ end
 # evidence is a fixed key/value vocabulary per kind, so tests read it by key
 ev(f, key) = only(v for (k, v) in f.evidence if k === key)
 
-# A package written to a fresh directory and imported into Main, top-level as a user's package is: `spine` is the
-# body of `module name` from its second line, `files` the other sources under `src/`, `project` more Project.toml.
-function load_package(name::AbstractString, spine::AbstractString, files = Pair{String,String}[], project = "")
+# A package written to a fresh directory and imported into Main as a user's is; a `cached` one loads from the cache
+# file it builds, so Julia records its includes. `spine` is the body of `module name`, `files` the other src/ sources.
+function load_package(name::AbstractString, spine::AbstractString, files = Pair{String,String}[], project = "";
+                      cached::Bool = false)
     root = mktempdir()
     src = joinpath(root, "src")
     mkpath(src)
@@ -39,7 +40,8 @@ function load_package(name::AbstractString, spine::AbstractString, files = Pair{
         write(path, source)
     end
     spine_path = joinpath(src, name * ".jl")
-    write(spine_path, "module $name; __precompile__(false)\n$spine\nend\n")
+    header = cached ? "module $name" : "module $name; __precompile__(false)"
+    write(spine_path, "$header\n$spine\nend\n")
     seed = hash(name)
     high = UInt128(seed) << 64
     low = UInt128(hash(seed))
