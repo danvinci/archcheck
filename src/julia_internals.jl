@@ -191,11 +191,10 @@ end
 # points from the written method to that function, so the body is known by this name.
 const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
 
-"""Whether `method` is the body lowering built for a keyword method: its name is `#name#N`."""
-function is_keyword_body(method::Method)
-    text = string(method.name)
-    occursin(KEYWORD_BODY, text)
-end
+"""Whether a function or method name is a keyword body lowering built: `#name#N`."""
+is_keyword_body_name(name::Symbol) = occursin(KEYWORD_BODY, string(name))
+
+is_keyword_body(method::Method) = is_keyword_body_name(method.name)
 
 # `Base.method_argnames` lists the name lowering gave each argument slot, the function's own slot first.
 argument_names(method::Method) = Base.method_argnames(method)

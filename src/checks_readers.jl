@@ -143,7 +143,11 @@ function read_args!(item, code, args, seen, method, recorded)
 end
 
 skipped_callee(::Union{Core.Builtin,Core.IntrinsicFunction}) = true
-skipped_callee(value::Function) = nameof(value) in MOVED_CALLEES
+# A keyword body is the call lowering writes from a method to the body of its own keywords.
+function skipped_callee(value::Function)
+    name = nameof(value)
+    name in MOVED_CALLEES || is_keyword_body_name(name)
+end
 
 function skipped_callee(@nospecialize(value::Type))
     body = declared_datatype(value)
