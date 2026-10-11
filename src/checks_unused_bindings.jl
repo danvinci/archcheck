@@ -97,13 +97,15 @@ function foreign_macro_calls!(calls, node)
     calls
 end
 
-# The code `macroexpand` makes of a call in `home`; nothing when the package's macro throws. Its output is discarded.
+# The code `macroexpand` makes of a call in `home`, as `Some`, since a macro may expand to `nothing`; nothing when the
+# package's macro throws. What it prints is discarded.
 function macro_expansion(home::Module, call)
     expression = Expr(call)
     try
         redirect_stdout(devnull) do
             redirect_stderr(devnull) do
-                macroexpand(home, expression)
+                expanded = macroexpand(home, expression)
+                Some(expanded)
             end
         end
     catch failure
@@ -130,7 +132,7 @@ function expansion_names!(reads::MacroReads, home, call)
         isnothing(home) && return nothing
         expansion = macro_expansion(home, call)
         isnothing(expansion) && return nothing
-        add_written!(Set{Symbol}(), expansion)
+        add_written!(Set{Symbol}(), something(expansion))
     end
 end
 
