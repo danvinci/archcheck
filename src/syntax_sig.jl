@@ -63,13 +63,32 @@ function is_type_constructor(signature)
     JS.kind(parts.head) == K"curly"
 end
 
-# A qualified generic identifies a method site without declaring a locally owned function.
+# The member a dotted head writes quoted, `-` in `Base.:-` and in `Base.:(-)`; nothing for a bare member.
+function quoted_member(head)
+    children = child_nodes(head)
+    child_count(children) == 2 || return nothing
+    member = children[2]
+    JS.kind(member) == K"quote" || return nothing
+    quoted = child_nodes(member)
+    child_count(quoted) == 1 || return nothing
+    node_symbol(only(quoted))
+end
+
+# A qualified generic identifies a method site without declaring a locally owned function. A quoted member is named
+# bare, `Base.-`, as the loaded method's name reads.
 function qualified_method_name(signature)
     parts = call_parts(signature)
     isnothing(parts) && return nothing
-    JS.kind(parts.head) == K"." || return nothing
-    text = JS.sourcetext(parts.head)
-    Symbol(text)
+    head = parts.head
+    JS.kind(head) == K"." || return nothing
+    member = quoted_member(head)
+    if isnothing(member)
+        text = JS.sourcetext(head)
+        return Symbol(text)
+    end
+    qualifier = first(child_nodes(head))
+    qualifier_text = JS.sourcetext(qualifier)
+    Symbol(qualifier_text, ".", member)
 end
 
 # Receiver type of `(x::T)(...)` and `(::T)(...)`.
