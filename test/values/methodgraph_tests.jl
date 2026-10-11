@@ -187,6 +187,17 @@ const CALL_FACTS = load_package("CallFacts", """
         total
     end
     sums(n::Int) = summed(n) + summed(n)
+    dest(x::Int8) = x
+    dest(x::Int16) = x
+    dest(x::Int32) = x
+    dest(x::Int64) = x
+    function wide_spread(xs::Union{Tuple{Int8,Int8},Tuple{Integer}})
+        dest(xs...)
+    end
+    function open_spread(xs)
+        dest(xs...)
+    end
+    short_spread(xs::Tuple{Int}) = pair(xs...)
     """)
 
 function call_facts_context()
@@ -202,6 +213,10 @@ function call_facts_context()
         (pkg.hue_shade, Tuple{pkg.Hue}),
         (pkg.advances, Tuple{Vector{Int}}),
         (pkg.sums, Tuple{Int}),
+        (pkg.wide_spread, Tuple{Union{Tuple{Int8,Int8},Tuple{Integer}}}),
+        (pkg.open_spread, Tuple{Tuple{Integer}}),
+        (pkg.open_spread, Tuple{Tuple{String}}),
+        (pkg.short_spread, Tuple{Tuple{Int}}),
     )
     case_context(CALL_FACTS; entries = rows)
 end
@@ -566,7 +581,10 @@ end
 @testset "a call no method takes fails, and a call left without call info stays quiet" begin
     failing = filter(finding -> finding.kind === :failing_call, CALL_FACTS_FOUND)
     rows = evidence_rows(failing, :callee, :via, :signature)
-    @test rows == [(:failing_call, "fails", "pair", "call", "concrete")]
+    @test rows == [
+        (:failing_call, "fails", "pair", "call", "concrete"),
+        (:failing_call, "short_spread", "pair", "apply", "concrete"),
+    ]
 end
 
 @testset "a dropped pure value is a finding, and an abstract instance alone stays quiet" begin

@@ -117,6 +117,52 @@ inferred_return_types(f) = Base.return_types(f)
 cache."""
 inference_interpreter() = Base.Compiler.NativeInterpreter()
 
+"""Every method the current world matches for `signature`, however many there are. `Base._methods_by_ftype` lists
+them at `Base.get_world_counter`, and a negative limit asks for every match."""
+function matching_methods(@nospecialize(signature))
+    world = Base.get_world_counter()
+    Base._methods_by_ftype(signature, -1, world)::Vector
+end
+
+"""The method instance of calling `func` with arguments of type `argtypes` in the current world; nothing when no
+method matches. `Base.method_instance` specializes the method the call would pick."""
+method_instance_at(func, @nospecialize(argtypes)) = Base.method_instance(func, argtypes)
+
+"""The instance of `method` at the part of `signature` the method admits, type variables it leaves open kept free.
+`jl_type_intersection_with_env` computes that intersection and `specialize_method` builds the instance."""
+function instance_at(method::Method, @nospecialize(signature))
+    intersection = ccall(:jl_type_intersection_with_env, Any, (Any, Any), signature, method.sig)::Core.SimpleVector
+    spec_types = intersection[1]
+    static_params = intersection[2]
+    Core.Compiler.specialize_method(method, spec_types, static_params)
+end
+
+"""Whether a method's body is produced by a generator. `Base.hasgenerator` reads that flag."""
+is_generated_method(method::Method) = Base.hasgenerator(method)
+
+"""Whether `type` is the vararg tail of a tuple. `Base.isvarargtype` reads that marker."""
+is_vararg_type(@nospecialize(type)) = Base.isvarargtype(type)
+
+"""The file and line a statement of `instance`'s code records, innermost scope last as `Base.IRShow.buildLineInfoNode`
+expands its debug info; an empty file and line 0 when it records none. A macro's expansion keeps its call's line."""
+function statement_location(debuginfo, instance, position)
+    stack = Base.IRShow.buildLineInfoNode(debuginfo, instance, position)
+    isempty(stack) && return (Symbol(""), 0)
+    node = last(stack)
+    (node.file, Int(node.line))
+end
+
+"""The method instance a statement was inlined from; nothing when the statement is the caller's own.
+`Base.IRShow.getdebugidx` gives the statement's edge index into the debug info's `edges`; 0 names none."""
+function inlined_instance(debuginfo, position)
+    location = Base.IRShow.getdebugidx(debuginfo, position)
+    edge_index = Int(location[2])
+    edge_index == 0 && return nothing
+    inlined = debuginfo.edges[edge_index].def
+    inlined isa Core.MethodInstance || return nothing
+    inlined
+end
+
 # `Base.kwarg_decl` lists the keywords a method declares, read from the keyword sorter lowering made for it.
 declares_keywords(method::Method) = !isempty(Base.kwarg_decl(method))
 
@@ -125,6 +171,16 @@ reads the body's name out of the keyword sorter's lowered code."""
 function body_function(method::Method)
     declares_keywords(method) || return nothing
     Base.bodyfunction(method)
+end
+
+# A keyword body is the function lowering names `#name#N`. Julia 1.13.1 records no flag for it. `bodyfunction`
+# points from the written method to that function, so the body is known by this name.
+const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
+
+"""Whether `method` is the body lowering built for a keyword method: its name is `#name#N`."""
+function is_keyword_body(method::Method)
+    text = string(method.name)
+    occursin(KEYWORD_BODY, text)
 end
 
 # `Base.method_argnames` lists the name lowering gave each argument slot, the function's own slot first.

@@ -31,9 +31,6 @@ struct MethodGraph
     calls::Dict{Method,Vector{CallFact}}    # caller -> what the walk's inference proved about each call it writes
 end
 
-# A keyword body is the generated `#name#N` function. Its edges belong to the method the source wrote.
-const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
-
 # Inference reads a callee it already holds more precisely than one it meets mid-walk, so a first walk in a cold
 # process can land a call differently. The graph is the walk a further walk reproduces.
 const GRAPH_WALKS_MAX = 4
@@ -87,7 +84,7 @@ function walk_methods(entries, landings::CallLandings)
         push!(entry_instances, instance)
     end
     # A resolved call is an edge on the inference frame, including one the optimized code drops.
-    interp = Core.Compiler.NativeInterpreter()
+    interp = inference_interpreter()
     while !isempty(pending)
         reached = pop!(pending)
         reached in met && continue
@@ -124,13 +121,14 @@ function is_held(method::Method, values)
     signature = split_signature(written.sig)
     slot = first(signature)
     slot isa Type || return true
-    Base.isType(slot) && return written.name in values
+    holds_type = slot isa DataType && !isnothing(type_object_held(slot))
+    holds_type && return written.name in values
     slot <: Function || return true
     can_be_value(written, values)
 end
 
 function callee_prefix(method::Method)
-    parameters = Base.unwrap_unionall(method.sig).parameters
+    parameters = signature_types(method.sig)
     if is_kwcall_method(method)
         func = parameters[3]
         prefix = Tuple{typeof(Core.kwcall),Any,func,Vararg{Any}}
@@ -138,8 +136,8 @@ function callee_prefix(method::Method)
         func = parameters[1]
         prefix = Tuple{func,Vararg{Any}}
     end
-    Base.has_free_typevars(func) || return prefix
-    Base.rewrap_unionall(prefix, method.sig)
+    has_free_variables(func) || return prefix
+    under_clauses_of(prefix, method.sig)
 end
 
 # A method reached outside the signature its walks cover is walked again at the join of both. Each join climbs the
@@ -160,7 +158,7 @@ function entry_instance(@nospecialize(entry))
     end
     func = entry[1]
     argtypes = entry[2]
-    instance = Base.method_instance(func, argtypes)
+    instance = method_instance_at(func, argtypes)
     isnothing(instance) && throw(ArgumentError("no method instance matches the entry"))
     instance
 end
@@ -269,6 +267,10 @@ function record_calls!(facts, frame)
     for position in eachindex(code.code)
         info = frame.stmt_info[position]
         branches = call_branches!(Core.Compiler.MethodMatchInfo[], info)
+        if holds_unknown_apply(info)
+            record_apply_veto!(facts, frame, position, branches, info)
+            continue
+        end
         if isempty(branches)
             fact = unknown_call(frame, position, info)
             isnothing(fact) || merge_fact!(facts, fact)
@@ -289,7 +291,7 @@ function unknown_call(frame, position, ::Core.Compiler.NoCallInfo)
     statement.head === :call || return nothing
     named = named_callee(code, statement)
     isnothing(named) && return nothing
-    file, line = statement_site(frame, position)
+    file, line = statement_location(frame.src.debuginfo, frame.linfo, position)
     is_used = !isempty(frame.ssavalue_uses[position])
     callee = named[1]
     via = named[2]
@@ -297,6 +299,72 @@ function unknown_call(frame, position, ::Core.Compiler.NoCallInfo)
 end
 
 unknown_call(_frame, _position, @nospecialize(::Any)) = nothing
+
+# A splatted call keeps its dispatch in `ApplyCallInfo`, and a union of splat shapes keeps one per member.
+# `NoCallInfo` inside either proves nothing about that splat, the same as a direct call left without call info.
+function holds_unknown_apply(info::Core.Compiler.ApplyCallInfo)
+    holds_unknown_call(info.call)
+end
+
+function holds_unknown_apply(info::Core.Compiler.UnionSplitApplyCallInfo)
+    for inner in info.infos
+        holds_unknown_apply(inner) && return true
+    end
+    false
+end
+
+function holds_unknown_apply(info::Core.Compiler.ConstCallInfo)
+    holds_unknown_apply(info.call)
+end
+
+holds_unknown_apply(@nospecialize(::Any)) = false
+
+holds_unknown_call(::Core.Compiler.NoCallInfo) = true
+
+function holds_unknown_call(info::Core.Compiler.ConstCallInfo)
+    holds_unknown_call(info.call)
+end
+
+holds_unknown_call(@nospecialize(::Any)) = false
+
+function record_apply_veto!(facts, frame, position, branches, info)
+    route = call_route(info)
+    if isempty(branches)
+        fact = unknown_apply(frame, position, route)
+        isnothing(fact) || merge_fact!(facts, fact)
+        return
+    end
+    known = call_fact(frame, position, branches, route)
+    merge_fact!(facts, known)
+    veto = veto_fact(known.file, known.line, known.callee, known.via, known.is_used)
+    merge_fact!(facts, veto)
+end
+
+# The splatted call is `_apply_iterate(iterate, f, spreads...)`, so the callee is the third argument.
+function unknown_apply(frame, position, route)
+    code = frame.src
+    statement = code.code[position]
+    name = applied_name(code, statement)
+    isnothing(name) && return nothing
+    file, line = statement_location(frame.src.debuginfo, frame.linfo, position)
+    is_used = !isempty(frame.ssavalue_uses[position])
+    veto_fact(file, line, name, route, is_used)
+end
+
+function applied_name(code, statement::Expr)
+    statement.head === :call || return nothing
+    args = statement.args
+    length(args) < 3 && return nothing
+    head = held_type(code, first(args))
+    head === typeof(Core._apply_iterate) || return nothing
+    func = held_type(code, args[3])
+    isnothing(func) && return nothing
+    name = callee_slot_name(func)
+    name === Symbol("") && return nothing
+    name
+end
+
+applied_name(_code, @nospecialize(::Any)) = nothing
 
 function named_callee(code, statement)
     args = statement.args
@@ -378,17 +446,16 @@ has_flag(flags::UInt32, flag::UInt32) = flags & flag == flag
 
 function call_fact(frame, position, branches, route)
     code = frame.src
-    signature = Base.unwrap_unionall(first(branches).atype)
-    parameters = signature.parameters
+    parameters = signature_types(first(branches).atype)
     is_keyword = length(parameters) >= 3 && parameters[1] === typeof(Core.kwcall)
     called = is_keyword ? parameters[3] : parameters[1]
     via = is_keyword ? :kwcall : route
-    file, line = statement_site(frame, position)
+    file, line = statement_location(frame.src.debuginfo, frame.linfo, position)
     statement = code.code[position]
     is_bare_call = statement isa Expr && statement.head === :call
     is_used = !is_bare_call || !isempty(frame.ssavalue_uses[position])
     is_failing = all(is_unmatched, branches)
-    failing = is_failing ? join((string(branch.atype) for branch in branches), "; ") : ""
+    failing = is_failing ? join((type_text(branch.atype) for branch in branches), "; ") : ""
     is_stub = is_failing && has_no_method(called)
     is_forward = is_keyword && !has_known_names(parameters[2])
     is_concrete = all(branch -> Base.isdispatchtuple(branch.atype), branches)
@@ -401,7 +468,7 @@ function call_fact(frame, position, branches, route)
     returned = returned_type(branches)
     is_value = returned !== Nothing && returned !== Union{}
     is_dropped = !is_used && is_effect_free
-    returns = is_dropped ? string(returned) : ""
+    returns = is_dropped ? type_text(returned) : ""
     callee = callee_slot_name(called)
     targets = matched_methods(branches)
     CallFact(file, line, callee, via, is_used, is_failing, failing, is_stub, is_forward, is_concrete,
@@ -420,21 +487,13 @@ function matched_methods(branches)
     found
 end
 
-# The file and line a statement of unoptimized code records; a macro's expansion keeps the line of its call.
-function statement_site(frame, position)
-    stack = Base.IRShow.buildLineInfoNode(frame.src.debuginfo, frame.linfo, position)
-    isempty(stack) && return (Symbol(""), 0)
-    node = last(stack)
-    (node.file, Int(node.line))
-end
-
 # A `MethodMatchInfo` holds the dispatch's matches in `results.matches` and, per match, the `CodeInstance` inference
 # produced for it in `edges`, or nothing (Compiler/src/stmtinfo.jl).
 is_unmatched(branch::Core.Compiler.MethodMatchInfo) = isempty(branch.results.matches)
 
 function matches_generated(branch::Core.Compiler.MethodMatchInfo)
     for match in branch.results.matches
-        Base.hasgenerator(match.method) && return true
+        is_generated_method(match.method) && return true
     end
     false
 end
@@ -468,13 +527,14 @@ end
 function callee_slot_name(@nospecialize(called))
     func = function_instance(called)
     isnothing(func) || return nameof(func)
-    is_callable_type = called isa DataType && !Base.isType(called)
-    is_callable_type && return nameof(called)
-    Base.isType(called) || return Symbol("")
-    written = only(called.parameters)
-    held = Base.unwrap_unionall(written)
-    held isa DataType || return Symbol("")
-    nameof(held)
+    held = called isa DataType ? type_object_held(called) : nothing
+    if isnothing(held)
+        called isa DataType || return Symbol("")
+        return nameof(called)
+    end
+    body = declared_datatype(held)
+    isnothing(body) && return Symbol("")
+    nameof(body)
 end
 
 # One fact per site, callee and route: two calls of one callee on one line, or one call at two instances, merge.
@@ -601,12 +661,8 @@ end
 # The optimizer copies an inlined method's calls into its caller. A package method keeps its own: the walk reaches it
 # through the caller's resolved edge, at the types the copy holds.
 function is_inlined_package_call(code, position, module_set)
-    debuginfo = code.debuginfo
-    location = Base.IRShow.getdebugidx(debuginfo, position)
-    inlined_index = Int(location[2])
-    inlined_index == 0 && return false
-    inlined = debuginfo.edges[inlined_index].def
-    inlined isa Core.MethodInstance || return false
+    inlined = inlined_instance(code.debuginfo, position)
+    isnothing(inlined) && return false
     method = inlined.def
     method isa Method || return false
     method.module in module_set
@@ -651,7 +707,7 @@ end
 function spread_members(code, sptypes, arg, @nospecialize(spread))
     if spread isa DataType && spread <: Tuple
         parameters = spread.parameters
-        is_open = !isempty(parameters) && Base.isvarargtype(last(parameters))
+        is_open = !isempty(parameters) && is_vararg_type(last(parameters))
         is_open && return nothing
         return collect(Any, parameters)
     end
@@ -687,15 +743,15 @@ end
 # names one function or type; a `DataType` names none, so a call on it matches what the package holds.
 function package_matches(call, landings::CallLandings)
     callee = called_function(call)
-    is_type_object = callee <: Type && !Base.isType(callee)
-    is_known = Base.isType(callee) || (isconcretetype(callee) && !is_type_object)
+    held = callee isa DataType ? type_object_held(callee) : nothing
+    is_type_object = callee <: Type && isnothing(held)
+    is_known = !isnothing(held) || (isconcretetype(callee) && !is_type_object)
     is_known && return known_matches(call, landings.module_set)
     held_matches(call, landings)
 end
 
 function known_matches(call, module_set)
-    world = Base.get_world_counter()
-    matches = Base._methods_by_ftype(call, -1, world)::Vector
+    matches = matching_methods(call)
     kept = Core.MethodMatch[]
     for match in matches
         written = written_method(match.method)
@@ -707,12 +763,11 @@ end
 
 # Each held signature the call's types admit, matched against that function's own methods, kept to held methods.
 function held_matches(call, landings::CallLandings)
-    world = Base.get_world_counter()
     kept = Core.MethodMatch[]
     for prefix in landings.prefixes
         narrowed = typeintersect(call, prefix)
         narrowed === Union{} && continue
-        matches = Base._methods_by_ftype(narrowed, -1, world)::Vector
+        matches = matching_methods(narrowed)
         for match in matches
             match.method in landings.held || continue
             push!(kept, match)
@@ -721,7 +776,7 @@ function held_matches(call, landings::CallLandings)
     kept
 end
 
-can_be_value(method::Method, values) = startswith(string(method.name), "#") || method.name in values
+can_be_value(method::Method, values) = is_generated_name(method.name) || method.name in values
 
 called_instance(target::Core.CodeInstance) = target.def
 called_instance(target::Core.MethodInstance) = target
@@ -737,9 +792,8 @@ end
 function record_passed!(edges, pending, caller, target, module_set)
     is_kwcall_method(target.def) && return
     target.def.module in module_set && return
-    signature = Base.unwrap_unionall(target.specTypes)
-    signature isa DataType || return
-    parameters = signature.parameters
+    parameters = signature_types(target.specTypes)
+    isempty(parameters) && return
     for index in eachindex(parameters)
         index == 1 && continue
         argument = parameters[index]
@@ -757,7 +811,7 @@ end
 function connect_compiled!(edges, pending, caller, owned, module_set)
     connected = false
     for method in owned
-        compiled = Base.specializations(method)
+        compiled = method_instances(method)
         specs = collect(Core.MethodInstance, compiled)
         isempty(specs) && continue
         connected = true
@@ -784,8 +838,7 @@ end
 
 function passed_methods(@nospecialize(argument), module_set)
     signature = Tuple{argument, Vararg{Any}}
-    world = Base.get_world_counter()
-    matches = Base._methods_by_ftype(signature, -1, world)
+    matches = matching_methods(signature)
     found = Method[]
     for match in matches
         method = match.method
@@ -801,12 +854,6 @@ function connect_method!(edges, pending, caller, method, instances, module_set)
     for instance in instances
         enqueue_target!(pending, instance, module_set)
     end
-end
-
-# A method specialized to the part of `signature` its own signature admits, type variables it leaves open kept free.
-function instance_at(method::Method, @nospecialize(signature))
-    intersection = ccall(:jl_type_intersection_with_env, Any, (Any, Any), signature, method.sig)::Core.SimpleVector
-    Core.Compiler.specialize_method(method, intersection[1], intersection[2])
 end
 
 # A method at its declared signature: the widest specialization, so its calls cover every narrower one's.
@@ -825,11 +872,6 @@ function enqueue_target!(pending, target, module_set)
 end
 
 is_kwcall_method(method::Method) = is_kwcall_signature(method.sig)
-
-function is_keyword_body(method::Method)
-    text = string(method.name)
-    occursin(KEYWORD_BODY, text)
-end
 
 function written_method(method::Method)
     is_kwcall_method(method) && return written_from_kwcall(method)
@@ -858,7 +900,7 @@ end
 
 function written_from_body(method::Method)
     wanted = Symbol(written_name(method.name))
-    params = Base.unwrap_unionall(method.sig).parameters
+    params = signature_types(method.sig)
     located = named_function_param(params, wanted)
     isnothing(located) && return method
     func, func_index = located
@@ -879,7 +921,7 @@ end
 # Positional types read from a keyword method can hold the written method's type variables; wrap them again.
 function method_for(func, positional, keyword_method::Method)
     open_types = Tuple{positional...}
-    argtype = Base.rewrap_unionall(open_types, keyword_method.sig)
+    argtype = under_clauses_of(open_types, keyword_method.sig)
     hasmethod(func, argtype) || return nothing
     which(func, argtype)
 end
