@@ -57,7 +57,7 @@ function adopt!(bound, found::Assigned)
     adopt_assigned!(bound, found.assigned)
 end
 
-adopt_assigned!(bound, assigned) = union!(bound, assigned)
+adopt_assigned!(bound::Set{Symbol}, assigned::Set{Symbol}) = union!(bound, assigned)
 
 function adopt_assigned!(bound::Bindings, assigned::Bindings)
     for (name, node) in assigned.declared
@@ -92,7 +92,7 @@ end
 
 # The head and the arguments of a signature's call; nothing past a `where`, a return type, or a bare binding. An infix
 # call keeps its children in source order, so `f ≀ x` holds its operator second.
-function call_parts(signature)
+function call_parts(signature::JS.SyntaxNode)
     call = signature_call(signature)
     isnothing(call) && return nothing
     children = child_nodes(call)
@@ -294,7 +294,7 @@ function declare_sig_name!(names, signature)
 end
 
 # Type variables on `where` clauses, including nested and bounded (`T<:Integer`) forms.
-function where_vars!(names, signature)
+function where_vars!(names, signature::JS.SyntaxNode)
     kind = JS.kind(signature)
     if kind == K"::"
         inner = child_nodes(signature)[1]

@@ -128,7 +128,7 @@ function signature_scope(scope, bound)
     ScanScope(scope.target, bound, scope.depth, scope.loop_depth, scope.site, false, scope.method, true)
 end
 
-function walk_iteration!(scan, node, scope)
+function walk_iteration!(scan, node::JS.SyntaxNode, scope)
     children = child_nodes(node)
     isnothing(children) && return
     kind = JS.kind(node)
@@ -147,7 +147,7 @@ end
 
 # The parts of an assignment's left side that read names: a type annotation, an index target, a property
 # base. A bare binding reads nothing; a macro around one, as `@nospecialize(x::T)`, reads what its argument does.
-function collect_lhs!(found, node)
+function collect_lhs!(found, node::JS.SyntaxNode)
     children = child_nodes(node)
     isnothing(children) && return found
     kind = JS.kind(node)
@@ -388,14 +388,14 @@ function scope_import!(walk::CodeWalk, node)
     end
 end
 
-function import_items(clause)
+function import_items(clause::JS.SyntaxNode)
     JS.kind(clause) == K":" || return [clause]
     children = child_nodes(clause)
     children[2:end]
 end
 
 # A macro's arguments and the names its body assigns are its own; its name is no read.
-function scope_macro!(scan, node, scope)
+function scope_macro!(scan, node::JS.SyntaxNode, scope)
     children = child_nodes(node)
     child_count(children) < 2 && return
     signature = children[1]
@@ -451,7 +451,7 @@ function scope_comprehension!(scan, node, scope)
     walk_scoped!(scan, children[1], scope)
 end
 
-function scope_generator!(scan, node, scope)
+function scope_generator!(scan, node::JS.SyntaxNode, scope)
     children = child_nodes(node)
     child_count(children) == 0 && return
     interior = scope.loop_depth + 1

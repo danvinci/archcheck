@@ -104,7 +104,7 @@ function static_condition(node)::Union{Nothing,Bool}
 end
 
 # The parts of an `if` or `elseif` the load runs: the taken branch when this Julia decides the condition, else all.
-function live_branches(node)
+function live_branches(node::JS.SyntaxNode)
     children = child_nodes(node)
     condition = static_condition(children[1])
     branches = children[2:end]

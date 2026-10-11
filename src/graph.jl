@@ -166,6 +166,13 @@ function next_position!(unit::LoadUnit)
     unit.count[]
 end
 
+# A child's rank is its parent's rank with its own load position after it. `vcat` would promote, and a package's
+# later `promote_rule` drops that cached call.
+function child_rank(parent::Vector{Int}, position::Int)
+    extended = copy(parent)
+    push!(extended, position)
+end
+
 # An inline module is keyed by its dotted path below the package, as a directory module is.
 function inline_key(build::IndexBuild, owner::Symbol, name::Symbol)
     owner === build.root && return name
@@ -224,7 +231,7 @@ function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
         target in build.visited && return
         key, moddir = build.openers[target]
         position = next_position!(unit)
-        rank = [unit.rank; position]
+        rank = child_rank(unit.rank, position)
         build.ranks[key] = rank
         nested = nested_dirs(build, moddir)
         open_module!(build, key, rank, target, nested)
@@ -251,7 +258,7 @@ function place_block!(build::IndexBuild, unit::LoadUnit, block, file)
     isnothing(name) && return
     position = next_position!(unit)
     key = inline_key(build, unit.owner, name)
-    rank = [unit.rank; position]
+    rank = child_rank(unit.rank, position)
     build.ranks[key] = rank
     body = module_body(block)
     push!(build.placements, Placement(key, file, 0, body))
@@ -637,7 +644,7 @@ files_of(index::SourceIndex, mod::Symbol) = [file for file in index.files if fil
 
 # A node's place in load order: its module's rank, then its position there. Compared as vectors, the order is
 # the one Julia loads the code in.
-load_place(file::FileNode) = [file.modrank; file.filerank]
+load_place(file::FileNode) = child_rank(file.modrank, file.filerank)
 
 # Each node's load place by module and path; a module block shares its file's path, so the path alone is ambiguous.
 function load_places(index::SourceIndex)

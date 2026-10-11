@@ -263,7 +263,7 @@ function join_opened_arms!(walk, children, inside, prior_exits)
     join_arm_follows(then_walked, else_walked, prior_exits, split)
 end
 
-function visit_kind!(walk, node, ::WalkOf{:arms}, inside, exits, is_dead)
+function visit_kind!(walk, node::JS.SyntaxNode, ::WalkOf{:arms}, inside, exits, is_dead)
     children = child_nodes(node)
     child_count(children) < 2 && return WalkFollow(false, exits)
     condition = visit_node!(walk, children[1], inside, exits, is_dead)
@@ -289,7 +289,7 @@ function is_bound_clause(node)
     kind == K"="
 end
 
-function visit_iteration!(walk, node, inside, exits, is_dead)
+function visit_iteration!(walk, node::JS.SyntaxNode, inside, exits, is_dead)
     children = child_nodes(node)
     isnothing(children) && return WalkFollow(false, exits)
     if is_bound_clause(node)
@@ -310,7 +310,7 @@ function visit_loop_header!(walk, node, headers, inside, exits, is_dead)
     visit_sequence!(walk, headers, NodeStep(), inside, exits, is_dead)
 end
 
-function visit_kind!(walk, node, ::WalkOf{:loop}, inside, exits, is_dead)
+function visit_kind!(walk, node::JS.SyntaxNode, ::WalkOf{:loop}, inside, exits, is_dead)
     children = child_nodes(node)
     child_count(children) == 0 && return WalkFollow(false, exits)
     last_index = length(children)
@@ -345,7 +345,7 @@ function visit_gen_spec!(walk, node, inside, exits, is_dead)
     nothing
 end
 
-function visit_kind!(walk, node, ::WalkOf{:generator}, inside, exits, is_dead)
+function visit_kind!(walk, node::JS.SyntaxNode, ::WalkOf{:generator}, inside, exits, is_dead)
     children = child_nodes(node)
     child_count(children) == 0 && return WalkFollow(false, exits)
     last_index = length(children)

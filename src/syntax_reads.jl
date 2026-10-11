@@ -56,7 +56,7 @@ function is_field_name(node)
 end
 
 # The type parameters a type definition declares: `T` in `struct S{T<:Real} <: A{T}`.
-function type_parameters(definition)
+function type_parameters(definition::JS.SyntaxNode)
     parameters = Symbol[]
     children = child_nodes(definition)
     child_count(children) == 0 && return parameters

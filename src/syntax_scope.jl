@@ -102,7 +102,8 @@ end
 local_names(found::Assigned) = found.declared
 local_names(bound) = bound
 
-function nested_bound(outer, extra, body)
+# The walk passes bindings; a method body passes a name set. An untyped copy infers as a vector.
+function nested_bound(outer::Union{Set{Symbol},Bindings}, extra::Union{Set{Symbol},Bindings}, body::JS.SyntaxNode)
     bound = copy(outer)
     union!(bound, extra)
     found = assignments(outer)
@@ -152,7 +153,7 @@ function iteration_names!(bound, node)
 end
 
 # `outer`, plus the names `binder` finds from `first_position` through the child before `index`.
-function bound_before(outer, children, index, binder, first_position)
+function bound_before(outer, children, index::Int, binder, first_position::Int)
     last_earlier = index - 1
     last_earlier < first_position && return outer
     bound = copy(outer)
@@ -224,7 +225,7 @@ function while_child(children, index, outer)
     outer
 end
 
-function generator_child(children, index, outer)
+function generator_child(children::Vector{JS.SyntaxNode}, index::Int, outer)
     if index == 1
         extra = empty(outer)
         for spec in children[2:end]
@@ -331,7 +332,7 @@ function child_locals(node, index, outer)
 end
 
 # The lambda arguments and loop variables this child binds itself, including a name the outer scope already holds.
-function child_bindings(node, index)
+function child_bindings(node::JS.SyntaxNode, index::Int)
     names = Set{Symbol}()
     children = child_nodes(node)
     isnothing(children) && return names

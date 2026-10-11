@@ -65,7 +65,7 @@ end
 # A node that runs one of its arms by its test: an if, an elseif, a ternary.
 is_branch_kind(kind) = kind == K"if" || kind == K"elseif" || kind == K"?"
 
-function source_line(node)
+function source_line(node::JS.SyntaxNode)
     location = JS.source_location(node)
     Int(location[1])
 end
@@ -119,7 +119,13 @@ function collapse_plain(text)
     String(take!(buffer))
 end
 
-function collapsed_tokens(text)
+# `String(::AbstractString)` infers as `Any`, so the wide method must not call `tokenize` itself.
+function collapsed_tokens(text::AbstractString)
+    source = String(text)::String
+    collapsed_tokens(source)
+end
+
+function collapsed_tokens(text::String)
     buffer = IOBuffer()
     pending_space = false
     started = false

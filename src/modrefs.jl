@@ -94,7 +94,7 @@ function resolve_opening(scope, dots)
 end
 
 # The project module a path reaches from `scope`, and how many names of that path it spans.
-function resolve_module(modules::ModuleNames, scope, path, dots)
+function resolve_module(modules::ModuleNames, scope::Vector{Symbol}, path::Vector{Symbol}, dots::Int)
     opening = resolve_opening(scope, dots)
     rest = path[2:end]
     for depth in opening:-1:0
@@ -358,7 +358,7 @@ end
 
 # Where an import path opens, and the names after its opening. With no leading dot it opens at the loaded top-level
 # module its first name names; with dots, at the module its first name binds in `home` or a parent per further dot.
-function path_opening(modules::ReachModules, home, dots, path)
+function path_opening(modules::ReachModules, home, dots::Int, path::Vector{Symbol})
     rest = path[2:end]
     if dots == 0
         opened = get(modules.top, first(path), nothing)
