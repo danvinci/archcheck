@@ -29,8 +29,13 @@ struct CloneGroup
     sites::Vector{CloneSite}    # places this subtree text occurs
 end
 
-# Each node's local names along the scopes down from its method body.
-const ChainBounds = IdDict{JS.SyntaxNode,Set{Symbol}}
+# One node of a method body: the local names its scopes give it, and the size of its subtree.
+struct NodeScope
+    bound::Set{Symbol}   # local names along the scopes down from the method body
+    nodes::Int           # syntax nodes in the subtree, this node included
+end
+
+const ChainBounds = IdDict{JS.SyntaxNode,NodeScope}
 
 mutable struct MixState
     primary::UInt64            # running first mix
@@ -38,7 +43,7 @@ mutable struct MixState
     nodes::Int                 # nodes visited so far
     next_local::Int            # count of distinct locals seen so far
     renames::Dict{Symbol,Int}  # local name to its first-appearance number
-    const chained::ChainBounds # local names of every node in the method body, read until a quote
+    const chained::ChainBounds # scope of every node in the method body, its local names read until a quote
 end
 
 function absorb!(state, token)
@@ -51,16 +56,20 @@ function empty_mix(chained)
     MixState(zero(UInt64), MIX_SALT, 0, 0, renames, chained)
 end
 
-# One scope computation per node of a method body, shared by every subtree digested inside it.
+# One scope computation per node of a method body, shared by every subtree digested inside it. Returns the node's
+# subtree size.
 function chain_bounds!(chained, node, bound)
-    chained[node] = bound
     children = child_nodes(node)
-    isnothing(children) && return chained
-    for index in eachindex(children)
-        inner = child_locals(node, index, bound)
-        chain_bounds!(chained, children[index], inner)
+    total = 1
+    if !isnothing(children)
+        for index in eachindex(children)
+            inner = child_locals(node, index, bound)
+            child_total = chain_bounds!(chained, children[index], inner)
+            total += child_total
+        end
     end
-    chained
+    chained[node] = NodeScope(bound, total)
+    total
 end
 
 function local_slot!(state, name)
@@ -119,7 +128,10 @@ end
 # names are the ones its method body's scopes give it.
 function scoped_bound(state, node, index, bound, child, quoted)
     if JS.kind(node) != K"quote"
-        quoted || return state.chained[child]
+        if !quoted
+            scope = state.chained[child]
+            return scope.bound
+        end
         return child_locals(node, index, bound)
     end
     if JS.kind(child) == K"$"
@@ -153,22 +165,9 @@ end
 
 function digest_of(node, chained)
     state = empty_mix(chained)
-    bound = chained[node]
-    absorb_tree!(state, node, bound, :value, false)
+    scope = chained[node]
+    absorb_tree!(state, node, scope.bound, :value, false)
     CloneDigest(state.primary, state.secondary, state.nodes)
-end
-
-function count_nodes!(counts, node)
-    children = child_nodes(node)
-    total = 1
-    if !isnothing(children)
-        for child in children
-            child_total = count_nodes!(counts, child)
-            total += child_total
-        end
-    end
-    counts[node] = total
-    total
 end
 
 function push_site!(grouped, digest, method, node, path)
@@ -178,9 +177,9 @@ function push_site!(grouped, digest, method, node, path)
     push!(get!(Vector{CloneSite}, grouped, digest), site)
 end
 
-function walk_sites!(grouped, counts, node, method, path, min_nodes, chained)
-    counted = get(counts, node, 0)
-    if counted < min_nodes
+function walk_sites!(grouped, node, method, path, min_nodes, chained)
+    scope = chained[node]
+    if scope.nodes < min_nodes
         return
     end
     digest = digest_of(node, chained)
@@ -191,7 +190,7 @@ function walk_sites!(grouped, counts, node, method, path, min_nodes, chained)
         child = children[index]
         is_method_form(child) && continue
         child_path = vcat(path, index)
-        walk_sites!(grouped, counts, child, method, child_path, min_nodes, chained)
+        walk_sites!(grouped, child, method, child_path, min_nodes, chained)
     end
 end
 
@@ -290,12 +289,11 @@ function expression_clone_findings(index, min_nodes)
     grouped = Dict{CloneDigest,Vector{CloneSite}}()
     places = load_places(index)
     for file in index.files
-        counts = IdDict{JS.SyntaxNode,Int}()
-        count_nodes!(counts, file.tree)
         for method in file.bodies
             root_path = Int[]
-            chained = chain_bounds!(ChainBounds(), method.body, method.bound)
-            walk_sites!(grouped, counts, method.body, method, root_path, min_nodes, chained)
+            chained = ChainBounds()
+            chain_bounds!(chained, method.body, method.bound)
+            walk_sites!(grouped, method.body, method, root_path, min_nodes, chained)
         end
     end
     kept = keep_groups(grouped)
