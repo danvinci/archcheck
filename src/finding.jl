@@ -35,14 +35,17 @@ end
 
 fingerprint(f::Finding) = FindingKey(string(f.mod), string(f.kind), f.file, f.symbol)
 
-# One JSON object per line, greppable per module. `severity` is the one the gate applied, promotions included.
+const REPORT_FIELDS = (:module, :kind, :severity, :file, :line, :symbol, :detail, :evidence)
+
+# One JSON object per line, greppable per module. `severity` is the one the gate applied, promotions included. Every
+# field has a concrete type, so one compiled writer serves every finding.
 function emit_jsonl(io::IO, findings, severity)
     for f in findings
-        JSON.print(io, Dict("module" => string(f.mod), "kind" => string(f.kind),
-                            "severity" => string(severity[f.kind]),
-                            "file" => f.file, "line" => f.line, "symbol" => f.symbol,
-                            "detail" => f.detail,
-                            "evidence" => Dict(string(k) => v for (k, v) in f.evidence)))
+        evidence = Dict{String,String}(string(key) => value for (key, value) in f.evidence)
+        level = string(severity[f.kind])
+        values = (string(f.mod), string(f.kind), level, f.file, f.line, f.symbol, f.detail, evidence)
+        record = NamedTuple{REPORT_FIELDS}(values)
+        JSON.print(io, record)
         println(io)
     end
 end
@@ -95,6 +98,9 @@ function print_findings(io::IO, findings, severity)
     end
 end
 
+# Inset under a finding line: 24 spaces, the width of the mark, owner and kind columns.
+const EVIDENCE_PAD = "                        "
+
 # The delta in full, the standing set as per-kind counts. Rank order so consecutive runs diff cleanly.
 function print_architecture(io::IO, findings, new, fixed, rank, severity)
     standing = length(findings) - length(new)
@@ -110,7 +116,7 @@ function print_architecture(io::IO, findings, new, fixed, rank, severity)
             owner = rpad(string(f.mod), 12)
             kind = rpad(string(f.kind), 16)
             println(io, "    [$mark] ", owner, kind, location(f), "  -  ", f.detail)
-            isempty(f.evidence) || println(io, " "^24, render_evidence(f))
+            isempty(f.evidence) || println(io, EVIDENCE_PAD, render_evidence(f))
         end
     end
 

@@ -164,7 +164,15 @@ function package_layout(parses::Parses, spine_path::AbstractString, root::Symbol
 end
 
 # The root once with every loaded module: a single-module package's root is also its one module.
-package_modules(root::Module, mods) = unique!([root; mods])
+function package_modules(root::Module, mods)
+    loaded = Vector{Module}()
+    push!(loaded, root)
+    for mod in mods
+        module_value = mod::Module
+        push!(loaded, module_value)
+    end
+    unique!(loaded)
+end
 package_modules(ctx) = package_modules(ctx.root, ctx.mods)
 
 # Each wrapper declares its nested modules by the package spine's rule. A nested module is keyed by its dotted path.

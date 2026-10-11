@@ -189,7 +189,8 @@ function walk_sites!(grouped, node, method, path, min_nodes, chained)
     for index in eachindex(children)
         child = children[index]
         is_method_form(child) && continue
-        child_path = vcat(path, index)
+        child_path = copy(path)
+        push!(child_path, index)
         walk_sites!(grouped, child, method, child_path, min_nodes, chained)
     end
 end

@@ -46,7 +46,8 @@ end
 function walk_tail!(state, scope, node)
     children = child_nodes(node)
     isnothing(children) && return
-    for index in 2:length(children)
+    last_index = length(children)::Int
+    for index in 2:last_index
         inner = child_scope(scope, node, index)
         walk_field_reads!(state, inner, children[index])
     end
@@ -88,14 +89,16 @@ end
 
 function walk_for!(state, scope, node)
     children = child_nodes(node)
-    last_index = length(children)
-    spec_range = 1:(last_index - 1)
+    last_index = length(children)::Int
+    spec_end = last_index - 1
+    spec_range = 1:spec_end
     walk_iterated!(state, scope, node, spec_range, last_index)
 end
 
 function walk_generator!(state, scope, node)
     children = child_nodes(node)
-    spec_range = 2:length(children)
+    last_index = length(children)::Int
+    spec_range = 2:last_index
     walk_iterated!(state, scope, node, spec_range, 1)
 end
 

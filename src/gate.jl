@@ -25,10 +25,22 @@ function gate(pkg::Module;
               entries = (),
               derived::Tuple{Vararg{Derived}} = ())
     listed = collect(Check, checks)
-    severity = severities(listed; error_kinds)   # before the parse, so a bad error_kinds fails fast
-    static = checks_in(listed, :static)
-    walking = checks_in(listed, :graph)
-    observing = checks_in(listed, :workload)
+    directories = collect(String, entry_dirs)
+    promoted = collect(Symbol, error_kinds)
+    source = String(src)
+    report = String(report_path)
+    run_gate(pkg, source, directories, report, io, listed, promoted, workload, probes, entries, derived)
+end
+
+# Inferred once at these types, whatever keywords a caller passed: the keyword method above only narrows them.
+Base.@nospecializeinfer function run_gate(pkg::Module, src::String, entry_dirs::Vector{String}, report_path::String,
+                                         @nospecialize(io::IO), checks::Vector{Check}, error_kinds::Vector{Symbol},
+                                         @nospecialize(workload), probes::Union{Nothing,Probes},
+                                         @nospecialize(entries), @nospecialize(derived::Tuple{Vararg{Derived}}))
+    severity = severities(checks; error_kinds)   # before the parse, so a bad error_kinds fails fast
+    static = checks_in(checks, :static)
+    walking = checks_in(checks, :graph)
+    observing = checks_in(checks, :workload)
     if isnothing(workload)
         waiting = typeof.(observing)
         isempty(observing) || throw(ArgumentError("workload checks $waiting need a workload"))

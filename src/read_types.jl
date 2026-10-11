@@ -179,7 +179,9 @@ function written_type(mod::Module, node)
         head = written_type(mod, head_node)
         head isa Type || return nothing
         parameters = Any[]
-        for part in parts[2:end]
+        last_index = lastindex(parts)::Int
+        for index in 2:last_index
+            part = parts[index]
             parameter = written_parameter(mod, part)
             isnothing(parameter) && return nothing
             push!(parameters, parameter)
@@ -293,7 +295,7 @@ concrete_type(T) = T isa DataType && isconcretetype(T) ? T : nothing
 
 # The one concrete type Julia infers for calling f with arguments of these types; nothing for any other result. A call
 # more methods match than inference follows infers Any, so the scan skips it.
-function inferred_type(f, signature)
+Base.@nospecializeinfer function inferred_type(@nospecialize(f), @nospecialize(signature))
     matches = methods(f, signature)
     (isempty(matches) || length(matches) > INFERENCE_METHODS_MAX) && return nothing
     result = inferred_return_type(f, signature)
@@ -301,11 +303,12 @@ function inferred_type(f, signature)
 end
 
 # The inferred concrete type, asked of inference once per callee and signature in a run.
-function known_inferred_type(state, f, signature)
+Base.@nospecializeinfer function known_inferred_type(state, @nospecialize(f), @nospecialize(signature))
     key = (f, signature)
-    get!(state.inferred, key) do
-        inferred_type(f, signature)
-    end
+    haskey(state.inferred, key) && return state.inferred[key]
+    found = inferred_type(f, signature)
+    state.inferred[key] = found
+    found
 end
 
 # The NamedTuple type a call's keyword arguments form; nothing when one is splatted or not named plainly.
@@ -361,14 +364,16 @@ end
 function call_type(state, scope, node)
     children = child_nodes(node)
     head = first(children)
-    operands = children[2:end]
+    last_index = lastindex(children)::Int
+    operands = children[2:last_index]
     if JS.is_infix_op_call(node)
         head = children[2]
-        operands = children[3:end]
+        operands = children[3:last_index]
         pushfirst!(operands, children[1])
     elseif JS.is_postfix_op_call(node)
-        head = last(children)
-        operands = children[1:end-1]
+        head = children[last_index]
+        front = last_index - 1
+        operands = children[1:front]
     end
     path = dotted_names(head)
     isnothing(path) && return nothing

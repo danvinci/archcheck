@@ -41,11 +41,16 @@ function all_foreign(types, owns)
     true
 end
 
+# A module's full name, `fullname(mod)`: the root's name, then each enclosing module's, then its own.
+const ModulePath = Tuple{Vararg{Symbol}}
+
 # Whether a module's full name is `scope` or starts with it; `exact` takes `scope` alone.
-function is_in_scope(mod, scope, exact::Bool)
+function is_in_scope(mod::Module, scope::ModulePath, exact::Bool)
     full = fullname(mod)
     exact && return full == scope
-    taken = min(length(full), length(scope))
+    full_length = length(full)
+    scope_length = length(scope)
+    taken = min(full_length, scope_length)
     prefix = full[1:taken]
     prefix == scope
 end
@@ -63,9 +68,6 @@ function is_extension(mod::Module, repo)
     parts = splitpath(file)
     first(parts) == EXTENSION_DIR
 end
-
-# A module's full name, `fullname(mod)`: the root's name, then each enclosing module's, then its own.
-const ModulePath = Tuple{Vararg{Symbol}}
 
 # The full module names whose functions and subtree types a method's module owns: the package's, or with `strict` its
 # own. An extension adds the root's methods to its own and other packages' types, so it owns both in either mode.

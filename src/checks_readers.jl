@@ -316,7 +316,24 @@ function bound_name(node)
     first(names)
 end
 
-symbol_held(node, held) = node.val isa Symbol && node.val in held
+function symbol_held(node, held::Set{Symbol})
+    value = node.val
+    value isa Symbol || return false
+    name = value::Symbol
+    name in held
+end
+
+function names_without(held::Set{Symbol}, removed::Set{Symbol})
+    kept = copy(held)
+    setdiff!(kept, removed)
+    kept
+end
+
+function names_without(held::Set{Symbol}, name::Symbol)
+    kept = copy(held)
+    delete!(kept, name)
+    kept
+end
 
 function callee_of(node)
     children = child_nodes(node)
@@ -402,7 +419,8 @@ function walk_assign(walk, node, children, bound, held)
     end
     name = bound_name(lhs)
     isnothing(name) && return HeldStep(held, stepped.bridged)
-    next = setdiff(held, (name,))
+    held_names = held::Set{Symbol}
+    next = names_without(held_names, name)
     keeps_held(walk, rhs, held) && push!(next, name)
     HeldStep(next, stepped.bridged)
 end
@@ -472,13 +490,15 @@ function walk_scope(walk, node, children, bound, held)
     current = held
     last_index = length(children)
     for index in eachindex(children)
-        child_bound = child_locals(node, index, bound)
+        child_bound = child_locals(node, index, bound)::Set{Symbol}
         names = child_bindings(node, index)
         if !(kind == K"let" && index == last_index)
-            introduced = setdiff(child_bound, bound)
+            parent_bound = bound::Set{Symbol}
+            introduced = names_without(child_bound, parent_bound)
             union!(names, introduced)
         end
-        child_held = setdiff(current, names)
+        active = current::Set{Symbol}
+        child_held = names_without(active, names)
         stepped = walk_node(walk, children[index], child_bound, child_held)
         bridged = bridged || stepped.bridged
         if kind == K"block" || (kind == K"let" && index < last_index)
