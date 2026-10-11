@@ -266,6 +266,23 @@ function concrete_type_named(home::Module, name::Symbol)
     unwrapped
 end
 
+# The members of a family that are subtypes of `super`, all or those an alias tying parameters together admits;
+# nothing when none is. `typeintersect` may overshoot, so its result is held to `super`.
+function members_under(family::Type, super::Type)
+    members = typeintersect(family, super)
+    members === Union{} && return nothing
+    members <: super || return nothing
+    members
+end
+
+# Whether some method of `reader`, the members' own or an inherited one, matches them with the extra argument types.
+# A method typed by the family's own parameter matches without covering every parameter.
+function has_matching_method(reader, members::Type, extras::Type{<:Tuple})
+    signature = Tuple{Core.Typeof(reader), members, extras.parameters...}
+    matched = matching_methods(signature)
+    !isempty(matched)
+end
+
 # Every concrete subtype of `super` answers each (reader, extra-argument types) pair, including inherited methods.
 function check_reader_set(mods, super::Type, required; sites = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}())
     findings = Finding[]
@@ -274,16 +291,16 @@ function check_reader_set(mods, super::Type, required; sites = Dict{Tuple{Symbol
         unwrapped = concrete_type_named(home, name)
         isnothing(unwrapped) && continue
         family = unwrapped.name.wrapper
-        family <: super || continue
         family == super && continue
         family in seen && continue
+        members = members_under(family, super)
+        isnothing(members) && continue
         push!(seen, family)
         owner = module_key(parentmodule(unwrapped))
         type_name = nameof(unwrapped)
         file, line = site_of(sites, owner, type_name, ("", 0))
         for (reader, extras) in required
-            signature = Tuple{family, extras.parameters...}
-            hasmethod(reader, signature) && continue
+            has_matching_method(reader, members, extras) && continue
             reader_name = nameof(reader)
             symbol = "$(type_name).$(reader_name)"
             detail = "the type answers no method matching this reader"

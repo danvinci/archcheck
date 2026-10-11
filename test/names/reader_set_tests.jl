@@ -48,6 +48,24 @@ x_span(::Comp) = nothing
 triangles(::Comp) = nothing
 """)
 
+# `holds` takes a key of the store's own key type; `SameLedger` names only the ledgers whose two parameters agree.
+const KEYED_READER = load_package("KeyedReader", """
+abstract type Store{K} end
+struct Shelf{K} <: Store{K}
+    items::Vector{K}
+end
+holds(store::Shelf{K}, key::K) where {K} = key in store.items
+struct Bare <: Store{Int}
+end
+abstract type Ledger{K,V} end
+const SameLedger = Ledger{K,K} where {K}
+struct Book{K,V} <: Ledger{K,V}
+end
+holds(book::Book{K,K}, key::K) where {K} = true
+struct Sheet{K,V} <: Ledger{K,V}
+end
+""")
+
 function reader_findings(case)
     pkg = case.pkg
     required = (
@@ -77,4 +95,20 @@ end
     @test isempty(answered)
     generic = reader_findings(GENERIC_READER)
     @test isempty(generic)
+end
+
+@testset "a reader typed by the subtype's own parameter answers it" begin
+    pkg = KEYED_READER.pkg
+    readers = ((pkg.holds, Tuple{Any}),)
+    check = ReaderSet(pkg.Store, readers)
+    found = ArchCheck.run(check, case_context(KEYED_READER))
+    @test [f.symbol for f in found] == ["Bare.holds"]
+end
+
+@testset "a family that is a subtype only for some parameters is judged on those" begin
+    pkg = KEYED_READER.pkg
+    readers = ((pkg.holds, Tuple{Any}),)
+    check = ReaderSet(pkg.SameLedger, readers)
+    found = ArchCheck.run(check, case_context(KEYED_READER))
+    @test [f.symbol for f in found] == ["Sheet.holds"]
 end
