@@ -787,6 +787,33 @@ function add_edge!(edges, caller, callee)
     push!(callees, callee)
 end
 
+# A keyword sorter's edge to its own body is the fold onto the method the source wrote.
+function add_folded_edge!(edges, caller_method::Method, callee_method::Method, module_set)
+    caller = written_method(caller_method)
+    callee = written_method(callee_method)
+    caller.module in module_set || return
+    callee.module in module_set || return
+    is_body = callee === caller && is_keyword_body(callee_method)
+    is_body && return
+    add_edge!(edges, caller, callee)
+end
+
+"""Package calls recorded on `instances`' native code, joined onto `graph`'s edges. An added edge carries no call fact."""
+function add_compiled_edges!(graph::MethodGraph, instances, modules)
+    module_set = Set{Module}(modules)
+    for instance in instances
+        caller_method = instance.def
+        caller_method isa Method || continue
+        # A replaced method stays in the table, and the code on it is the definition a later one overwrote.
+        is_latest(caller_method) || continue
+        for callee_method in compiled_edge_methods(instance)
+            is_latest(callee_method) || continue
+            add_folded_edge!(graph.edges, caller_method, callee_method, module_set)
+        end
+    end
+    graph
+end
+
 # A function passed into an outside call expands at the specialization that inference compiled for it.
 # When that call compiled none, the method expands at its declared signature.
 function record_passed!(edges, pending, caller, target, module_set)

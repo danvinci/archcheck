@@ -80,6 +80,15 @@ end
     @test ev(hit, :callers_in_own_file) == "0"
 end
 
+# `split` calls a different file from each method, so the name is not sinkable. The entry reaches neither method.
+# The workload compiles only the `Int` method, whose callee sits in one lower file.
+const SINK_COMPILED_SPINE = "include(\"low_a.jl\")\ninclude(\"low_b.jl\")\ninclude(\"home.jl\")\n"
+const SINK_COMPILED = load_package("SinkCompiled", SINK_COMPILED_SPINE, [
+    "low_a.jl" => "alpha(x::Int) = x\n",
+    "low_b.jl" => "beta(x::String) = x\n",
+    "home.jl" => "entry() = 1\nsplit(x::Int) = alpha(x)\nsplit(x::String) = beta(x)\n",
+])
+
 @testset "method grain: a caller beside one method leaves the other method sinkable" begin
     named = sink_findings(SINK_PLACED)
     @test isempty(named)
@@ -92,4 +101,39 @@ end
     @test away.line == 1
     @test ev(away, :callees_in) == "low.jl"
     @test ev(away, :callers_in_own_file) == "0"
+end
+
+# Keeps the method graph a gate built, so a test can read its edges and its call facts.
+module SinkEdges
+    using ArchCheck
+    struct Keep <: Check end
+    const LAST = Ref{Any}(nothing)
+    ArchCheck.phase(::Keep) = :graph
+    function ArchCheck.run(::Keep, ctx)
+        LAST[] = ctx.methods
+        Finding[]
+    end
+    ArchCheck.kinds(::Keep) = (:kept_edges => :advisory,)
+end
+
+@testset "a call the workload compiled and the walk missed is that method's callee file" begin
+    pkg = SINK_COMPILED.pkg
+    entries = ((pkg.entry, Tuple{}),)
+    named = sink_findings(SINK_COMPILED; entries)
+    @test isempty(named)
+    workload = () -> pkg.split(1)
+    checks = (FileSinkable(), SinkEdges.Keep())
+    found = gate_findings(pkg; checks, entries, workload)
+    sink = filter(finding -> finding.kind === :file_sinkable, found)
+    hit = only(sink)
+    @test hit.symbol == "split"
+    @test endswith(hit.file, "home.jl")
+    @test hit.line == 2
+    @test ev(hit, :callees_in) == "low_a.jl"
+    @test ev(hit, :callers_in_own_file) == "0"
+    graph = SinkEdges.LAST[]
+    compiled = which(pkg.split, (Int,))
+    callee = which(pkg.alpha, (Int,))
+    @test callee in graph.edges[compiled]
+    @test !haskey(graph.calls, compiled)
 end

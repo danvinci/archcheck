@@ -3,6 +3,7 @@
 """What the method table holds after one run of the workload, the probed calls that run made, and the waits those calls logged."""
 struct Observation
     reached::Set{Method}             # live methods compiled during the run or earlier, read before the method graph's walk; a keyword body, a restored probe or an all-Any constructor credits its method
+    specializations::Base.IdSet{Core.MethodInstance}   # the package's specializations when the run ended, before the walk adds its own
     records::Vector{ProbeRecord}     # probed calls of at least the probes' slow threshold; empty when nothing is probed
     waits::Vector{WaitRecord}        # waits those calls logged; empty when nothing is probed
     seconds::Float64                 # the workload's wall time (s)
@@ -110,7 +111,8 @@ function is_generated(method::Method)
     is_generated_function_type(ft)
 end
 
-# What the package has compiled so far. Read before the method graph's walk, whose specializations would count too.
+# What the package has compiled so far, and the specializations that show it. Read before the method graph's walk,
+# whose specializations would count too.
 function compiled_methods(modules)
     existing = existing_specializations(modules)
     reached = Set{Method}()
@@ -119,7 +121,7 @@ function compiled_methods(modules)
     end
     defined = project_methods(modules)
     credit_typed_constructors!(reached, defined, existing)
-    reached
+    (reached, existing)
 end
 
 function defined_callable(method::Method)
@@ -216,7 +218,7 @@ function observe(workload, probes, ctx)
             waits = traced.waits
         end
     end
-    reached = Base.invokelatest(compiled_methods, modules)
+    reached, specializations = Base.invokelatest(compiled_methods, modules)
     Base.invokelatest(credit_restored!, reached, probed_compiled)
-    Observation(reached, records, waits, elapsed)
+    Observation(reached, specializations, records, waits, elapsed)
 end

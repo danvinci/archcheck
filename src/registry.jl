@@ -116,12 +116,15 @@ function Context(ctx::Context; observed::Observation)
 end
 
 # The context with the calls between methods from `entries`; unchanged when none is declared. The walk makes a
-# specialization of each method it walks, so a workload's reach is read before it.
+# specialization of each method it walks, so a workload's reach and compiled calls are read before it.
 function with_method_graph(ctx::Context, entries)
     isempty(entries) && return ctx
     project = package_modules(ctx)
     names = value_names(ctx.index)
     methods = method_graph(entries, project, names)
+    if !isnothing(ctx.observed)
+        add_compiled_edges!(methods, ctx.observed.specializations, project)
+    end
     Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, methods,
             ctx.observed, ctx.derived)
 end

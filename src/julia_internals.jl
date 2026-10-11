@@ -326,17 +326,44 @@ has_padding(type::DataType) = Base.datatype_haspadding(type)
 # The local `@sync` binds its task list to, `Base.sync_varname`; an `@async` inside the block pushes its task there.
 sync_binding() = Base.sync_varname
 
-"""Whether the native code compiled for `signature` is unconditionally consistent; nothing when none is compiled. A
-`CodeInstance` keeps its effects in `ipo_purity_bits`, which `Compiler.decode_effects` reads (Compiler/src/effects.jl)."""
-function compiled_consistency(signature::Type)
-    instance = Base.method_instance(signature)
-    isnothing(instance) && return nothing
+"""The native code Julia compiled for `instance`. An instance's `cache` chains its `CodeInstance`s through `next`;
+the native one has no `owner`, which an external interpreter's entries set."""
+function native_code(instance::Core.MethodInstance)
     isdefined(instance, :cache) || return nothing
     code = instance.cache
     while !isnothing(code.owner)
         isdefined(code, :next) || return nothing
         code = code.next
     end
+    code
+end
+
+"""Whether the native code compiled for `signature` is unconditionally consistent; nothing when none is compiled. A
+`CodeInstance` keeps its effects in `ipo_purity_bits`, which `Compiler.decode_effects` reads (Compiler/src/effects.jl)."""
+function compiled_consistency(signature::Type)
+    instance = Base.method_instance(signature)
+    isnothing(instance) && return nothing
+    code = native_code(instance)
+    isnothing(code) && return nothing
     effects = Core.Compiler.decode_effects(code.ipo_purity_bits)
     Core.Compiler.is_consistent(effects)
+end
+
+"""The methods `instance`'s native code calls, by its edges; `ForwardToBackedgeIterator` (Compiler/src/typeinfer.jl)
+names the method of a resolved call or an invoke, and none for a method-table lookup or a binding."""
+function compiled_edge_methods(instance::Core.MethodInstance)
+    code = native_code(instance)
+    isnothing(code) && return Method[]
+    edges = code.edges
+    edges isa Core.SimpleVector || return Method[]
+    found = Method[]
+    backedges = Core.Compiler.ForwardToBackedgeIterator(edges)
+    for landed in backedges
+        item = landed[2]
+        item isa Core.MethodInstance || continue
+        method = item.def
+        method isa Method || continue
+        push!(found, method)
+    end
+    found
 end
