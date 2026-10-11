@@ -395,11 +395,14 @@ function visit_kind!(walk, node, ::WalkOf{:closure}, inside, exits, is_dead)
     WalkFollow(false, exits)
 end
 
+# A spliced member, `a.$(f(x))`, is walked on the base's path.
 function visit_kind!(walk, node, ::WalkOf{:dot}, inside, exits, is_dead)
     children = child_nodes(node)
     has_pair = child_count(children) == 2
-    has_pair && return visit_node!(walk, children[1], inside, exits, is_dead)
-    visit_children!(walk, node, inside, exits, is_dead)
+    has_pair || return visit_children!(walk, node, inside, exits, is_dead)
+    spliced = JS.kind(children[2]) == K"$"
+    spliced && return visit_children!(walk, node, inside, exits, is_dead)
+    visit_node!(walk, children[1], inside, exits, is_dead)
 end
 
 function visit_lhs!(walk, node, inside, exits, is_dead)

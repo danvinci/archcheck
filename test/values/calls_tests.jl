@@ -203,6 +203,17 @@ function base_twice(steps::Steps, size::Int)
 end
 steps_twice(steps::Steps) = (steps - 2).count + (steps - 2).count
 mixed_twice(steps::Steps, size::Int) = (size - 1) + (size - 1) + (steps - 1).count
+function splice_arms(kind::Int, xs::Int)
+    if kind == 1
+        return :(\$(inner(xs)))
+    else
+        return :(label.\$(inner(xs)))
+    end
+end
+function splice_twice(xs::Int)
+    :(pair.\$(inner(xs)).\$(inner(xs)))
+    xs
+end
 """
 
 const BRANCH_ARGUMENTS = Tuple{Int,Vector{Int},Int,Int}
@@ -252,6 +263,8 @@ function call_entries(pkg)
     push!(entries, (pkg.base_twice, Tuple{pkg.Steps,Int}))
     push!(entries, (pkg.steps_twice, Tuple{pkg.Steps}))
     push!(entries, (pkg.mixed_twice, Tuple{pkg.Steps,Int}))
+    push!(entries, (pkg.splice_arms, Tuple{Int,Int}))
+    push!(entries, (pkg.splice_twice, Tuple{Int}))
     entries
 end
 
@@ -595,6 +608,14 @@ const KEEP_ROOT = load_package("KeepRoot", """
         @test !("base_twice" in symbols)
         @test !("mixed_twice" in symbols)
         @test ("steps_twice", "-(steps, 2)", "-") in got
+    end
+
+    @testset "a call spliced into a member keeps the path it stands on" begin
+        got = overlap_records(CALL_PROBE_FOUND)
+        symbols = record_symbols(got)
+        @test !("splice_arms" in symbols)
+        spliced = ("splice_twice", "inner(xs)", "inner")
+        @test spliced in got
     end
 
     @testset "overlapping calls need entries" begin
