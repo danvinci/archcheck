@@ -34,14 +34,6 @@ function method_before(left, right)
     left_order < right_order
 end
 
-function qualifier_matches(method, qualifier)
-    isempty(qualifier) && return true
-    path = join(fullname(method.module), ".")
-    path == qualifier && return true
-    suffix = "." * qualifier
-    endswith(path, suffix)
-end
-
 function is_loop_call(node)
     JS.kind(node) == K"call" || return false
     children = child_nodes(node)
@@ -106,18 +98,23 @@ function costs_work(index, ordered, method)
     false
 end
 
-function resolved_targets(ordered, caller, call)
-    found = Method[]
-    for method in callees_of(ordered, caller)
-        method.name === call.callee || continue
-        qualifier_matches(method, call.qualifier) || continue
-        push!(found, method)
+# The methods every call of the name on a site's line lands on, as the walk's inference matched them; none for a
+# call it holds no fact on.
+function site_targets(facts, path, line, callee)
+    key = (path, line, callee)
+    at = get(facts, key, CallFact[])
+    isempty(at) && return Method[]
+    found = first(at).targets
+    for fact in at
+        found = intersect(found, fact.targets)
     end
     found
 end
 
-function repeated_costs(index, ordered, caller, call)
-    targets = resolved_targets(ordered, caller, call)
+resolved_targets(facts, path, call) = site_targets(facts, path, call.line, call.callee)
+
+function repeated_costs(index, ordered, facts, path, call)
+    targets = resolved_targets(facts, path, call)
     for target in targets
         costs_work(index, ordered, target) && return true
     end
@@ -143,11 +140,12 @@ end
 
 is_pure_call(fact::CallFact) = fact.is_concrete && fact.is_effect_free && fact.is_consistent
 
-# A method's body, the parameter name at each positional slot, and the loop elements each parameter yields. A name
-# the body binds again holds another value there, so its slot carries nothing.
+# A method's file, body, the parameter name at each positional slot, and the loop elements each parameter yields. A
+# name the body binds again holds another value there, so its slot carries nothing.
 function method_flow(index, method)
     located = method_form(index, method)
     isnothing(located) && return nothing
+    path = located.file.path
     form = located.form
     body = method_body(form)
     isnothing(body) && return nothing
@@ -161,7 +159,7 @@ function method_flow(index, method)
         push!(parameters, carried)
     end
     elements = loop_elements(body, parameters, rebound)
-    (; body, parameters, elements)
+    (; path, body, parameters, elements)
 end
 
 # Each name a loop binds to the elements of a carried parameter, mapped to that parameter. A name bound anywhere
@@ -219,7 +217,7 @@ function moved_slots(parameters, slots, passed)
 end
 
 # A step is a method and, per argument of the caller's call, the parameter slot holding it there.
-function carried_steps(index, ordered, step)
+function carried_steps(index, facts, step)
     method = step[1]
     slots = step[2]
     steps = Tuple{Method,Vector{Int}}[]
@@ -232,7 +230,8 @@ function carried_steps(index, ordered, step)
         passed = carried_names(flow, node)
         moved = moved_slots(flow.parameters, slots, passed)
         isnothing(moved) && continue
-        for callee in resolved_targets(ordered, method, naming)
+        line = source_line(node)
+        for callee in site_targets(facts, flow.path, line, naming.callee)
             push!(steps, (callee, moved))
         end
     end
@@ -259,7 +258,7 @@ function rebuild_methods(previous, start, goal)
 end
 
 # A path counts only when every argument the caller passed the helper reaches the inner method at its own slot.
-function first_path(index, ordered, start, goals)
+function first_path(index, facts, start, goals)
     opened = method_flow(index, start)
     isnothing(opened) && return nothing
     slots = collect(eachindex(opened.parameters))
@@ -271,7 +270,7 @@ function first_path(index, ordered, start, goals)
     while head <= length(queue)
         current = queue[head]
         head += 1
-        for step in carried_steps(index, ordered, current)
+        for step in carried_steps(index, facts, current)
             step in seen && continue
             push!(seen, step)
             previous[step] = current
@@ -282,7 +281,7 @@ function first_path(index, ordered, start, goals)
     nothing
 end
 
-function reach_costing(index, ordered, helpers, inners)
+function reach_costing(index, ordered, facts, helpers, inners)
     costing = Set{Method}()
     for method in inners
         costs_work(index, ordered, method) && push!(costing, method)
@@ -290,7 +289,7 @@ function reach_costing(index, ordered, helpers, inners)
     isempty(costing) && return nothing
     ordered_helpers = sort(collect(helpers); lt = method_before)
     for start in ordered_helpers
-        path = first_path(index, ordered, start, costing)
+        path = first_path(index, facts, start, costing)
         isnothing(path) || return path
     end
     nothing
@@ -371,7 +370,7 @@ function twice_findings(file, caller, grouped, ordered, index, facts)
         line = joining_line(matched)
         isnothing(line) && continue
         sample = matched[1].call
-        repeated_costs(index, ordered, caller, sample) || continue
+        repeated_costs(index, ordered, facts, file.path, sample) || continue
         effects = proven_effects(facts, file.path, matched)
         isnothing(effects) && continue
         text = call_text(sample)
@@ -397,9 +396,9 @@ function reach_findings(file, caller, grouped, ordered, index, facts)
             isnothing(line) && continue
             helper_call = helpers[1].call
             inner_call = inners[1].call
-            helper_methods = resolved_targets(ordered, caller, helper_call)
-            inner_methods = resolved_targets(ordered, caller, inner_call)
-            path = reach_costing(index, ordered, helper_methods, inner_methods)
+            helper_methods = resolved_targets(facts, file.path, helper_call)
+            inner_methods = resolved_targets(facts, file.path, inner_call)
+            path = reach_costing(index, ordered, facts, helper_methods, inner_methods)
             isnothing(path) && continue
             isnothing(proven_effects(facts, file.path, helpers)) && continue
             effects = proven_effects(facts, file.path, inners)
