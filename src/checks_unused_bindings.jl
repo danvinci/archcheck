@@ -177,37 +177,30 @@ function ignores_argument(argument, signature, written, reads_of)
     !(node.val in written)
 end
 
-"""Each parsed method form by its file and line, read once, so a loaded method finds its form in one lookup."""
-struct FormSites
-    forms::Dict{Tuple{String,Int},Vector{Pair{MethodSite,JS.SyntaxNode}}}   # (path, line) -> the forms defined there
-    paths::Dict{Symbol,String}                                              # a recorded file -> its repo-relative path
-    repo::String                                                            # root the paths are relative to
+function cached_path!(paths, file, repo)
+    cached = get(paths, file, nothing)
+    isnothing(cached) || return cached
+    path = recorded_path(file, repo)
+    paths[file] = path
+    path
 end
 
-function FormSites(index::SourceIndex)
-    forms = Dict{Tuple{String,Int},Vector{Pair{MethodSite,JS.SyntaxNode}}}()
-    for file in index.files, (site, form) in file.scan.forms
-        held = get!(Vector{Pair{MethodSite,JS.SyntaxNode}}, forms, (file.path, site.line))
-        push!(held, site => form)
-    end
-    FormSites(forms, Dict{Symbol,String}(), index.repo)
-end
-
-# The parsed form a loaded method was defined by; nothing when the parse holds none at its site.
-function site_form(sites::FormSites, method::Method)
-    path = get!(() -> recorded_path(method.file, sites.repo), sites.paths, method.file)
+# The parsed form a loaded method was defined by; nothing when the index holds none at its site.
+function site_form(index::SourceIndex, method::Method, paths)
+    path = cached_path!(paths, method.file, index.repo)
     key = (path, Int(method.line))
-    for (site, form) in get(sites.forms, key, ())
-        site_names_method(site, method) && return form
+    held = get(index.forms, key, NO_PLACED_FORMS)
+    for placed in held
+        site_names_method(placed.site, method) && return placed.form
     end
     nothing
 end
 
 # Each position a method leaves unread, read off its parsed form once; none for a method the parse holds no form
 # for, a `@generated` one, or a vararg tail.
-function unread_positions(method::Method, sites::FormSites, reads_of)
+function unread_positions(method::Method, index::SourceIndex, paths, reads_of)
     unread = falses(Int(method.nargs) - 1)
-    form = site_form(sites, method)
+    form = site_form(index, method, paths)
     isnothing(form) && return unread
     is_generated_form(form) && return unread
     signature = first(child_nodes(form))
@@ -227,35 +220,32 @@ function position_type(method::Method, position::Int)
     under_clauses_of(parameters[position + 1], method.sig)
 end
 
-# Each live method of each function the package owns, every module's included, from one walk of the method table.
-function owned_methods(defined, project)
-    owned = IdSet{Function}()
-    for method in defined
+function group_owned!(found, owned, methods)
+    for method in methods
         value = method_function(method)
         isnothing(value) && continue
-        parentmodule(value) in project || continue
-        is_generated_name(nameof(value)) && continue
-        push!(owned, value)
-    end
-    found = IdDict{Function,Vector{Method}}()
-    each_loaded_method() do method
-        is_latest(method) || return
-        value = method_function(method)
-        isnothing(value) && return
-        value in owned || return
+        value in owned || continue
         held = get!(Vector{Method}, found, value)
         push!(held, method)
     end
     found
 end
 
+# Each live method of each function the package owns: the methods its modules define, then the ones other modules add.
+function owned_methods(defined, added, owned)
+    found = IdDict{Function,Vector{Method}}()
+    group_owned!(found, owned, defined)
+    group_owned!(found, owned, added)
+    found
+end
+
 # Each position every method of a package-owned function leaves unread under one declared type.
-function add_ignored_findings!(findings, value::Function, all_methods, project, sites, reads_of)
+function add_ignored_findings!(findings, value::Function, all_methods, project, index, paths, reads_of)
     own = filter(method -> method.module in project, all_methods)
     isempty(own) && return findings
     sorted = sort(own, by = method -> (string(method.file), method.line))
     home = first(sorted)
-    unread = [unread_positions(method, sites, reads_of) for method in all_methods]
+    unread = [unread_positions(method, index, paths, reads_of) for method in all_methods]
     widest = maximum(length, unread)
     function_name = written_name(nameof(value))
     owner = module_key(home.module)
@@ -263,7 +253,7 @@ function add_ignored_findings!(findings, value::Function, all_methods, project, 
         all(flags -> position <= length(flags) && flags[position], unread) || continue
         declared = position_type(home, position)
         all(method -> position_type(method, position) == declared, all_methods) || continue
-        file, line = method_site(home, sites.repo)
+        file, line = method_site(home, index.repo)
         symbol = string(function_name, ":", position)
         detail = "every method of the function leaves this position unread under one declared type"
         count = string(length(all_methods))
@@ -274,17 +264,16 @@ function add_ignored_findings!(findings, value::Function, all_methods, project, 
     findings
 end
 
-function check_unused_bindings(index::SourceIndex, defined, mods)
-    project = Set{Module}(mods)
+function check_unused_bindings(index::SourceIndex, defined, added, project, owned)
     reads_of = read_counts(index)
     macros = IdDict{JS.SyntaxNode,Set{Symbol}}()
     findings = Finding[]
     for file in index.files
         add_unused_findings!(findings, file, reads_of, macros)
     end
-    sites = FormSites(index)
-    for (value, all_methods) in owned_methods(defined, project)
-        add_ignored_findings!(findings, value, all_methods, project, sites, reads_of)
+    paths = Dict{Symbol,String}()
+    for (value, all_methods) in owned_methods(defined, added, owned)
+        add_ignored_findings!(findings, value, all_methods, project, index, paths, reads_of)
     end
     findings
 end

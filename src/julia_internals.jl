@@ -55,14 +55,14 @@ function is_generated_function_type(function_type::DataType)
     occursin('#', rest)
 end
 
-# A where-clause wraps a body type whose variables it binds; `Base.unwrap_unionall` strips every clause and leaves
-# those variables free in the body.
-
 """The DataType a type names under its where-clauses, its variables free; nothing for a union, `Union{}`, a type
-variable or a value that is no type."""
+variable or a value that is no type. Each `UnionAll` holds the type its where-clause binds in `body`."""
 function declared_datatype(@nospecialize(type))
     type isa Type || return nothing
-    body = Base.unwrap_unionall(type)
+    body = type
+    while body isa UnionAll
+        body = body.body
+    end
     body isa DataType ? body : nothing
 end
 
@@ -72,6 +72,19 @@ function signature_types(@nospecialize(signature))
     body = declared_datatype(signature)
     isnothing(body) && return Core.svec()
     body.parameters
+end
+
+"""The module that owns the function a method belongs to. The signature's first parameter is the function's type,
+and that type's name records the defining module. Nothing when the first parameter is no datatype."""
+function function_type_module(method::Method)
+    body = declared_datatype(method.sig)
+    isnothing(body) && return nothing
+    parameters = body.parameters
+    isempty(parameters) && return nothing
+    callee = parameters[1]
+    callee isa DataType || return nothing
+    datatype = callee::DataType
+    datatype.name.module
 end
 
 """The type a `Type{T}` names under any where-clauses, the `T`; nothing for any other type. `Base.isType` tells

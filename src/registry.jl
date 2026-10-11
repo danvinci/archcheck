@@ -9,9 +9,74 @@ struct Context{D<:Tuple}
     sites::Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}   # (module, def) -> path and line
     callgraphs::Dict{Symbol,CallGraph}      # per module, built from the index
     defined::Vector{Method}                 # every live method the package's modules define, in source order
+    added::Vector{Method}                   # live methods other modules add on functions the package owns
     methods::Union{Nothing,MethodGraph}     # calls between methods from the declared entries; nothing when none is declared
     observed::Union{Nothing,Observation}    # what the workload did; nothing before it runs, or with no workload
     derived::D                              # the package's declared derived values, each a `Derived`
+end
+
+# `nameof` and `parentmodule` on a function infer as untyped, so each assert selects one method.
+function package_owned_function(method::Method, project)
+    found = method_function(method)
+    isnothing(found) && return nothing
+    value = found::Function
+    owner = parentmodule(value)::Module
+    owner in project || return nothing
+    name = nameof(value)::Symbol
+    is_generated_name(name) && return nothing
+    value
+end
+
+# Functions the package owns among the methods its modules define: the function's module is one of them, and the
+# name is one the source wrote.
+function owned_functions(defined, project)
+    owned = IdSet{Function}()
+    for method in defined
+        value = package_owned_function(method, project)
+        isnothing(value) || push!(owned, value)
+    end
+    owned
+end
+
+# The function type's module is read here, and the function itself only for a module the package owns.
+function keep_loaded_method!(defined, foreign, method::Method, project)
+    is_latest(method) || return
+    if method.module in project
+        push!(defined, method)
+        return
+    end
+    owner = function_type_module(method)
+    isnothing(owner) && return
+    owner in project || return
+    push!(foreign, method)
+    nothing
+end
+
+function methods_on(foreign, owned)
+    added = Method[]
+    for method in foreign
+        found = method_function(method)
+        isnothing(found) && continue
+        value = found::Function
+        value in owned || continue
+        push!(added, method)
+    end
+    added
+end
+
+# One walk of the method table: the live methods the package's modules define, in source order, and the live
+# methods other modules add on functions those modules own.
+function read_methods(mods)
+    project = Set{Module}(mods)
+    defined = Method[]
+    foreign = Method[]
+    each_loaded_method() do method
+        keep_loaded_method!(defined, foreign, method, project)
+    end
+    sort!(defined, by = method -> (string(method.file), method.line))
+    owned = owned_functions(defined, project)
+    added = methods_on(foreign, owned)
+    (defined, added)
 end
 
 function Context(index::SourceIndex, root::Module, mods; methods = nothing, derived = ())
@@ -19,8 +84,8 @@ function Context(index::SourceIndex, root::Module, mods; methods = nothing, deri
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
     modules = package_modules(root, mods)
-    defined = project_methods(modules)
-    Context(index, graph, root, mods, sites, callgraphs, defined, methods, nothing, derived)
+    defined, added = read_methods(modules)
+    Context(index, graph, root, mods, sites, callgraphs, defined, added, methods, nothing, derived)
 end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
@@ -45,8 +110,8 @@ end
 # The same context once the workload has run. Restored probes defined methods, so the method list is read again.
 function Context(ctx::Context; observed::Observation)
     modules = package_modules(ctx)
-    defined = project_methods(modules)
-    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, defined, ctx.methods, observed,
+    defined, added = read_methods(modules)
+    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, defined, added, ctx.methods, observed,
             ctx.derived)
 end
 
@@ -57,8 +122,8 @@ function with_method_graph(ctx::Context, entries)
     project = package_modules(ctx)
     names = value_names(ctx.index)
     methods = method_graph(entries, project, names)
-    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, methods, ctx.observed,
-            ctx.derived)
+    Context(ctx.index, ctx.graph, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, methods,
+            ctx.observed, ctx.derived)
 end
 
 """A rule over a package: a subtype declares the findings it may emit and produces them, and names its stage when it reads a workload. A package passes its own through the `checks` keyword."""
@@ -222,7 +287,12 @@ kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
 
-run(::UnusedBindings, ctx) = check_unused_bindings(ctx.index, ctx.defined, package_modules(ctx))
+function run(::UnusedBindings, ctx)
+    modules = package_modules(ctx)
+    project = Set{Module}(modules)
+    owned = owned_functions(ctx.defined, project)
+    check_unused_bindings(ctx.index, ctx.defined, ctx.added, project, owned)
+end
 kinds(::UnusedBindings) = (:unused_argument => :advisory, :unused_local => :advisory,
                            :ignored_parameter => :advisory)
 
