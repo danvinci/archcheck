@@ -188,6 +188,14 @@ const CALL_HAND_FILES = [
         Base.:-(x, 1)
     end
     """,
+    "spliced.jl" => """
+    function emit(x)
+        quote
+            f(\$x)
+            \$(g(x))
+        end
+    end
+    """,
 ]
 
 function callsite_hand()
@@ -293,5 +301,11 @@ end
 @testset "a quoted operator member names the callee" begin
     got = rows_by_site(CALL_HAND_SCANS["quoted.jl"])
     expected = Dict(MethodSite(:minus_one, 1) => [(:-, "Base", "x, 1", "", 2, 0)])
+    @test got == expected
+end
+
+@testset "a call a quote holds is code the method returns, and a spliced call runs in the method" begin
+    got = rows_by_site(CALL_HAND_SCANS["spliced.jl"])
+    expected = Dict(MethodSite(:emit, 1) => [(:g, "", "x", "", 4, 0)])
     @test got == expected
 end

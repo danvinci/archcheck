@@ -175,8 +175,37 @@ function called_name(call)
     name_of_head(children[1])
 end
 
+"""Whether a node is data a quote holds, as its outermost enclosing method reads it: code inside a quote is what the
+method returns, and a splice inside a quote runs where the quote is built."""
+function is_quoted(node::JS.SyntaxNode)
+    splices = 0
+    quoted = false
+    verdict = false
+    has_method = false
+    current = node.parent
+    while !isnothing(current)
+        kind = JS.kind(current)
+        if kind == K"$"
+            splices += 1
+        elseif kind == K"quote"
+            if splices == 0
+                quoted = true
+            else
+                splices -= 1
+            end
+        end
+        if is_method_form(current)
+            verdict = quoted
+            has_method = true
+        end
+        current = current.parent
+    end
+    has_method ? verdict : quoted
+end
+
 function record_call!(walk, node, scope)
     isnothing(scope.site) && return
+    is_quoted(node) && return
     naming = called_name(node)
     isnothing(naming) && return
     record_written!(walk, naming.callee, naming.qualifier, node, scope)

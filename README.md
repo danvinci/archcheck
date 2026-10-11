@@ -45,7 +45,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `ReaderSet` | a concrete subtype no method of a required reader matches |
 | `OptAnalysis` | a listed call whose inferred code dispatches at runtime or boxes a local |
 | `InferredCalls` | a call no method matches at any argument type inference allows (`failing_call`), or a discarded call that writes nothing, cannot throw and returns a value at every argument its method accepts (`dropped_value`) |
-| `UnreadWaits` | a discarded `fetch`, a bare `wait`, or an `@sync` block whose results nobody reads |
+| `UnreadWaits` | a discarded `fetch`, a `wait` the method graph's inference resolves to the wait on a task (needs `entries`), a `fetch` or `wait` passed to `foreach` or to a call whose value goes unread, or an `@sync` block |
 
 ## Declared values
 
