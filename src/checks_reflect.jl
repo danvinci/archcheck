@@ -150,8 +150,8 @@ function source_site(child::Module, defined, repo)
 end
 
 # unranked-module: a loaded submodule the index does not rank though the repository holds its source, so the index
-# files that source under its parent and no rank rule reaches it.
-function check_module_corpus(mods, rank, nested; repo)
+# files that source under its parent and no rank rule reaches it. `included` holds loose files a method records.
+function check_module_corpus(mods, rank, nested, included; repo)
     unranked = Pair{Module,Module}[]
     for mod in mods, child in submodules(mod)
         key = module_key(child)
@@ -162,6 +162,8 @@ function check_module_corpus(mods, rank, nested; repo)
         site = source_site(child, nested, repo)
         isnothing(site) && continue
         file, line = site
+        path = normpath(file)
+        path in included && continue
         owner = module_key(mod)
         name = string(nameof(child))
         detail = "a submodule holding package source that its wrapper does not declare as an include and a using"

@@ -35,6 +35,18 @@ include(joinpath(@__DIR__, "known.jl"))
 end
 """, ["known.jl" => "a() = 1\n"])
 
+const JOIN_INCLUDE = load_package("JoinInclude", """
+include(joinpath("parts", "a.jl"))
+""", [
+    "parts/a.jl" => """
+    orphan() = 1
+    module Piece
+    inner() = 2
+    end
+    """,
+    "parts/blank.jl" => "const PLACEHOLDER = 1\n",
+])
+
 const COMMENT_INCLUDE = load_package("CommentInclude", """
 include("known.jl")
 # include(joinpath(@__DIR__, "x.jl"))
@@ -225,6 +237,16 @@ end
     @test endswith(hole.file, "DynamicInclude.jl")
     comment = corpus_of(COMMENT_INCLUDE)
     @test !any(finding -> finding.kind === :nonliteral_include, comment)
+end
+
+@testset "a file a joinpath include loads is not an unincluded hole" begin
+    found = corpus_of(JOIN_INCLUDE)
+    holes = [finding for finding in found if finding.kind === :unranked_file]
+    modules = [finding for finding in found if finding.kind === :unranked_module]
+    literal = [finding for finding in found if finding.kind === :nonliteral_include]
+    @test isempty(holes)
+    @test isempty(modules)
+    @test length(literal) == 1
 end
 
 @testset "a nested include takes its place in the depth-first load order" begin

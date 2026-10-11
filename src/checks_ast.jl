@@ -158,9 +158,30 @@ function check_dead_code_static(index, modules, owned; public_is_entry::Bool)
     dead_code_findings(index, entries, owned)
 end
 
-# Every .jl the tool touches is a ranked member, a module wrapper, or a hole.
-# A hole makes the analysis silently incomplete, so it blocks.
-function check_corpus(index)
+function lies_in_directory(path, directories)
+    for directory in directories
+        is_within(path, directory) && return true
+    end
+    false
+end
+
+# Loose files a loaded method records: the spine left them unranked, and Julia included them.
+function loose_included_files(index, recorded)
+    included = Set{String}()
+    for file in index.files
+        file.filerank == 0 || continue
+        is_wrapper(file) && continue
+        path = normpath(file.path)
+        path in recorded || continue
+        push!(included, path)
+    end
+    included
+end
+
+# Every .jl the tool touches is a ranked member, a module wrapper, or a hole. A file a loaded method records was
+# included; one under a directory a nonliteral include names may have been, and that include is the finding.
+function check_corpus(index, loaded)
+    directories = [noted.directory for noted in index.nonliteral if !isempty(noted.directory)]
     findings = Finding[]
     for (owner, path) in index.unparsed
         push!(findings, Finding(owner, :unparsed, path, "", 0, "could not be parsed"))
@@ -169,13 +190,16 @@ function check_corpus(index)
         detail = "include names a file that is not on disk"
         push!(findings, Finding(owner, :missing_include, from, spec, line, detail))
     end
-    for (owner, from, line) in index.nonliteral
+    for noted in index.nonliteral
         detail = "include argument is not a string literal"
-        push!(findings, Finding(owner, :nonliteral_include, from, "", line, detail))
+        push!(findings, Finding(noted.owner, :nonliteral_include, noted.file, "", noted.line, detail))
     end
     for file in index.files
         file.filerank == 0 || continue
         is_wrapper(file) && continue
+        path = normpath(file.path)
+        path in loaded && continue
+        lies_in_directory(path, directories) && continue
         detail = "nothing in the module includes it, at any depth"
         push!(findings, Finding(file.mod, :unranked_file, file.path, "", 0, detail))
     end

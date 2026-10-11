@@ -31,6 +31,14 @@ end
 
 const NO_PLACED_FORMS = PlacedForm[]
 
+# An include whose argument is no string literal, and the directory its literal `joinpath` pieces name.
+struct NonliteralInclude
+    owner::Symbol        # module the including code belongs to
+    file::String         # repo-relative path of the including file
+    line::Int            # source line of the include
+    directory::String    # repo-relative directory the literal pieces name; empty when they name none
+end
+
 # src/ and the entry dirs. Every check reads a slice; nothing re-walks the tree.
 struct SourceIndex
     repo::String                            # the root every path below is relative to
@@ -42,7 +50,7 @@ struct SourceIndex
     scripts::Vector{EntryCode}              # each code root of the entry-dir files outside src/ and of unloaded extensions
     unparsed::Vector{Tuple{Symbol,String}}  # (owner, path) of files no check could read; :Entry = an entry dir
     missing::Vector{Tuple{Symbol,String,String,Int}}  # include of a file that is not on disk: owner, includer, spec, line
-    nonliteral::Vector{Tuple{Symbol,String,Int}}      # include whose argument is not a string literal: owner, file, line
+    nonliteral::Vector{NonliteralInclude}             # includes whose argument is not a string literal
     forms::Dict{Tuple{String,Int},Vector{PlacedForm}} # (path, line) -> method forms defined there, in file order
 end
 
@@ -75,7 +83,7 @@ struct IndexBuild
     aliases::Dict{Symbol,Dict{Symbol,Symbol}}                 # module -> each name its `as` clauses bind -> module it names
     unparsed::Vector{Tuple{Symbol,String}}                    # owner and path of a file the parse rejected
     missing::Vector{Tuple{Symbol,String,String,Int}}          # include of a file absent on disk: owner, includer, spec, line
-    nonliteral::Vector{Tuple{Symbol,String,Int}}              # include whose argument is an expression: owner, file, line
+    nonliteral::Vector{NonliteralInclude}                     # includes whose argument is an expression
     placed::Set{Tuple{Symbol,String}}                         # module and absolute path placed there: the revisit guard
     visited::Set{String}                                      # absolute paths any walk placed or the index took
     external::Set{Symbol}                                     # names referenced from entry dirs other than test/ and unloaded extensions
@@ -144,7 +152,7 @@ function start_index(parses::Parses, src_root::AbstractString, dir2mod, package:
         Dict{Symbol,Dict{Symbol,Symbol}}(),
         Tuple{Symbol,String}[],
         Tuple{Symbol,String,String,Int}[],
-        Tuple{Symbol,String,Int}[],
+        NonliteralInclude[],
         Set{Tuple{Symbol,String}}(),
         Set{String}(),
         Set{Symbol}(),
@@ -207,6 +215,40 @@ function walk_code!(build::IndexBuild, unit::LoadUnit, code, file)
     end
 end
 
+function is_joinpath_call(node)
+    JS.kind(node) == K"call" || return false
+    children = child_nodes(node)
+    child_count(children) < 2 && return false
+    children[1].val === :joinpath
+end
+
+# The directory literal `joinpath` pieces name: their parent when they fill the call, else the prefix before the
+# first piece computed at load. Nothing for any other argument.
+function named_include_directory(argument)
+    is_joinpath_call(argument) || return nothing
+    pieces = call_args(argument)
+    literals = String[]
+    for piece in pieces
+        text = static_string(piece)
+        isnothing(text) && break
+        push!(literals, text)
+    end
+    isempty(literals) && return nothing
+    joined = joinpath(literals...)
+    named = length(literals) == length(pieces) ? dirname(joined) : joined
+    isempty(named) ? nothing : named
+end
+
+function nonliteral_include(owner::Symbol, rel::String, line::Int, argument)
+    named = named_include_directory(argument)
+    directory = ""
+    if !isnothing(named)
+        beside = joinpath(dirname(rel), named)
+        directory = normpath(beside)
+    end
+    NonliteralInclude(owner, rel, line, directory)
+end
+
 # A directory module's entry opens that module where it is included. A file inside another directory module's
 # directory is that module's to place; any other file joins the including module. An include of an expression or
 # of a file absent on disk is noted where the walk meets it.
@@ -216,7 +258,8 @@ function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
     line = source_line(call)
     rel = relpath(file, build.repo)
     if isnothing(spec)
-        push!(build.nonliteral, (unit.owner, rel, line))
+        noted = nonliteral_include(unit.owner, rel, line, argument)
+        push!(build.nonliteral, noted)
         return
     end
     joined = joinpath(dirname(file), spec)
@@ -295,7 +338,8 @@ function note_includes!(build::IndexBuild, owner::Symbol, path, rel, tree)
     for (arg, line) in include_calls(tree)
         spec = static_string(arg)
         if isnothing(spec)
-            push!(build.nonliteral, (owner, rel, line))
+            noted = nonliteral_include(owner, rel, line, arg)
+            push!(build.nonliteral, noted)
         else
             parent = dirname(path)
             joined = joinpath(parent, spec)

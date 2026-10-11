@@ -104,7 +104,7 @@ function run_checks(ctx, checks)
     findings
 end
 
-"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or a non-string, or a file the spine leaves unranked, or a loaded module it leaves unranked whose `module` line or a method of it Julia records in a file of the repository. A module another package's macro fills with its own code holds no package source."""
+"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or a non-string, or a file the spine leaves unranked that no loaded method records and that sits outside every directory a nonliteral include names. A loaded module the spine leaves unranked whose `module` line or a method of it Julia records in the repository, when no loaded method records that file. A module another package's macro fills with its own code holds no package source."""
 struct Corpus <: Check end
 """Runs in `CHECKS`. A module references another that finishes loading at the same rank or later. A reference to an enclosing module counts only with `strict`, which holds every module to the layering."""
 struct ModuleBackEdges <: Check
@@ -187,10 +187,23 @@ struct ForeignFields <: Check end
 """Runs in `CHECKS`. A runtime type test on a method's own parameter picks a path."""
 struct TypeBranches <: Check end
 
+# Repo-relative path of each file a method in `defined` records. Julia records the file because loading included it.
+function loaded_source_files(defined, repo)
+    paths = Set{String}()
+    for method in defined
+        site = method_site(method, repo)
+        path = first(site)
+        push!(paths, normpath(path))
+    end
+    paths
+end
+
 # A hole in the corpus makes every other result untrustworthy, so each one is an error.
 function run(::Corpus, ctx)
-    files = check_corpus(ctx.index)
-    modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested; repo = ctx.index.repo)
+    recorded = loaded_source_files(ctx.defined, ctx.index.repo)
+    files = check_corpus(ctx.index, recorded)
+    included = loose_included_files(ctx.index, recorded)
+    modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested, included; repo = ctx.index.repo)
     vcat(files, modules)
 end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,
