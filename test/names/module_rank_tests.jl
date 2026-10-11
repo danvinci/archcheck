@@ -8,9 +8,29 @@ using .Bb
 """, [
     "aa/Aa.jl" => """
     module Aa
-    climb() = Bb.later()
+    import ..ForwardCall
+    climb() = ForwardCall.Bb.later()
     self() = Aa.climb()
     quiet() = SomePkg.foo()
+    end
+    """,
+    "bb/Bb.jl" => "module Bb\nlater() = 1\nend\n",
+])
+
+# A path through a `const` alias of the package reaches what the alias names; a sibling's bare name, which Aa does
+# not bind, names no module.
+const ALIAS_CALL = load_package("AliasCall", """
+include("aa/Aa.jl")
+using .Aa
+include("bb/Bb.jl")
+using .Bb
+""", [
+    "aa/Aa.jl" => """
+    module Aa
+    import ..AliasCall
+    const Root = AliasCall
+    climb() = Root.Bb.later()
+    spelled() = Bb.later()
     end
     """,
     "bb/Bb.jl" => "module Bb\nlater() = 1\nend\n",
@@ -23,7 +43,7 @@ include("bb/Bb.jl")
 using .Bb
 """, [
     "aa/Aa.jl" => "module Aa\nf() = 1\nend\n",
-    "bb/Bb.jl" => "module Bb\ng() = Aa.f()\nend\n",
+    "bb/Bb.jl" => "module Bb\nimport ..Aa\ng() = Aa.f()\nend\n",
 ])
 
 const MUTUAL_CALL = load_package("MutualCall", """
@@ -32,8 +52,8 @@ using .Aa
 include("bb/Bb.jl")
 using .Bb
 """, [
-    "aa/Aa.jl" => "module Aa\nf() = Bb.g()\nend\n",
-    "bb/Bb.jl" => "module Bb\ng() = Aa.f()\nend\n",
+    "aa/Aa.jl" => "module Aa\nimport ..MutualCall\nf() = MutualCall.Bb.g()\nend\n",
+    "bb/Bb.jl" => "module Bb\nimport ..Aa\ng() = Aa.f()\nend\n",
 ])
 
 const FORWARD_CHAIN = load_package("ForwardChain", """
@@ -44,8 +64,8 @@ using .Bb
 include("cc/Cc.jl")
 using .Cc
 """, [
-    "aa/Aa.jl" => "module Aa\nf() = Bb.g()\nend\n",
-    "bb/Bb.jl" => "module Bb\ng() = Cc.h()\nend\n",
+    "aa/Aa.jl" => "module Aa\nimport ..ForwardChain\nf() = ForwardChain.Bb.g()\nend\n",
+    "bb/Bb.jl" => "module Bb\nimport ..ForwardChain\ng() = ForwardChain.Cc.h()\nend\n",
     "cc/Cc.jl" => "module Cc\nh() = 1\nend\n",
 ])
 
@@ -72,6 +92,7 @@ using .Aa
     "aa/parts.jl" => """
     helper() = 1
     module Inline
+    import ..Aa
     climb() = Aa.helper()
     end
     """,
@@ -81,14 +102,15 @@ const INLINE_ROOT = load_package("InlineRoot", """
 include("tokens.jl")
 grow() = 1
 """, [
-    "tokens.jl" => "module Tokens\nclimb() = InlineRoot.grow()\nend\n",
+    "tokens.jl" => "module Tokens\nimport ..InlineRoot\nclimb() = InlineRoot.grow()\nend\n",
 ])
 
 # Module blocks in source order: one in the spine's own code reaching one an included file defines later, and that
 # later block including its own file.
 const INLINE_ORDER = load_package("InlineOrder", """
 module Early
-reach() = Late.value()
+import ..InlineOrder
+reach() = InlineOrder.Late.value()
 end
 include("late.jl")
 """, [
@@ -126,8 +148,9 @@ function module_edge_rows(case)
     evidence_rows(found, :include_order, :via)
 end
 
-# A random package nested two deep. Finish order, children before the parent, is the back-edge oracle.
-function random_package(rng)
+# A random package nested two deep, each module reaching others through the package's name, which it imports. Finish
+# order, children before the parent, is the back-edge oracle.
+function random_package(rng, case_name)
     modules = String[]
     children = Dict{String,Vector{String}}("" => String[])
     function grow!(parent, name, depth)
@@ -186,13 +209,14 @@ function random_package(rng)
         for _ in 1:rand(rng, 0:3)
             target = rand(rng, modules)
             target == key && continue
-            push!(calls, "$target.f()")
+            push!(calls, "$case_name.$target.f()")
             push!(truth, (key, target))
         end
         body = isempty(calls) ? "1" : join(calls, " + ")
         nested = include_lines(key, children[key])
         name = leaf(key)
-        source = "module $name\n$nested\nf() = $body\nend\n"
+        climb = repeat(".", count('.', key) + 2)
+        source = "module $name\nimport $climb$case_name\n$nested\nf() = $body\nend\n"
         push!(files, relative_wrapper(key) => source)
     end
     spine = include_lines("", children[""])
@@ -206,6 +230,9 @@ end
     @test !any(row -> row[2] == "SomePkg", forward)
     down = module_edge_rows(DOWNWARD_CALL)
     @test isempty(down)
+    alias_ctx = case_context(ALIAS_CALL)
+    aliased = ArchCheck.run(ModuleBackEdges(), alias_ctx)
+    @test [(edge.symbol, edge.line, ev(edge, :via)) for edge in aliased] == [("Bb", 4, "qualified")]
 end
 
 @testset "a mutual reference is a cycle and a forward chain is not" begin
@@ -230,14 +257,16 @@ end
 @testset "nested module back edges match the generated finish order, and a reference to an enclosing module counts only when strict" begin
     for seed in 1:40
         rng = Xoshiro(seed)
-        spec = random_package(rng)
         case_name = "RankOrder$seed"
+        spec = random_package(rng, case_name)
         case = load_package(case_name, spec.spine, spec.files)
         ctx = Base.invokelatest(case_context, case)
         rank_names = Set(string(key) for key in keys(ctx.index.rank))
         @test rank_names == Set([spec.modules; case_name])
         layered = Set((from, to) for (from, to) in spec.truth if spec.position[to] >= spec.position[from])
-        @test back_edge_pairs(ModuleBackEdges(strict = true), ctx) == layered
+        imports_root = Set((from, case_name) for from in spec.modules)
+        strict_pairs = back_edge_pairs(ModuleBackEdges(strict = true), ctx)
+        @test strict_pairs == union(layered, imports_root)
         outward = Set((from, to) for (from, to) in layered if !startswith(from, to * "."))
         @test back_edge_pairs(ModuleBackEdges(), ctx) == outward
     end
@@ -251,10 +280,9 @@ end
         @test !any(finding -> finding.kind === :unranked_module, corpus)
         @test isempty(ArchCheck.run(ModuleBackEdges(), ctx))
         found = ArchCheck.run(ModuleBackEdges(strict = true), ctx)
-        climb = only(found)
-        @test climb.mod === inline
-        @test climb.symbol == parent
-        @test ev(climb, :include_order) == order
+        rows = evidence_rows(found, :include_order, :via)
+        @test sort(rows) == [(:back_edge, parent, order, "import"), (:back_edge, parent, order, "qualified")]
+        @test all(climb -> climb.mod === inline, found)
     end
 end
 

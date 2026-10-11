@@ -227,7 +227,7 @@ end
     @test reached_from(script) == expected
 end
 
-@testset "a type position, a macro-wrapped argument, an assignment, or an extension reaches an internal name once per line" begin
+@testset "a type position, a macro-wrapped argument, an alias bound, an assignment, or an extension reaches an internal name once per line" begin
     script = """
         const G = InternalNames
         typed(x::G.Secret)::G.Secret = x
@@ -236,10 +236,12 @@ end
         G.hidden(x) = x
         lambda = (x::G.Secret) -> x
         wrapped(@nospecialize(x::G.Secret)) = x
+        const Held{T<:G.Secret} = Vector{T}
         """
     expected = [
         ("InternalNames.Secret", 2), ("InternalNames.Secret", 3), ("InternalNames.Secret", 6),
-        ("InternalNames.Secret", 7), ("InternalNames.hidden", 5), ("InternalNames.value", 4),
+        ("InternalNames.Secret", 7), ("InternalNames.Secret", 8), ("InternalNames.hidden", 5),
+        ("InternalNames.value", 4),
     ]
     @test reached_from(script; repeat_dir = true) == expected
 end
@@ -266,6 +268,8 @@ end
     @test Set(reached) == Set([
         ("Geo", "Geo.Curves.calls_later", "import", "Geo.Curves"),
         ("Geo.Curves", "Low._lowpriv", "import", "Low"),
+        ("Geo.Curves", "Geo.Cuts", "qualified", "Geo"),
+        ("Geo.Curves", "Geo.Cuts.cut_only", "qualified", "Geo.Cuts"),
         ("Geo.Cuts", "Geo.Curves._secret", "using", "Geo.Curves"),
         ("Hi", "Geo.Curves", "qualified", "Geo"),
         ("Hi", "Geo.Curves._secret", "qualified", "Geo.Curves"),

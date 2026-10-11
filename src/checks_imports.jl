@@ -42,79 +42,34 @@ struct ModuleImports
     bound::Set{Symbol}           # every name a clause binds by writing it: an imported module, a listed or renamed name
 end
 
-# The loaded module an import path names from `home`; nothing when the clause did not run, as under a version check
-# this Julia skips. A package the module has not bound by name is found through the module's dependencies.
-function imported_module(home::Module, dots, path)::Union{Nothing,Module}
-    isempty(path) && return nothing
-    found = home
-    if dots == 0
-        found = bound_module(home, first(path))
-        if isnothing(found)
-            package_name = string(first(path))
-            found = loaded_dependency(home, package_name)
+# A clause's module is nothing when the clause did not run, as under a version check this Julia skips.
+function add_clause!(imports::ModuleImports, file, clause::ImportClause)
+    from = named_module(clause)
+    if !isempty(clause.items)
+        for item in clause.items
+            isnothing(item.bound) && continue
+            push!(imports.bound, item.bound)
+            isnothing(from) && continue
+            push!(imports.listed, ListedName(item.bound, from, file, item.line))
         end
-    else
-        for _ in 2:dots
-            found = parentmodule(found)
-        end
-        found = bound_module(found, first(path))
-    end
-    for name in path[2:end]
-        isnothing(found) && return nothing
-        found = bound_module(found, name)
-    end
-    found
-end
-
-# The name one list item binds and the line it is written on.
-function listed_binding(item)
-    if JS.kind(item) == K"as"
-        renamed = renamed_parts(item)
-        return renamed.bound, source_line(item)
-    end
-    _, names = importpath_parts(item)
-    isempty(names) && return nothing, 0
-    last(names), source_line(item)
-end
-
-function add_clause!(imports::ModuleImports, home::Module, file, clause::JS.SyntaxNode, line_kind)
-    kind = JS.kind(clause)
-    if kind == K"as"
-        renamed = renamed_parts(clause)
-        isnothing(renamed.bound) || push!(imports.bound, renamed.bound)
         return
     end
-    # `import X` binds X; `using X` brings X in with its exports, as Julia's own binding records it.
-    if kind == K"importpath"
-        dots, path = importpath_parts(clause)
-        isempty(path) && return
-        if line_kind == K"import"
-            push!(imports.bound, last(path))
-            return
-        end
-        used = imported_module(home, dots, path)
-        isnothing(used) && return
-        line = source_line(clause)
-        push!(imports.whole, WholeUsing(used, file, line))
+    isnothing(clause.bound) && return
+    # `import X` and a rename bind a name; `using X` brings X in with its exports, as Julia's own binding records it.
+    is_renamed = clause.bound !== last(clause.path)
+    if clause.keyword === :import || is_renamed
+        push!(imports.bound, clause.bound)
         return
     end
-    kind == K":" || return
-    children = child_nodes(clause)
-    dots, path = importpath_parts(first(children))
-    from = imported_module(home, dots, path)
-    for item in children[2:end]
-        name, line = listed_binding(item)
-        isnothing(name) && continue
-        push!(imports.bound, name)
-        isnothing(from) && continue
-        push!(imports.listed, ListedName(name, from, file, line))
-    end
+    isnothing(from) && return
+    line = source_line(clause.node)
+    push!(imports.whole, WholeUsing(from, file, line))
 end
 
-function module_imports(home::Module, files)
+function module_imports(files)
     imports = ModuleImports(WholeUsing[], ListedName[], Set{Symbol}())
-    for file in files
-        each_clause((clause, line_kind) -> add_clause!(imports, home, file.path, clause, line_kind), file.tree)
+    for file in files, clause in file.scan.clauses
+        add_clause!(imports, file.path, clause)
     end
     imports
 end
@@ -122,8 +77,9 @@ end
 # Whether the package or Julia owns both sides of an export: a module of the package, Base, Core, or one inside them.
 function is_held_exporter(exporter::Module, modules::ReachModules)
     exporter in modules.tracked && return true
-    top = Base.moduleroot(exporter)
-    top === modules.package || top === Base || top === Core
+    encloses(modules.package, exporter) && return true
+    encloses(Base, exporter) && return true
+    encloses(Core, exporter)
 end
 
 # Whether `exporter` exports the binding `name` resolves to in the reading module, which `owner` defines.
@@ -252,7 +208,7 @@ function check_imported_names(index::SourceIndex, mods, package::Module, recorde
         files = files_of(index, key)
         isempty(files) && continue
         reads = module_reads(files)
-        imports = module_imports(home, files)
+        imports = module_imports(files)
         implicit_findings!(findings, key, home, reads, imports, modules)
         stale_findings!(findings, key, home, reads, imports, modules, files, recorded)
     end

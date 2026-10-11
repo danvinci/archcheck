@@ -216,40 +216,24 @@ function note_limit!(walk, node, callee)
     place!(walk, node, callee, "parse", detail, walk.limits)
 end
 
-# The value a dotted path names from `mod`; nothing when a segment is missing or an inner one is no module.
-function resolve_path(mod::Module, segments)
-    isempty(segments) && return mod
-    name = segments[1]
-    isdefined(mod, name) || return nothing
-    next = getfield(mod, name)
-    rest = segments[2:end]
-    isempty(rest) && return next
-    resolve_path(next, rest)
-end
-
-resolve_path(@nospecialize(_value), _segments) = nothing
-
-function file_home(root, key)
-    segments = key_segments(key)
-    found = resolve_path(root, segments)
-    found isa Module ? found : nothing
-end
-
+# The value a written callee names where the code sits: its qualifier's module, then the callee bound there.
 function resolve_name(home, written)
     isnothing(home) && return nothing
     isnothing(written) && return nothing
-    segments = Symbol[]
+    holder = home
     qualifier = written.qualifier
     if !isempty(qualifier)
-        append!(segments, key_segments(Symbol(qualifier)))
+        segments = key_segments(Symbol(qualifier))
+        holder = path_module(home, segments)
     end
-    push!(segments, written.callee)
-    resolve_path(home, segments)
+    isnothing(holder) && return nothing
+    isdefined(holder, written.callee) || return nothing
+    getfield(holder, written.callee)
 end
 
 function read_source!(item, ctx)
     for file in ctx.index.files
-        home = file_home(ctx.root, file.mod)
+        home = loaded_module(ctx.root, file.mod)
         forms = values(file.scan.forms)
         known = Base.IdSet{JS.SyntaxNode}(forms)
         for (site, form) in file.scan.forms

@@ -1,9 +1,6 @@
 # Every name one piece of code reads, recorded once at index build by the scoped walk: each bare name as Julia
 # binds it, and each member read through a qualifier with the loaded module that qualifier names.
 
-# Code no loaded module holds binds no module by name.
-bound_module(::Nothing, _name::Symbol) = nothing
-
 is_type_form(kind) = kind == K"struct" || kind == K"abstract" || kind == K"primitive"
 
 # The name an identifier names, as Julia binds it: a macro's with its `@`, a string macro's with its suffix.
@@ -134,14 +131,6 @@ function is_lone_quote(node)
     JS.kind(parent) == K"quote" || return false
     quoted = child_nodes(parent)
     child_count(quoted) == 1
-end
-
-# The loaded module a qualifier names: a bare name's binding where the code sits, or the module a dotted qualifier
-# met earlier in the walk named.
-function qualifier_module(walk::CodeWalk, qualifier)
-    name = node_symbol(qualifier)
-    isnothing(name) || return bound_module(walk.names, name)
-    get(walk.named, qualifier, nothing)
 end
 
 # A member read through a qualifier that can name a module, with the module it names; a module the member itself

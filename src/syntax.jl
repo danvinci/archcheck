@@ -46,6 +46,26 @@ end
 is_member(read::NameRead) = !isnothing(read.qualifier)
 is_local_read(read::NameRead) = !isnothing(read.binding)
 
+"""One name an import list binds: `b` in `using A: b`, `c` in `import A: b as c`."""
+struct ImportItem
+    path::Vector{Symbol}           # the listed path's names, `b` in `using A: b as c`
+    bound::Union{Nothing,Symbol}   # the name it binds: its path's last, or the name after `as`
+    line::Int                      # source line of the item
+end
+
+"""One clause of a `using` or `import` line, as the index's scoped walk meets it outside methods and quoted code,
+with the loaded modules its path passes through."""
+struct ImportClause
+    keyword::Symbol                # :using or :import, its line's keyword
+    path::Vector{Symbol}           # its path's names after any leading dots: `A.B` in `using ..A.B: c`
+    items::Vector{ImportItem}      # the names a `:` list binds; empty for a whole path
+    bound::Union{Nothing,Symbol}   # the name a whole path binds, its last or the one after `as`; nothing for a list
+    line::Int                      # source line of its using or import line
+    node::JS.SyntaxNode            # the clause itself
+    modules::Vector{Module}        # loaded modules the path passes: where it opens, then each one a further name names
+    opening::Int                   # names the opening takes: 1, or 0 when the path opens at an enclosing module
+end
+
 # One file's top-level defs and every name its code reads; `refs` and `modrefs` file the reads by definition.
 struct FileScan
     funcs::Vector{Symbol}                                        # top-level function names, source order
@@ -56,6 +76,7 @@ struct FileScan
     line::Dict{Symbol,Int}                                       # def name -> source line
     tupletail::Dict{Symbol,Int}                                  # function -> slot count when its body ends in a bare tuple
     imports::Set{Symbol}                                         # names this file's import clauses bind
+    clauses::Vector{ImportClause}                                # every using or import clause outside methods and quotes
     callsites::Dict{MethodSite,Vector{CallSite}}                 # each method -> the calls its body writes, source order
     forms::Dict{MethodSite,JS.SyntaxNode}                        # each method -> its definition form, nested methods included
     reads::Vector{NameRead}                                      # every name the code reads, in walk order
@@ -75,13 +96,14 @@ function empty_scan()
     line = Dict{Symbol,Int}()
     tupletail = Dict{Symbol,Int}()
     imports = Set{Symbol}()
+    clauses = ImportClause[]
     callsites = Dict{MethodSite,Vector{CallSite}}()
     forms = Dict{MethodSite,JS.SyntaxNode}()
     reads = NameRead[]
     bindings = LocalBinding[]
     resolved = IdDict{JS.SyntaxNode,JS.SyntaxNode}()
-    FileScan(funcs, constructors, types, refs, modrefs, line, tupletail, imports, callsites, forms, reads, bindings,
-             resolved)
+    FileScan(funcs, constructors, types, refs, modrefs, line, tupletail, imports, clauses, callsites, forms, reads,
+             bindings, resolved)
 end
 
 # `nothing` on failure, so a caller accounts for it.

@@ -83,7 +83,6 @@ struct IndexBuild
     unincluded::Vector{String}                                # repo-relative src/ files no include in loaded code names
     nodes::Vector{FileNode}                                   # code accepted into the index
     refs::Vector{ModRef}                                      # cross-module references from the same parse
-    aliases::Dict{Symbol,Dict{Symbol,Symbol}}                 # module -> each name its `as` clauses bind -> module it names
     unparsed::Vector{Tuple{Symbol,String}}                    # owner and path of a file the parse rejected
     missing::Vector{Tuple{Symbol,String,String,Int}}          # include of a file absent on disk: owner, includer, spec, line
     nonliteral::Vector{NonliteralInclude}                     # includes whose argument is an expression
@@ -182,7 +181,6 @@ function start_index(parses::Parses, src_root::AbstractString, package::Module, 
         String[],
         FileNode[],
         ModRef[],
-        Dict{Symbol,Dict{Symbol,Symbol}}(),
         Tuple{Symbol,String}[],
         Tuple{Symbol,String,String,Int}[],
         NonliteralInclude[],
@@ -516,20 +514,15 @@ function index_placements!(build::IndexBuild)
     append!(build.nodes, unmatched)
 end
 
-# Module references resolve once every module is known, the inline ones included, and once every module's renames
-# are read, since a file may write a path through a name another file of its module binds.
+# Module references come from each piece of code's scan, whose clauses and qualifiers the walk resolved against the
+# loaded modules; a reference names a module by its index key.
 function add_refs!(build::IndexBuild)
-    known = Set(keys(build.ranks))
-    plain = ModuleNames(known, build.root)
-    for node in build.nodes
-        scope = key_segments(node.mod)
-        renames = get!(Dict{Symbol,Symbol}, build.aliases, node.mod)
-        code_aliases!(renames, plain, scope, node.tree)
+    module_keys = IdDict{Module,Symbol}()
+    for (key, loaded) in build.loaded
+        module_keys[loaded] = key
     end
-    modules = ModuleNames(known, build.root, build.aliases)
     for node in build.nodes
-        scope = key_segments(node.mod)
-        walk_modrefs!(build.refs, node.mod, scope, node.path, modules, node.tree)
+        code_refs!(build.refs, node.mod, node.path, node.scan, module_keys)
     end
 end
 
@@ -637,7 +630,7 @@ function outside_codes(modules::ReachModules, path, owner::Symbol, tree)
     codes = EntryCode[]
     for root in code_roots(tree)
         home = script_home(modules, root)
-        names = script_names(root, modules, home)
+        names = ScriptNames(modules, home)
         scan = scan_tree(root, names)
         push!(codes, EntryCode(path, owner, root, scan))
     end

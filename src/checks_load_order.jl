@@ -29,15 +29,6 @@ function loaded_reader!(readers, form, root)
     named
 end
 
-function in_quote(node, root)
-    current = node.parent
-    while !isnothing(current) && current !== root
-        JS.kind(current) == K"quote" && return true
-        current = current.parent
-    end
-    false
-end
-
 # ---- the judgement ----
 
 # Whether a module the code uses exports `name` bound to the object the module's own binding holds, so the name

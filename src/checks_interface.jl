@@ -121,52 +121,38 @@ function reach_finding(modules::ReachModules, unit::ReachUnit, home, through::Mo
 end
 
 # Each name one clause reads, with the module it reads it through: its path's names after the opening, and each
-# name a `:` list binds from the module that path names whole.
-function clause_reads(modules::ReachModules, home, clause)
-    kind = JS.kind(clause)
-    if kind == K"as"
-        source = first(child_nodes(clause))
-        return clause_reads(modules, home, source)
+# name a `:` list binds from the module that path names whole. A list from no module reads nothing.
+function clause_reads(clause::ImportClause)
+    reads = Tuple{Module,Symbol}[]
+    named = named_module(clause)
+    is_list = !isempty(clause.items)
+    is_list && isnothing(named) && return reads
+    for (step, through) in enumerate(clause.modules)
+        position = clause.opening + step
+        position > length(clause.path) && break
+        push!(reads, (through, clause.path[position]))
     end
-    if kind == K"importpath"
-        dots, path = importpath_parts(clause)
-        target = path_target(modules, home, dots, path)
-        isnothing(target) && return nothing
-        return target.reads
-    end
-    kind == K":" || return nothing
-    children = child_nodes(clause)
-    dots, path = importpath_parts(first(children))
-    base = path_target(modules, home, dots, path)
-    isnothing(base) && return nothing
-    named = base.named
-    isnothing(named) && return nothing
-    reads = copy(base.reads)
-    for item in children[2:end]
-        source = clause_source(item)
-        _, item_names = importpath_parts(source)
-        for name in item_names
-            push!(reads, (named, name))
-        end
+    add_listed_reads!(reads, named, clause.items)
+end
+
+function add_listed_reads!(reads, named::Module, items)
+    for item in items, name in item.path
+        push!(reads, (named, name))
     end
     reads
 end
 
-function clause_reach!(findings, modules::ReachModules, unit::ReachUnit, home, clause, line_kind)
-    in_skipped_branch(clause, unit.tree) && return
-    reads = clause_reads(modules, home, clause)
-    isnothing(reads) && return
-    via = Symbol(string(line_kind))
-    line = source_line(clause.parent)
-    for (through, name) in reads
-        found = reach_finding(modules, unit, home, through, name, line, via)
-        isnothing(found) || push!(findings, found)
-    end
-end
+add_listed_reads!(reads, ::Nothing, _items) = reads
 
-# Each name a using or import clause of the unit binds through a module.
-function clause_reaches!(findings, unit::ReachUnit, modules::ReachModules, home)
-    each_clause((clause, line_kind) -> clause_reach!(findings, modules, unit, home, clause, line_kind), unit.tree)
+# Each name a using or import clause of the unit binds through a module, in a branch this Julia runs.
+function clause_reaches!(findings, unit::ReachUnit, modules::ReachModules, home, clauses)
+    for clause in clauses
+        in_skipped_branch(clause.node, unit.tree) && continue
+        for (through, name) in clause_reads(clause)
+            found = reach_finding(modules, unit, home, through, name, clause.line, clause.keyword)
+            isnothing(found) || push!(findings, found)
+        end
+    end
 end
 
 # Each member the unit's code reads through a loaded module, the module its qualifier names resolved by the walk.
@@ -191,13 +177,13 @@ function check_reaches_internal(index::SourceIndex, mods, package::Module; allow
         home = get(modules.by_key, file.mod, nothing)
         isnothing(home) && continue
         unit = ReachUnit(file.path, file.tree, file.mod)
-        clause_reaches!(findings, unit, modules, home)
+        clause_reaches!(findings, unit, modules, home, file.scan.clauses)
         qualified_reaches!(findings, unit, modules, home, file.scan.reads)
     end
     for code in index.scripts
         unit = ReachUnit(code.path, code.tree, code.owner)
         home = script_home(modules, code.tree)
-        clause_reaches!(findings, unit, modules, home)
+        clause_reaches!(findings, unit, modules, home, code.scan.clauses)
         qualified_reaches!(findings, unit, modules, home, code.scan.reads)
     end
     unique(found -> (found.file, found.line, found.symbol), findings)

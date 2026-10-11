@@ -12,4 +12,4 @@ _helper(x) = x
 _secret(x) = x * 3
 
 # The sibling module loads after this one, so the reference climbs the parent's include order.
-calls_later(x) = Cuts.cut_only(x)
+calls_later(x) = Geo.Cuts.cut_only(x)

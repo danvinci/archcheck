@@ -259,17 +259,6 @@ function method_form(index::SourceIndex, recorded::RecordedPaths, method::Method
     nothing
 end
 
-# Whether `outer` is `inner` or a module `inner` sits inside, by the loaded parent chain.
-function encloses(outer::Module, inner::Module)
-    current = inner
-    while true
-        current === outer && return true
-        parent = parentmodule(current)
-        parent === current && return false
-        current = parent
-    end
-end
-
 # The owners that bind `name` to an object another owner does not share. Without `strict` a module and one it
 # encloses act as one owner, as a package lets its modules use what encloses them.
 function colliding_owners(owners, name, strict)

@@ -10,10 +10,8 @@
     @test !any(finding -> finding.kind === :unranked_module, corpus)
 
     files = ArchCheck.run(FileBackEdges(), ctx)
-    file_edge = only(files)
-    @test file_edge.mod === Symbol("Geo.Cuts")
-    @test endswith(file_edge.file, "ring.jl")
-    @test endswith(file_edge.symbol, "measure.jl")
+    edges = Set((edge.mod, basename(edge.file), basename(edge.symbol)) for edge in files)
+    @test edges == Set([(Symbol("Geo.Cuts"), "ring.jl", "measure.jl"), (Symbol("Geo.Curves"), "curve.jl", "Cuts.jl")])
 
     required = ((Nested.Geo.Curves.perimeter, Tuple{}),)
     readers = ReaderSet(Nested.Geo.Curves.Shape, required)

@@ -19,7 +19,7 @@ using .Aa
 include("bb/Bb.jl")
 using .Bb
 """, [
-    "aa/Aa.jl" => "module Aa\nuse() = Bb.f()\nend\n",
+    "aa/Aa.jl" => "module Aa\nimport ..SiblingPair\nuse() = SiblingPair.Bb.f()\nend\n",
     "bb/Bb.jl" => "module Bb\nf() = 1\nend\n",
 ])
 
@@ -61,7 +61,7 @@ using .Bb
     @test any(finding -> finding.kind === :sibling_edge, siblings)
 
     @test_throws ArgumentError Independent(:Geo)
-    @test_throws ArgumentError Independent(:Geo, curves)
+    @test_throws ArgumentError ArchCheck.run(Independent(:Geo, curves), nested)
     misspelled = Independent(:Contracts, :Goe)
     @test_throws ArgumentError ArchCheck.run(misspelled, nested)
 end

@@ -239,23 +239,43 @@ function is_downrank(rank, from, to)
     completes_before(target, source)
 end
 
-# A module reaching one that encloses it: the root encloses every module, and a dotted key encloses those below it.
-function reaches_enclosing(ref::ModRef, root::Symbol)
+# Each ranked module's loaded module by its key; nothing for one this Julia did not load.
+function ranked_modules(index, package::Module)
+    found = Dict{Symbol,Union{Nothing,Module}}()
+    for key in keys(index.rank)
+        found[key] = loaded_module(package, key)
+    end
+    found
+end
+
+# Whether the module keyed `outer` encloses the one keyed `inner`, both loaded.
+function key_encloses(modules, outer::Symbol, inner::Symbol)
+    outer_module = get(modules, outer, nothing)
+    inner_module = get(modules, inner, nothing)
+    isnothing(outer_module) && return false
+    isnothing(inner_module) && return false
+    encloses(outer_module, inner_module)
+end
+
+# A module reaching one that encloses it. The root encloses every module, an extension's included.
+function reaches_enclosing(ref::ModRef, root::Symbol, modules)
     ref.to === root && return true
-    is_within_module(ref.from, ref.to)
+    key_encloses(modules, ref.to, ref.from)
 end
 
 # The references the layering rules judge. A package may let its modules use what encloses them; `strict` holds
 # every module to the layering.
-function layered_refs(index, root::Symbol, strict::Bool)
+function layered_refs(index, package::Module, strict::Bool)
     strict && return index.refs
-    filter(ref -> !reaches_enclosing(ref, root), index.refs)
+    root = nameof(package)
+    modules = ranked_modules(index, package)
+    filter(ref -> !reaches_enclosing(ref, root, modules), index.refs)
 end
 
 # Any cross-module reference whose target does not finish loading strictly before its source.
-function check_backedges(index::SourceIndex, root::Symbol; strict::Bool)
+function check_backedges(index::SourceIndex, package::Module; strict::Bool)
     findings = Finding[]
-    for ref in layered_refs(index, root, strict)
+    for ref in layered_refs(index, package, strict)
         is_backedge(index.rank, ref.from, ref.to) || continue
         from_rank = index.rank[ref.from]
         to_rank = index.rank[ref.to]
@@ -314,9 +334,9 @@ function find_cycles(nodes, adjacent::AbstractDict)
 end
 
 # A cycle at module zoom. A down-only graph is already acyclic.
-function check_cycles(index, root::Symbol; strict::Bool)
+function check_cycles(index, package::Module; strict::Bool)
     adjacent = Dict{Symbol,Vector{Symbol}}()
-    for ref in layered_refs(index, root, strict)
+    for ref in layered_refs(index, package, strict)
         targets = get!(adjacent, ref.from, Symbol[])
         push!(targets, ref.to)
     end
@@ -336,25 +356,28 @@ function check_cycles(index, root::Symbol; strict::Bool)
     findings
 end
 
-# Whether module `key` is `owner` or nested in it, by dotted key.
-function is_within_module(key::Symbol, owner::Symbol)
-    key === owner && return true
-    prefix = string(owner, ".")
-    text = string(key)
-    startswith(text, prefix)
-end
-
-# A reference from one member of the set, or a module nested in it, to another member's tree.
-function check_independent(index, modules)
+# A set member must be ranked, and none may sit inside another.
+function check_members(index, loaded, modules)
     for mod in modules
         if !haskey(index.rank, mod)
             throw(ArgumentError("Independent names $mod, which the module graph does not rank"))
         end
     end
+    for outer in modules, inner in modules
+        outer === inner && continue
+        key_encloses(loaded, outer, inner) || continue
+        throw(ArgumentError("Independent names $inner, which is nested in $outer"))
+    end
+end
+
+# A reference from one member of the set, or a module nested in it, to another member's tree.
+function check_independent(index, package::Module, modules)
+    loaded = ranked_modules(index, package)
+    check_members(index, loaded, modules)
     findings = Finding[]
     for ref in index.refs
-        source_at = findfirst(member -> is_within_module(ref.from, member), modules)
-        target_at = findfirst(member -> is_within_module(ref.to, member), modules)
+        source_at = findfirst(member -> key_encloses(loaded, member, ref.from), modules)
+        target_at = findfirst(member -> key_encloses(loaded, member, ref.to), modules)
         isnothing(source_at) && continue
         isnothing(target_at) && continue
         source_at == target_at && continue

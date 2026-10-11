@@ -183,10 +183,6 @@ struct Independent{N} <: Check
     function Independent(modules::Symbol...)
         length(modules) >= 2 || throw(ArgumentError("Independent needs two or more modules, got $modules"))
         allunique(modules) || throw(ArgumentError("Independent names a module twice: $modules"))
-        for outer in modules, inner in modules
-            outer !== inner && is_within_module(inner, outer) &&
-                throw(ArgumentError("Independent names $inner, which is nested in $outer"))
-        end
         new{length(modules)}(modules)
     end
 end
@@ -211,10 +207,10 @@ end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,
                    :unranked_file => :error, :unranked_module => :error)
 
-run(check::ModuleBackEdges, ctx) = check_backedges(ctx.index, nameof(ctx.root); strict = check.strict)
+run(check::ModuleBackEdges, ctx) = check_backedges(ctx.index, ctx.root; strict = check.strict)
 kinds(::ModuleBackEdges) = (:back_edge => :error,)
 
-run(check::ModuleCycles, ctx) = check_cycles(ctx.index, nameof(ctx.root); strict = check.strict)
+run(check::ModuleCycles, ctx) = check_cycles(ctx.index, ctx.root; strict = check.strict)
 kinds(::ModuleCycles) = (:cycle => :error,)
 
 run(check::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.index.rank; strict = check.strict)
@@ -265,7 +261,7 @@ run(check::ReaderSet, ctx) =
     check_reader_set(package_modules(ctx), check.super, check.required; sites = ctx.sites)
 kinds(::ReaderSet) = (:reader_set => :error,)
 
-run(check::Independent, ctx) = check_independent(ctx.index, check.modules)
+run(check::Independent, ctx) = check_independent(ctx.index, ctx.root, check.modules)
 kinds(::Independent) = (:sibling_edge => :error,)
 
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)

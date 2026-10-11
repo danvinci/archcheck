@@ -162,6 +162,12 @@ function collect_lhs!(found, node::JS.SyntaxNode)
         for child in children
             collect_lhs!(found, child)
         end
+    elseif kind == K"curly"
+        # A parametric alias, `A{T<:B} = ...`, declares its parameters and reads each bound.
+        for parameter in children[2:end]
+            is_bounded = JS.kind(parameter) == K"<:" || JS.kind(parameter) == K">:"
+            is_bounded && push!(found, last(child_nodes(parameter)))
+        end
     elseif kind == K"macrocall"
         for argument in children[2:end]
             collect_lhs!(found, argument)
@@ -222,9 +228,12 @@ struct CodeWalk{N}
     filed::IdSet{JS.SyntaxNode}           # declaring identifiers whose binding the scan already holds
 end
 
-# The walk's two read recorders, defined beside the module lookup they resolve qualifiers with.
+# The walk's read recorders, and its recorders of import clauses and module aliases, each defined beside the module
+# lookup it resolves paths with.
 function note_free_name! end
 function note_member! end
+function note_import! end
+function note_alias! end
 
 # A definition's refs set exists once the walk opens it, read or not.
 function open_target!(walk::CodeWalk, target)
@@ -389,22 +398,11 @@ function scope_type!(walk::CodeWalk, node, scope)
     end
 end
 
-# A using or import line reads nothing; it binds the last name of each item it lists.
-function scope_import!(walk::CodeWalk, node)
-    for clause in child_nodes(node)
-        items = import_items(clause)
-        for item in items
-            parts = child_nodes(item)
-            bound = node_symbol(last(parts))
-            isnothing(bound) || push!(walk.scan.imports, bound)
-        end
-    end
-end
-
-function import_items(clause::JS.SyntaxNode)
-    JS.kind(clause) == K":" || return [clause]
-    children = child_nodes(clause)
-    children[2:end]
+# A `const` line at the top of the code binds a name: one naming a module is an alias of it.
+function scope_const!(walk::CodeWalk, node, scope)
+    scope_plain!(walk, node, scope)
+    isnothing(scope.method) || return
+    note_alias!(walk, node)
 end
 
 # A macro's arguments and the names its body assigns are its own; its name is no read.
@@ -546,7 +544,9 @@ function walk_scoped!(scan, node, scope)
     elseif kind == K"struct" || kind == K"abstract"
         scope_type!(scan, node, scope)
     elseif kind == K"using" || kind == K"import"
-        scope_import!(scan, node)
+        note_import!(scan, node, scope)
+    elseif kind == K"const"
+        scope_const!(scan, node, scope)
     elseif kind == K"export" || kind == K"public"
         scope_export!(scan, node, scope)
     elseif kind == K"="
