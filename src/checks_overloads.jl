@@ -28,24 +28,19 @@ function abstract_array_type(@nospecialize(slot))
     array
 end
 
-# The element type an array slot holds, closed over its method's type variables so slots of two methods compare.
-# `eltype` reads an element with free type variables as `Any`.
-function element_type(@nospecialize(slot), @nospecialize(signature))
+# Rank and element of one array slot. A where-variable rank stays free; `eltype` would read that element as `Any`.
+function array_storage(@nospecialize(slot), @nospecialize(signature))
     array = abstract_array_type(slot)
-    isnothing(array) && return Any
-    held = first(array.parameters)
-    within_slot = under_clauses_of(held, slot)
-    under_clauses_of(within_slot, signature)
-end
-
-# The rank an array slot declares. A where-variable in that parameter is a free rank.
-function array_rank(@nospecialize(slot))
-    array = abstract_array_type(slot)
-    isnothing(array) && return nothing
+    isnothing(array) && return (nothing, Any)
     rank_parameter = 2
     rank = array.parameters[rank_parameter]
-    rank isa Int || return nothing
-    rank
+    if !(rank isa Int)
+        rank = nothing
+    end
+    held = first(array.parameters)
+    within_slot = under_clauses_of(held, slot)
+    element = under_clauses_of(within_slot, signature)
+    (rank, element)
 end
 
 function is_storage_argument(@nospecialize(earlier), @nospecialize(later), earlier_method::Method, later_method::Method)
@@ -55,13 +50,11 @@ function is_storage_argument(@nospecialize(earlier), @nospecialize(later), earli
     later <: AbstractArray || return false
     earlier <: later && return false
     later <: earlier && return false
-    earlier_rank = array_rank(earlier)
-    later_rank = array_rank(later)
+    earlier_rank, earlier_element = array_storage(earlier, earlier_method.sig)
+    later_rank, later_element = array_storage(later, later_method.sig)
     if earlier_rank isa Int && later_rank isa Int
         earlier_rank == later_rank || return false
     end
-    earlier_element = element_type(earlier, earlier_method.sig)
-    later_element = element_type(later, later_method.sig)
     earlier_element == later_element || return false
     earlier <: Array || later <: Array
 end
