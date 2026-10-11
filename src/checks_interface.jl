@@ -214,7 +214,7 @@ end
 
 # private-extension: a method one project module adds to a function another owns, unless the owner declares the
 # function public and documents it. Extending an undeclared function reaches into its owner's implementation.
-function check_declared_extensions(defined, mods; repo)
+function check_declared_extensions(defined, mods; recorded::RecordedPaths)
     project = Set(mods)
     reported = Set{Tuple{Module,Module,Symbol}}()   # (owner, home, function): one finding for all of a home's methods
     findings = Finding[]
@@ -234,7 +234,7 @@ function check_declared_extensions(defined, mods; repo)
         is_documented = !isnothing(docs)
         is_public && is_documented && continue
         owner = string(module_key(owning_module))
-        file, line = method_site(method, repo)
+        file, line = method_site(method, recorded)
         evidence = [:owner => owner, :function => string(name),
                     :public => string(is_public), :documented => string(is_documented)]
         detail = "adds a method to a function its owner does not declare public and document"

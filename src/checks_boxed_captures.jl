@@ -41,7 +41,7 @@ function written_body(method::Method, written_for)
 end
 
 # Every method the package defines, a method on another package's function included.
-function check_boxed_captures(defined; repo)
+function check_boxed_captures(defined; recorded::RecordedPaths)
     findings = Finding[]
     seen = Set{Tuple{String,Int,String}}()
     written_for = generated_methods(defined)
@@ -49,7 +49,7 @@ function check_boxed_captures(defined; repo)
         boxes = count_boxes(method)
         boxes == 0 && continue
         written, runs_at = written_body(method, written_for)
-        file, line = method_site(written, repo)
+        file, line = method_site(written, recorded)
         key = (file, line, runs_at)
         key in seen && continue
         push!(seen, key)

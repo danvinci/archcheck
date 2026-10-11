@@ -276,18 +276,9 @@ function unread_node(argument, signature, reads_of)
     node
 end
 
-function cached_path!(paths, file, repo)
-    cached = get(paths, file, nothing)
-    isnothing(cached) || return cached
-    path = recorded_path(file, repo)
-    paths[file] = path
-    path
-end
-
 # The parsed form a loaded method was defined by; nothing when the index holds none at its site.
-function site_form(index::SourceIndex, method::Method, paths)
-    path = cached_path!(paths, method.file, index.repo)
-    key = (path, Int(method.line))
+function site_form(index::SourceIndex, method::Method, recorded::RecordedPaths)
+    key = method_site(method, recorded)
     held = get(index.forms, key, NO_PLACED_FORMS)
     for placed in held
         site_names_method(placed.site, method) && return placed.form
@@ -297,9 +288,9 @@ end
 
 # Each position a method leaves unread, read off its parsed form once; none for a method the parse holds no form
 # for, a `@generated` one, or a vararg tail.
-function unread_positions(method::Method, index::SourceIndex, paths, reads_of, reads::MacroReads)
+function unread_positions(method::Method, index::SourceIndex, recorded, reads_of, reads::MacroReads)
     unread = falses(Int(method.nargs) - 1)
-    form = site_form(index, method, paths)
+    form = site_form(index, method, recorded)
     isnothing(form) && return unread
     is_generated_form(form) && return unread
     signature = first(child_nodes(form))
@@ -354,12 +345,12 @@ function shares_declared_type(methods, position::Int, @nospecialize(declared))
 end
 
 # Each position every method of a package-owned function leaves unread under one declared type.
-function add_ignored_findings!(findings, value::Function, all_methods, project, index, paths, reads_of, reads)
+function add_ignored_findings!(findings, value::Function, all_methods, project, index, recorded, reads_of, reads)
     own = filter(method -> method.module in project, all_methods)
     isempty(own) && return findings
     sorted = sort(own, by = method -> (string(method.file), method.line))
     home = first(sorted)
-    unread = [unread_positions(method, index, paths, reads_of, reads) for method in all_methods]
+    unread = [unread_positions(method, index, recorded, reads_of, reads) for method in all_methods]
     widest = maximum(length, unread)
     function_name = written_name(nameof(value))
     owner = module_key(home.module)
@@ -367,7 +358,7 @@ function add_ignored_findings!(findings, value::Function, all_methods, project, 
         all(flags -> position <= length(flags) && flags[position], unread) || continue
         declared = position_type(home, position)
         shares_declared_type(all_methods, position, declared) || continue
-        file, line = method_site(home, index.repo)
+        file, line = method_site(home, recorded)
         symbol = string(function_name, ":", position)
         detail = "every method of the function leaves this position unread under one declared type"
         count = string(length(all_methods))
@@ -378,16 +369,16 @@ function add_ignored_findings!(findings, value::Function, all_methods, project, 
     findings
 end
 
-function check_unused_bindings(index::SourceIndex, defined, added, project, owned, root::Module)
+function check_unused_bindings(index::SourceIndex, defined, added, project, owned, root::Module,
+                               recorded::RecordedPaths)
     reads_of = read_counts(index)
     reads = MacroReads(root)
     findings = Finding[]
     for file in index.files
         add_unused_findings!(findings, file, reads_of, reads)
     end
-    paths = Dict{Symbol,String}()
     for (value, all_methods) in owned_methods(defined, added, owned)
-        add_ignored_findings!(findings, value, all_methods, project, index, paths, reads_of, reads)
+        add_ignored_findings!(findings, value, all_methods, project, index, recorded, reads_of, reads)
     end
     findings
 end

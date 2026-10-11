@@ -25,14 +25,14 @@ OptAnalysis() = OptAnalysis(OptEntry[])
 
 jet_loaded() = loaded_package("JET")
 
-function entry_location(entry::OptEntry, repo)
+function entry_location(entry::OptEntry, recorded::RecordedPaths)
     m = which(entry.f, entry.argtypes)
     mod = module_key(m.module)
-    file, line = method_site(m, repo)
+    file, line = method_site(m, recorded)
     (mod = mod, file = file, line = line)
 end
 
-function analyze_entries(jet::Module, entries, repo, target_modules)
+function analyze_entries(jet::Module, entries, recorded, target_modules)
     findings = Finding[]
     mods = Tuple(target_modules)
     RuntimeDispatchReport = jet.RuntimeDispatchReport
@@ -43,7 +43,7 @@ function analyze_entries(jet::Module, entries, repo, target_modules)
         n_dispatch = count(r -> r isa RuntimeDispatchReport, reports)
         n_box = count(r -> r isa CapturedVariableReport, reports)
         (n_dispatch == 0 && n_box == 0) && continue
-        mod, file, line = entry_location(entry, repo)
+        mod, file, line = entry_location(entry, recorded)
         if n_dispatch > 0
             push!(findings, Finding(mod, :runtime_dispatch, file, entry.symbol, line,
                   "runtime dispatch in the inferred graph of this entry",
@@ -58,15 +58,15 @@ function analyze_entries(jet::Module, entries, repo, target_modules)
     findings
 end
 
-function check_opt_entries(entries; repo, target_modules)
+function check_opt_entries(entries; recorded, target_modules)
     isempty(entries) && return Finding[]
     jet = jet_loaded()
     isnothing(jet) && return Finding[]
-    analyze_entries(jet, entries, repo, target_modules)
+    analyze_entries(jet, entries, recorded, target_modules)
 end
 
 run(check::OptAnalysis, ctx) =
-    check_opt_entries(check.entries; repo = ctx.index.repo, target_modules = package_modules(ctx))
+    check_opt_entries(check.entries; recorded = ctx.recorded, target_modules = package_modules(ctx))
 
 # Without JET the analysis cannot run, so it declares no kinds and a JET-less run claims none of them clean.
 function kinds(::OptAnalysis)

@@ -19,14 +19,14 @@ end
 function run(check::UnreachedMethods, ctx)
     reached = ctx.observed.reached
     graph = ctx.methods
-    repo = ctx.index.repo
+    recorded = ctx.recorded
     landed = landed_methods(graph)
     findings = Finding[]
     for method in ctx.defined
         is_public_entry(check, method) && continue
         is_unreached(method, reached, landed) || continue
-        has_source_site(method, ctx.index) || continue
-        finding = unreached_finding(method, repo, graph)
+        has_source_site(method, ctx.index, recorded) || continue
+        finding = unreached_finding(method, recorded, graph)
         push!(findings, finding)
     end
     findings
@@ -89,8 +89,8 @@ end
 
 # A macro can build a method where the source writes no definition of it: `@enum` files its methods at the call, a
 # macro from outside the package in its own file. Such a method has no source line to act on.
-function has_source_site(method::Method, index::SourceIndex)
-    path, line = method_site(method, index.repo)
+function has_source_site(method::Method, index::SourceIndex, recorded::RecordedPaths)
+    path, line = method_site(method, recorded)
     file = indexed_file(index, path, line)
     isnothing(file) && return false
     statement = statement_at(file.tree, line)
@@ -117,8 +117,8 @@ function unreached_detail(::Nothing)
     "the workload compiled no specialization of this method"
 end
 
-function unreached_finding(method, repo, graph)
-    file, line = method_site(method, repo)
+function unreached_finding(method, recorded, graph)
+    file, line = method_site(method, recorded)
     owner = module_key(method.module)
     name = string(method.name)
     signature = type_text(method.sig)

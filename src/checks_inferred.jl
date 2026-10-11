@@ -10,12 +10,12 @@ phase(::InferredCalls) = :graph
 function run(::InferredCalls, ctx)
     graph = ctx.methods
     isnothing(graph) && throw(ArgumentError("InferredCalls needs entries"))
-    repo = ctx.index.repo
+    recorded = ctx.recorded
     discarded = discarded_calls(ctx.index)
     findings = Finding[]
     for (caller, facts) in graph.calls
         for fact in facts
-            path = fact_path(fact, repo)
+            path = fact_path(fact, recorded)
             if is_reported_failure(fact)
                 push!(findings, failing_finding(caller, fact, path))
             end

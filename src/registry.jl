@@ -10,6 +10,7 @@ struct Context{D<:Tuple}
     defined::Vector{Method}                 # every live method the package's modules define, in source order
     added::Vector{Method}                   # live methods other modules add on functions the package owns
     nested::Vector{Method}                  # live methods an unranked direct child defines, in source order
+    recorded::RecordedPaths                 # repo-relative path of each file the three method lists record
     methods::Union{Nothing,MethodGraph}     # calls between methods from the declared entries; nothing when none is declared
     observed::Union{Nothing,Observation}    # what the workload did; nothing before it runs, or with no workload
     derived::D                              # the package's declared derived values, each a `Derived`
@@ -28,12 +29,23 @@ function read_methods(mods)
     finish_methods(defined, foreign, nested, project)
 end
 
+# Each file the method lists record, converted to its repo-relative path once.
+function recorded_paths(repo::String, method_lists)
+    paths = Dict{Symbol,String}()
+    for methods in method_lists, method in methods
+        haskey(paths, method.file) && continue
+        paths[method.file] = recorded_path(method.file, repo)
+    end
+    RecordedPaths(repo, paths)
+end
+
 function Context(index::SourceIndex, root::Module, mods; methods = nothing, derived = ())
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
     modules = package_modules(root, mods)
     defined, added, nested = read_methods(modules)
-    Context(index, root, mods, sites, callgraphs, defined, added, nested, methods, nothing, derived)
+    recorded = recorded_paths(index.repo, (defined, added, nested))
+    Context(index, root, mods, sites, callgraphs, defined, added, nested, recorded, methods, nothing, derived)
 end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
@@ -55,8 +67,10 @@ end
 # The same context once the workload has run, with the method lists `observe` read after it: restored probes
 # define methods, and that walk sees them.
 function Context(ctx::Context; observed::Observation, census)
+    lists = (census.defined, census.added, census.nested)
+    recorded = recorded_paths(ctx.index.repo, lists)
     Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, census.defined, census.added, census.nested,
-            ctx.methods, observed, ctx.derived)
+            recorded, ctx.methods, observed, ctx.derived)
 end
 
 # The context with the calls between methods from `entries`; unchanged when none is declared. The walk makes a
@@ -69,8 +83,8 @@ function with_method_graph(ctx::Context, entries)
     if !isnothing(ctx.observed)
         add_compiled_edges!(methods, ctx.observed.specializations, project)
     end
-    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, ctx.nested, methods,
-            ctx.observed, ctx.derived)
+    Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, ctx.defined, ctx.added, ctx.nested, ctx.recorded,
+            methods, ctx.observed, ctx.derived)
 end
 
 """A rule over a package: a subtype declares the findings it may emit and produces them, and names its stage when it reads a workload. A package passes its own through the `checks` keyword."""
@@ -200,7 +214,8 @@ function run(::Corpus, ctx)
     root = nameof(ctx.root)
     files = check_corpus(ctx.index, root)
     unincluded = Set(normpath(path) for path in ctx.index.unincluded)
-    modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested, unincluded; repo = ctx.index.repo)
+    modules = check_module_corpus(package_modules(ctx), ctx.index.rank, ctx.nested, unincluded;
+                                  recorded = ctx.recorded)
     vcat(files, modules)
 end
 kinds(::Corpus) = (:unparsed => :error, :missing_include => :error, :nonliteral_include => :error,
@@ -215,7 +230,7 @@ kinds(::ModuleCycles) = (:cycle => :error,)
 run(check::OwnerUniqueness, ctx) = check_dup_owners(ctx.mods, ctx.index.rank; strict = check.strict)
 kinds(::OwnerUniqueness) = (:duplicate_owner => :error,)
 
-run(check::ModulePiracy, ctx) = check_module_piracy(ctx.defined, ctx.root; repo = ctx.index.repo, strict = check.strict)
+run(check::ModulePiracy, ctx) = check_module_piracy(ctx.defined, ctx.root; recorded = ctx.recorded, strict = check.strict)
 kinds(::ModulePiracy) = (:module_piracy => :error,)
 
 run(::TupleReturns, ctx) = check_tuple_returns(ctx.index)
@@ -223,7 +238,7 @@ kinds(::TupleReturns) = (:tuple_return => :advisory,)
 
 function run(check::DeadCode, ctx)
     modules = package_modules(ctx)
-    owned = owned_functions_by_site(ctx.defined, modules, ctx.index.repo)
+    owned = owned_functions_by_site(ctx.defined, modules, ctx.recorded)
     check_dead_code_static(ctx.index, modules, owned; public_is_entry = check.public_is_entry)
 end
 kinds(::DeadCode) = (:dead_code => :advisory,)
@@ -241,14 +256,14 @@ function run(@nospecialize(check::ReachesInternal), ctx)
 end
 kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
 
-run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; repo = ctx.index.repo)
+run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; recorded = ctx.recorded)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)
 
 function run(::UnusedBindings, ctx)
     modules = package_modules(ctx)
     project = Set{Module}(modules)
     owned = owned_functions(ctx.defined, project)
-    check_unused_bindings(ctx.index, ctx.defined, ctx.added, project, owned, ctx.root)
+    check_unused_bindings(ctx.index, ctx.defined, ctx.added, project, owned, ctx.root, ctx.recorded)
 end
 kinds(::UnusedBindings) = (:unused_argument => :advisory, :unused_local => :advisory,
                            :ignored_parameter => :advisory)
@@ -266,7 +281,10 @@ kinds(::Independent) = (:sibling_edge => :error,)
 run(::DeclaredModules, ctx) = check_declared_modules(ctx.index)
 kinds(::DeclaredModules) = (:undeclared_module => :advisory,)
 
-run(::DeclaredExtensions, ctx) = check_declared_extensions(ctx.defined, package_modules(ctx); repo = ctx.index.repo)
+function run(::DeclaredExtensions, ctx)
+    modules = package_modules(ctx)
+    check_declared_extensions(ctx.defined, modules; recorded = ctx.recorded)
+end
 kinds(::DeclaredExtensions) = (:private_extension => :error,)
 
 run(::ForeignFields, ctx) = check_foreign_fields(ctx.index, ctx.mods)
@@ -282,7 +300,7 @@ function run(::FileSinkable, ctx)
     published = published_names(ctx.index)
     judge = function (cg::CallGraph)
         vocabulary = union(cg.types, cg.shared, published)
-        check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.index.repo, vocabulary)
+        check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.recorded, vocabulary)
     end
     collect_modules(judge, ctx)
 end
@@ -293,7 +311,8 @@ phase(::FileSinkable) = :graph
 function run(::Sinkable, ctx)
     body_calls = Dict(m => cg.refs for (m, cg) in ctx.callgraphs)
     grouped = methods_by_function(ctx.defined)
-    sink = check_sinkable(ctx.mods, ctx.index.rank, body_calls, ctx.sites, grouped, ctx.root; repo = ctx.index.repo)
+    sink = check_sinkable(ctx.mods, ctx.index.rank, body_calls, ctx.sites, grouped, ctx.root;
+                          recorded = ctx.recorded)
     vcat(sink, check_extract_candidates(sink))
 end
 kinds(::Sinkable) = (:sinkable => :advisory, :extract_candidate => :advisory)

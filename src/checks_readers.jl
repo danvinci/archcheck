@@ -104,7 +104,7 @@ end
 # narrower methods it admits.
 function read_typed!(item, ctx)
     seen = Set{NTuple{4,String}}()
-    repo = ctx.index.repo
+    recorded = ctx.recorded
     interp = inference_interpreter()
     for method in reached_methods(ctx.methods)
         root = Base.moduleroot(method.module)
@@ -114,28 +114,28 @@ function read_typed!(item, ctx)
         isnothing(frame) && continue
         code = frame.src
         for stmt in code.code
-            scan_expr!(item, code, stmt, seen, method, repo)
+            scan_expr!(item, code, stmt, seen, method, recorded)
         end
     end
 end
 
-function scan_expr!(item, code, expr::Expr, seen, method, repo)
+function scan_expr!(item, code, expr::Expr, seen, method, recorded)
     head = expr.head
     args = expr.args
     if head === :invoke && length(args) >= 2
-        read_args!(item, code, args[2:end], seen, method, repo)
+        read_args!(item, code, args[2:end], seen, method, recorded)
     elseif head === :call
-        read_args!(item, code, args, seen, method, repo)
+        read_args!(item, code, args, seen, method, recorded)
     end
     for arg in args
-        scan_expr!(item, code, arg, seen, method, repo)
+        scan_expr!(item, code, arg, seen, method, recorded)
     end
 end
 
-scan_expr!(_item, _code, @nospecialize(_expr), _seen, _method, _repo) = nothing
+scan_expr!(_item, _code, @nospecialize(_expr), _seen, _method, _recorded) = nothing
 
 # `kwcall` names its callee in argument 3; `throw_methoderror` names it in argument 2 and its arguments follow.
-function read_args!(item, code, args, seen, method, repo)
+function read_args!(item, code, args, seen, method, recorded)
     isempty(args) && return
     head = resolve_callee(code, args[1])
     callee_at = 1
@@ -163,7 +163,7 @@ function read_args!(item, code, args, seen, method, repo)
     key = (symbol, callee, "code_typed", item.label)
     key in seen && return
     push!(seen, key)
-    file, line = method_site(method, repo)
+    file, line = method_site(method, recorded)
     owner = module_key(method.module)
     detail = "the producer's result is an argument of " * callee
     push_finding!(owner, file, symbol, line, item.label, callee, "code_typed", detail, item.findings)

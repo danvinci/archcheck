@@ -95,8 +95,9 @@ end
 
 # module-piracy: the function is foreign to every owner scope, and every argument type to their subtrees. A keyword
 # method is judged by the function it wraps.
-function check_module_piracy(defined, root::Module; repo, strict::Bool)
+function check_module_piracy(defined, root::Module; recorded::RecordedPaths, strict::Bool)
     findings = Finding[]
+    repo = recorded.repo
     homes = unique(method.module for method in defined)
     scopes_by_home = Dict(home => owner_scopes(home, root, strict, repo) for home in homes)
     for method in defined
@@ -109,7 +110,7 @@ function check_module_piracy(defined, root::Module; repo, strict::Bool)
         all_foreign(members, owns_function) || continue
         owns_argument = mod -> is_in_any_scope(mod, scopes, false)
         all_foreign(arguments, owns_argument) || continue
-        file, line = method_site(method, repo)
+        file, line = method_site(method, recorded)
         owner = type_module(function_type)
         if isnothing(owner)
             owner_path = type_text(function_type)

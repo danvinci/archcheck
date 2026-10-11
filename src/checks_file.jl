@@ -66,12 +66,12 @@ function check_file_sinkable(cg::CallGraph, sites, vocabulary)
 end
 
 # Methods of this module's functions, each at the file and line the loader recorded.
-function judged_methods(cg, methods, repo)
+function judged_methods(cg, methods, recorded::RecordedPaths)
     owned = Set(cg.funcs)
     judged = Tuple{Method,String,Int}[]
     for caller in keys(methods.edges)
         caller.name in owned || continue
-        located = method_site(caller, repo)
+        located = method_site(caller, recorded)
         home = located[1]
         haskey(cg.rank, home) || continue
         line = located[2]
@@ -98,7 +98,7 @@ function add_callee_target!(targets, cg, caller_name, callee, walk)
         return
     end
     callee.name in walk.vocabulary && return
-    located = method_site(callee, walk.repo)
+    located = method_site(callee, walk.recorded)
     path = located[1]
     haskey(cg.rank, path) || return
     callee.name === caller_name && return
@@ -115,23 +115,23 @@ function add_body_targets!(targets, cg, caller_name, method, walk)
     end
 end
 
-# What one method's target walk reads: the graph, the repository its sites are relative to, the vocabulary that
-# places nothing, and the methods already walked.
+# What one method's target walk reads: the graph, the paths its sites read, the vocabulary that places nothing, and
+# the methods already walked.
 struct TargetWalk
     methods::MethodGraph        # calls between methods
-    repo::String                # root the method sites are relative to
+    recorded::RecordedPaths     # repo-relative path of each file a method records
     vocabulary::Set{Symbol}     # names a call to which places nothing
     seen::Set{Method}           # methods this walk has expanded
 end
 
-function add_method_targets!(targets, cg, method, methods, repo, vocabulary)
+function add_method_targets!(targets, cg, method, methods, recorded, vocabulary)
     caller_name = method.name
     seen = Set{Method}()
-    walk = TargetWalk(methods, repo, vocabulary, seen)
+    walk = TargetWalk(methods, recorded, vocabulary, seen)
     add_body_targets!(targets, cg, caller_name, method, walk)
 end
 
-function method_findings(cg, methods, judged, repo, vocabulary)
+function method_findings(cg, methods, judged, recorded, vocabulary)
     callers = caller_counts(cg)
     findings = Finding[]
     for placed in judged
@@ -139,7 +139,7 @@ function method_findings(cg, methods, judged, repo, vocabulary)
         home = placed[2]
         line = placed[3]
         targets = Set{String}()
-        add_method_targets!(targets, cg, caller, methods, repo, vocabulary)
+        add_method_targets!(targets, cg, caller, methods, recorded, vocabulary)
         finding = sink_verdict(cg, home, caller.name, line, targets, callers)
         isnothing(finding) || push!(findings, finding)
     end
@@ -148,10 +148,10 @@ end
 
 # With a method graph, each method is judged on the methods its calls can land on.
 # A function with no method in the graph keeps the name-level verdict.
-function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, repo, vocabulary)
-    judged = judged_methods(cg, methods, repo)
+function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, recorded, vocabulary)
+    judged = judged_methods(cg, methods, recorded)
     named = check_file_sinkable(cg, sites, vocabulary)
-    per_method = method_findings(cg, methods, judged, repo, vocabulary)
+    per_method = method_findings(cg, methods, judged, recorded, vocabulary)
     covered = covered_names(judged)
     kept = Finding[]
     for finding in named
@@ -163,7 +163,7 @@ function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, repo, v
     kept
 end
 
-check_file_sinkable(cg::CallGraph, sites, ::Nothing, _repo, vocabulary) = check_file_sinkable(cg, sites, vocabulary)
+check_file_sinkable(cg::CallGraph, sites, ::Nothing, _recorded, vocabulary) = check_file_sinkable(cg, sites, vocabulary)
 
 # extract-candidate: the density view of sinkable - a file holding several such defs.
 const EXTRACT_DEFS_MIN = 3

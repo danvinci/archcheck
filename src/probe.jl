@@ -283,7 +283,7 @@ function install_target!(target, session, is_probed::Bool, ctx, originals, skipp
     located = Any[]
     for method in methods(target)
         method.module in modules || continue
-        found = method_form(ctx.index, method)
+        found = method_form(ctx.index, ctx.recorded, method)
         push!(listed, method)
         push!(located, found)
     end

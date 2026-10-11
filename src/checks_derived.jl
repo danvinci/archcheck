@@ -20,7 +20,7 @@ function run(::CacheKeys, ctx)
     isempty(ctx.derived) && return Finding[]
     found = Finding[]
     for declared in ctx.derived
-        append_cache!(found, declared, ctx.index, ctx.root)
+        append_cache!(found, declared, ctx.index, ctx.recorded, ctx.root)
     end
     found
 end
@@ -55,10 +55,10 @@ function index_forms(index)
     found
 end
 
-function function_forms(index, fn)
+function function_forms(index, recorded, fn)
     found = LocatedForm[]
     for method in methods(fn)
-        located = method_form(index, method)
+        located = method_form(index, recorded, method)
         isnothing(located) && continue
         push!(found, located)
     end
@@ -104,7 +104,7 @@ function second_producer_findings(ctx)
     found = Finding[]
     detail = "a second method constructs the derived value"
     for declared in ctx.derived
-        owned = function_forms(ctx.index, declared.producer)
+        owned = function_forms(ctx.index, ctx.recorded, declared.producer)
         annotated = Set{Symbol}()
         constructed = Set{Symbol}()
         for placed in owned
@@ -305,10 +305,10 @@ function form_place(placed)
     (placed.file.path, line)
 end
 
-function extend_key!(_problems, _omitted, _owned, _index, _pkg, ::Nothing) end
+function extend_key!(_problems, _omitted, _owned, _index, _recorded, _pkg, ::Nothing) end
 
-function extend_key!(problems, omitted, owned, index, pkg, key::Function)
-    key_forms = function_forms(index, key)
+function extend_key!(problems, omitted, owned, index, recorded, pkg, key::Function)
+    key_forms = function_forms(index, recorded, key)
     note_identity_cache!(problems, key_forms, pkg)
     key_returns_bits(key) || push!(problems, "not_isbits")
     unkeyed = omitted_names(owned, key_forms)
@@ -322,14 +322,14 @@ function emit_cache!(found, producer_name, problem, anchor, evidence)
     push!(found, finding)
 end
 
-function append_cache!(found, declared, index, pkg)
-    owned = function_forms(index, declared.producer)
+function append_cache!(found, declared, index, recorded, pkg)
+    owned = function_forms(index, recorded, declared.producer)
     isempty(owned) && return
     anchor = argmin(form_place, owned)
     problems = Set{String}()
     omitted = Symbol[]
     note_identity_cache!(problems, owned, pkg)
-    extend_key!(problems, omitted, owned, index, pkg, declared.key)
+    extend_key!(problems, omitted, owned, index, recorded, pkg, declared.key)
     producer_name = string(nameof(declared.producer))
     ordered = sort!(collect(problems))
     for problem in ordered

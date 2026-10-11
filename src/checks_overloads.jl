@@ -7,7 +7,7 @@ kinds(::StorageOverloads) = (:storage_overload => :error,)
 
 function run(::StorageOverloads, ctx)
     modules = package_modules(ctx)
-    check_storage_overloads(ctx.defined, modules, ctx.index)
+    check_storage_overloads(ctx.defined, modules, ctx.index, ctx.recorded)
 end
 
 # A signature slot may name a type variable. The pair is judged on its upper bound.
@@ -88,10 +88,10 @@ function storage_labels(earlier::Method, later::Method, texts)
 end
 
 # Load place, then path, then line: the order a reader meets each method.
-function order_methods(owned, places, repo)
+function order_methods(owned, places, recorded::RecordedPaths)
     keyed = Vector{Pair{Tuple{Vector{Int},String,Int},Method}}()
     for method in owned
-        file, line = method_site(method, repo)
+        file, line = method_site(method, recorded)
         owner = module_key(method.module)
         place = get(places, (owner, file), Int[])
         key = (place, file, line)
@@ -121,10 +121,10 @@ function is_owned_function(value::Function, project)
     !is_generated_name(name)
 end
 
-function push_pair!(findings, earlier::Method, later::Method, labels, repo)
-    file, line = method_site(earlier, repo)
+function push_pair!(findings, earlier::Method, later::Method, labels, recorded::RecordedPaths)
+    file, line = method_site(earlier, recorded)
     earlier_site = string(file, ":", line)
-    later_file, later_line = method_site(later, repo)
+    later_file, later_line = method_site(later, recorded)
     later_site = string(later_file, ":", later_line)
     sites = join((earlier_site, later_site), " ")
     owner = module_key(earlier.module)
@@ -135,7 +135,7 @@ function push_pair!(findings, earlier::Method, later::Method, labels, repo)
     push!(findings, finding)
 end
 
-function append_pairs!(findings, ordered, repo, texts)
+function append_pairs!(findings, ordered, recorded, texts)
     count = length(ordered)
     for i in 1:count
         earlier = ordered[i]
@@ -143,18 +143,17 @@ function append_pairs!(findings, ordered, repo, texts)
             later = ordered[j]
             labels = storage_labels(earlier, later, texts)
             isnothing(labels) && continue
-            push_pair!(findings, earlier, later, labels, repo)
+            push_pair!(findings, earlier, later, labels, recorded)
         end
     end
 end
 
 # Functions in the order their first method appears. A pair is judged on a slot where both methods take an array,
 # so a method with no array argument pairs with none.
-function check_storage_overloads(defined, modules, index)
+function check_storage_overloads(defined, modules, index, recorded)
     findings = Finding[]
     project = Set{Module}(modules)
     places = load_places(index)
-    repo = index.repo
     texts = IdDict{Any,String}()
     grouped = methods_by_function(defined)
     judged = IdSet{Function}()
@@ -166,8 +165,8 @@ function check_storage_overloads(defined, modules, index)
         is_owned_function(value, project) || continue
         owned = filter(has_array_argument, grouped[value])
         length(owned) < 2 && continue
-        ordered = order_methods(owned, places, repo)
-        append_pairs!(findings, ordered, repo, texts)
+        ordered = order_methods(owned, places, recorded)
+        append_pairs!(findings, ordered, recorded, texts)
     end
     findings
 end

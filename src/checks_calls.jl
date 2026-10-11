@@ -53,9 +53,9 @@ function node_holds_loop(node)
     false
 end
 
-function body_loops(index, method)
+function body_loops(ctx, method)
     method.name in LOOP_CALLS && return true
-    located = method_form(index, method)
+    located = method_form(ctx.index, ctx.recorded, method)
     isnothing(located) && return false
     body = method_body(located.form)
     isnothing(body) && return false
@@ -77,7 +77,7 @@ function callees_of(ordered, method)
 end
 
 # A loop in the repeated callee's body, or in a callee two hops away, is the work a repeat costs.
-function costs_work(index, ordered, method)
+function costs_work(ctx, ordered, method)
     frontier = Method[method]
     seen = Set{Method}()
     depth = 0
@@ -86,7 +86,7 @@ function costs_work(index, ordered, method)
         for current in frontier
             current in seen && continue
             push!(seen, current)
-            body_loops(index, current) && return true
+            body_loops(ctx, current) && return true
             depth == LOOP_HOPS && continue
             for callee in callees_of(ordered, current)
                 push!(next_methods, callee)
@@ -113,10 +113,10 @@ end
 
 resolved_targets(facts, path, call) = site_targets(facts, path, call.line, call.callee)
 
-function repeated_costs(index, ordered, facts, path, call)
+function repeated_costs(ctx, ordered, facts, path, call)
     targets = resolved_targets(facts, path, call)
     for target in targets
-        costs_work(index, ordered, target) && return true
+        costs_work(ctx, ordered, target) && return true
     end
     isempty(targets) || return false
     call.callee in LOOP_CALLS
@@ -142,8 +142,8 @@ is_pure_call(fact::CallFact) = fact.is_concrete && fact.is_effect_free && fact.i
 
 # A method's file, body, the parameter name at each positional slot, and the loop elements each parameter yields. A
 # name the body binds again holds another value there, so its slot carries nothing.
-function method_flow(index, method)
-    located = method_form(index, method)
+function method_flow(ctx, method)
+    located = method_form(ctx.index, ctx.recorded, method)
     isnothing(located) && return nothing
     path = located.file.path
     form = located.form
@@ -217,11 +217,11 @@ function moved_slots(parameters, slots, passed)
 end
 
 # A step is a method and, per argument of the caller's call, the parameter slot holding it there.
-function carried_steps(index, facts, step)
+function carried_steps(ctx, facts, step)
     method = step[1]
     slots = step[2]
     steps = Tuple{Method,Vector{Int}}[]
-    flow = method_flow(index, method)
+    flow = method_flow(ctx, method)
     isnothing(flow) && return steps
     for node in walk_nodes(flow.body)
         JS.kind(node) == K"call" || continue
@@ -258,8 +258,8 @@ function rebuild_methods(previous, start, goal)
 end
 
 # A path counts only when every argument the caller passed the helper reaches the inner method at its own slot.
-function first_path(index, facts, start, goals)
-    opened = method_flow(index, start)
+function first_path(ctx, facts, start, goals)
+    opened = method_flow(ctx, start)
     isnothing(opened) && return nothing
     slots = collect(eachindex(opened.parameters))
     origin = (start, slots)
@@ -270,7 +270,7 @@ function first_path(index, facts, start, goals)
     while head <= length(queue)
         current = queue[head]
         head += 1
-        for step in carried_steps(index, facts, current)
+        for step in carried_steps(ctx, facts, current)
             step in seen && continue
             push!(seen, step)
             previous[step] = current
@@ -281,15 +281,15 @@ function first_path(index, facts, start, goals)
     nothing
 end
 
-function reach_costing(index, ordered, facts, helpers, inners)
+function reach_costing(ctx, ordered, facts, helpers, inners)
     costing = Set{Method}()
     for method in inners
-        costs_work(index, ordered, method) && push!(costing, method)
+        costs_work(ctx, ordered, method) && push!(costing, method)
     end
     isempty(costing) && return nothing
     ordered_helpers = sort(collect(helpers); lt = method_before)
     for start in ordered_helpers
-        path = first_path(index, facts, start, costing)
+        path = first_path(ctx, facts, start, costing)
         isnothing(path) || return path
     end
     nothing
@@ -362,7 +362,7 @@ function cross_line(helpers, inners)
     found
 end
 
-function twice_findings(file, caller, grouped, ordered, index, facts)
+function twice_findings(file, caller, grouped, ordered, ctx, facts)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the same call is written twice"
@@ -370,7 +370,7 @@ function twice_findings(file, caller, grouped, ordered, index, facts)
         line = joining_line(matched)
         isnothing(line) && continue
         sample = matched[1].call
-        repeated_costs(index, ordered, facts, file.path, sample) || continue
+        repeated_costs(ctx, ordered, facts, file.path, sample) || continue
         effects = proven_effects(facts, file.path, matched)
         isnothing(effects) && continue
         text = call_text(sample)
@@ -382,7 +382,7 @@ function twice_findings(file, caller, grouped, ordered, index, facts)
     findings
 end
 
-function reach_findings(file, caller, grouped, ordered, index, facts)
+function reach_findings(file, caller, grouped, ordered, ctx, facts)
     findings = Finding[]
     symbol = string(caller.name)
     detail = "the caller asks a question a helper already asks"
@@ -398,7 +398,7 @@ function reach_findings(file, caller, grouped, ordered, index, facts)
             inner_call = inners[1].call
             helper_methods = resolved_targets(facts, file.path, helper_call)
             inner_methods = resolved_targets(facts, file.path, inner_call)
-            path = reach_costing(index, ordered, facts, helper_methods, inner_methods)
+            path = reach_costing(ctx, ordered, facts, helper_methods, inner_methods)
             isnothing(path) && continue
             isnothing(proven_effects(facts, file.path, helpers)) && continue
             effects = proven_effects(facts, file.path, inners)
@@ -415,14 +415,14 @@ function reach_findings(file, caller, grouped, ordered, index, facts)
     findings
 end
 
-function method_overlap_findings(file, caller, placed, ordered, index, facts)
+function method_overlap_findings(file, caller, placed, ordered, ctx, facts)
     findings = Finding[]
     groups = group_by(placed, Tuple{String,String}, argument_key)
     for bucket in values(groups)
         grouped = group_by(bucket, Tuple{Symbol,String}, callee_key)
-        twice = twice_findings(file, caller, grouped, ordered, index, facts)
+        twice = twice_findings(file, caller, grouped, ordered, ctx, facts)
         append!(findings, twice)
-        reached = reach_findings(file, caller, grouped, ordered, index, facts)
+        reached = reach_findings(file, caller, grouped, ordered, ctx, facts)
         append!(findings, reached)
     end
     findings
@@ -440,11 +440,11 @@ end
 function run(::OverlappingCalls, ctx)
     isnothing(ctx.methods) && throw(ArgumentError("OverlappingCalls needs entries"))
     ordered = ordered_callees(ctx.methods)
-    facts = facts_by_site(ctx.methods, ctx.index.repo)
+    facts = facts_by_site(ctx.methods, ctx.recorded)
     seen = Set{Tuple{String,Symbol,Int}}()
     findings = Finding[]
     for method in ctx.defined
-        located = method_form(ctx.index, method)
+        located = method_form(ctx.index, ctx.recorded, method)
         isnothing(located) && continue
         module_agrees(method, located.file.mod) || continue
         site_key = (located.file.path, located.site.name, located.site.line)
@@ -453,7 +453,7 @@ function run(::OverlappingCalls, ctx)
         calls = get(located.file.scan.callsites, located.site, CallSite[])
         isempty(calls) && continue
         placed = place_calls(located.form, calls)
-        found = method_overlap_findings(located.file, method, placed, ordered, ctx.index, facts)
+        found = method_overlap_findings(located.file, method, placed, ordered, ctx, facts)
         append!(findings, found)
     end
     findings

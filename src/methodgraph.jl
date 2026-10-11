@@ -592,17 +592,17 @@ function merged_fact(known::CallFact, fact::CallFact)
 end
 
 # The repo-relative file a fact's call sits in, as an indexed file names it; empty when the code records none.
-function fact_path(fact::CallFact, repo)
+function fact_path(fact::CallFact, recorded::RecordedPaths)
     fact.file === Symbol("") && return ""
-    recorded_path(fact.file, repo)
+    site_path(recorded, fact.file)
 end
 
 """Every call fact the graph holds, by the repo-relative file, line and callee name of its call."""
-function facts_by_site(graph::MethodGraph, repo)
+function facts_by_site(graph::MethodGraph, recorded::RecordedPaths)
     found = Dict{Tuple{String,Int,Symbol},Vector{CallFact}}()
     for facts in values(graph.calls)
         for fact in facts
-            path = fact_path(fact, repo)
+            path = fact_path(fact, recorded)
             key = (path, fact.line, fact.callee)
             at = get!(Vector{CallFact}, found, key)
             push!(at, fact)

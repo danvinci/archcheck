@@ -6,7 +6,7 @@ struct ImportedNames <: Check end
 
 kinds(::ImportedNames) = (:implicit_import => :advisory, :stale_import => :advisory)
 
-run(::ImportedNames, ctx) = check_imported_names(ctx.index, ctx.mods, ctx.root)
+run(::ImportedNames, ctx) = check_imported_names(ctx.index, ctx.mods, ctx.root, ctx.recorded)
 
 # Every bare name one module's code reads or exports, across the files and blocks that hold it.
 function module_reads(files)
@@ -170,12 +170,12 @@ function implicit_findings!(findings, key, home::Module, reads, imports::ModuleI
 end
 
 # The lines, per repo-relative file, where `home` itself defines methods of the function its binding `name` holds.
-function defining_lines(home::Module, name::Symbol, repo)
+function defining_lines(home::Module, name::Symbol, recorded::RecordedPaths)
     lines = Dict{String,Set{Int}}()
     value = getfield(home, name)
     value isa Function || value isa Type || return lines
     for method in methods(value, home)
-        path, line = method_site(method, repo)
+        path, line = method_site(method, recorded)
         push!(get!(Set{Int}, lines, path), line)
     end
     lines
@@ -208,8 +208,8 @@ end
 
 # Whether `home` extends the function its binding `name` holds at a site that names it through that binding: the
 # loaded methods say where, the source how. Julia resolved such a definition through the import, so the import is read.
-function extends_through_binding(home::Module, name::Symbol, files, repo)
-    lines = defining_lines(home, name, repo)
+function extends_through_binding(home::Module, name::Symbol, files, recorded)
+    lines = defining_lines(home, name, recorded)
     for file in files
         at = get(lines, file.path, nothing)
         isnothing(at) && continue
@@ -218,13 +218,14 @@ function extends_through_binding(home::Module, name::Symbol, files, repo)
     false
 end
 
-function stale_findings!(findings, key, home::Module, reads, imports::ModuleImports, modules::ReachModules, files, repo)
+function stale_findings!(findings, key, home::Module, reads, imports::ModuleImports, modules::ReachModules, files,
+                         recorded)
     reported = Set{Tuple{Symbol,Module}}()   # (name, clause module): one finding for a name listed twice
     for listed in imports.listed
         listed.name in reads && continue
         isdefined(home, listed.name) || continue
         Base.ispublic(home, listed.name) && continue
-        extends_through_binding(home, listed.name, files, repo) && continue
+        extends_through_binding(home, listed.name, files, recorded) && continue
         pair = (listed.name, listed.from)
         pair in reported && continue
         push!(reported, pair)
@@ -242,7 +243,7 @@ function stale_findings!(findings, key, home::Module, reads, imports::ModuleImpo
 end
 
 # implicit-import and stale-import, per loaded module of the package, extensions included.
-function check_imported_names(index::SourceIndex, mods, package::Module)
+function check_imported_names(index::SourceIndex, mods, package::Module, recorded::RecordedPaths)
     no_allowed = ()
     modules = ReachModules(mods, package, no_allowed)
     findings = Finding[]
@@ -253,7 +254,7 @@ function check_imported_names(index::SourceIndex, mods, package::Module)
         reads = module_reads(files)
         imports = module_imports(home, files)
         implicit_findings!(findings, key, home, reads, imports, modules)
-        stale_findings!(findings, key, home, reads, imports, modules, files, index.repo)
+        stale_findings!(findings, key, home, reads, imports, modules, files, recorded)
     end
     findings
 end
