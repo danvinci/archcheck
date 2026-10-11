@@ -34,11 +34,14 @@ function recipe_heap_fixed(rng)
     end
     heap = rand(rng, (VECTOR_F64, MATRIX_F64))
     fixed = rand(rng, (FIX_F64, FIXB))
-    ([heap], [fixed], true)
+    # Fix is a vector. A matrix heap is a different rank.
+    same_rank = heap == VECTOR_F64
+    ([heap], [fixed], same_rank)
 end
 
+# A vector and a matrix hold different ranks.
 function recipe_two_heaps(_rng)
-    ([VECTOR_F64], [MATRIX_F64], true)
+    ([VECTOR_F64], [MATRIX_F64], false)
 end
 
 function recipe_two_positions(_rng)
@@ -169,11 +172,20 @@ struct Box{K} end
 struct Tag{K} end
 held(xs::Vector{Box{K}}) where {K} = xs
 held(xs::Matrix{Tag{K}}) where {K} = xs
+# A vector and a matrix of one element are different ranks.
 boxed(xs::Vector{Box{K}}) where {K} = xs
 boxed(xs::Matrix{Box{L}}) where {L} = xs
+# A free rank still pairs with a vector.
+open_rank(xs::AbstractArray{T,N}) where {T,N} = xs
+open_rank(xs::Vector{Any}) = xs
 """
 
 const STORE_HEAP = load_package("StoreHeap", STORE_SPINE)
+
+const SHAPE_PAIR = load_package("ShapePair", """
+from_scale(μ::Vector, σ::Vector) = σ
+from_scale(μ::Vector, Σ::Matrix) = Σ
+""", [])
 
 # The heap method loads first; the fixed-size one sits in a module block a later file holds.
 const STORE_BLOCK = load_package("StoreBlock", """
@@ -235,7 +247,8 @@ end
         (name = "kw", count = 1, storage = nothing, methods = nothing),
         (name = "wide_bound", count = 0, storage = nothing, methods = nothing),
         (name = "held", count = 0, storage = nothing, methods = nothing),
-        (name = "boxed", count = 1, storage = nothing, methods = nothing),
+        (name = "boxed", count = 0, storage = nothing, methods = nothing),
+        (name = "open_rank", count = 1, storage = nothing, methods = nothing),
     )
     for case in cases
         hits = filter(f -> f.symbol == case.name, store_found)
@@ -259,6 +272,12 @@ end
     block_found = ArchCheck.run(StorageOverloads(), block_ctx)
     block_hit = only(block_found)
     @test block_hit.file == joinpath("src", "heap.jl")
+end
+
+@testset "a vector argument and a matrix argument are not two storages of one value" begin
+    ctx = case_context(SHAPE_PAIR)
+    found = ArchCheck.run(StorageOverloads(), ctx)
+    @test isempty(found)
 end
 
 @testset "storage pairs drawn from the lattice match the verdict of the draw" begin
