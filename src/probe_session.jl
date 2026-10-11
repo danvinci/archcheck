@@ -195,8 +195,9 @@ function declared_key_hash(compute, session::ProbeSession, key_name::String, pro
 end
 
 # Returns this call's invocation, which a task the call spawns takes as its parent.
-function probe_enter(session::ProbeSession, name::Symbol, file::String, line::Int, @nospecialize(arguments::Tuple),
-        key_hash::Union{Nothing,UInt}, is_probed::Bool)
+# Inferred once, at the declared argument types. An unmarked callee is re-inferred at every concrete one.
+@noinline Base.@nospecializeinfer function probe_enter(session::ProbeSession, name::Symbol, file::String, line::Int,
+        @nospecialize(arguments::Tuple), key_hash::Union{Nothing,UInt}, is_probed::Bool)
     is_recording(session) && return session.parent[]
     frames = opened_frames(session)
     names = ancestor_names(frames)
@@ -258,7 +259,8 @@ function take_record(session::ProbeSession, @nospecialize(frame::OpenFrame), @no
     end
 end
 
-function probe_leave(session::ProbeSession, @nospecialize(result), body::DataType)
+@noinline Base.@nospecializeinfer function probe_leave(session::ProbeSession, @nospecialize(result),
+        @nospecialize(body::DataType))
     is_recording(session) && return nothing
     frame = close_frame(session)
     stopped = time()
@@ -269,7 +271,7 @@ function probe_leave(session::ProbeSession, @nospecialize(result), body::DataTyp
     nothing
 end
 
-function probe_abort(session::ProbeSession)
+@noinline function probe_abort(session::ProbeSession)
     is_recording(session) && return nothing
     close_frame(session)
     nothing
