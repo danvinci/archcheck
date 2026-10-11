@@ -185,9 +185,10 @@ end
 
 site_place(places, site) = get(places, (site.mod, site.file), Int[])
 
-function sort_sites(sites, places)
-    sort(sites; by = site -> (site_place(places, site), site.line, site.path))
-end
+# A site's place in the load: its file's place, then its line and its path down the method body.
+site_key(places, site) = (place = site_place(places, site), line = site.line, path = site.path)
+
+sort_sites(sites, places) = sort(sites; by = site -> site_key(places, site))
 
 function method_keys(sites)
     seen = Set{Tuple{String,Symbol,Int}}()
@@ -241,23 +242,27 @@ function group_covered(sites, kept)
     true
 end
 
-function keep_groups(grouped)
-    digests = collect(keys(grouped))
-    sort!(digests; by = digest -> digest.nodes, rev = true)
-    kept = CloneGroup[]
-    for digest in digests
-        sites = grouped[digest]
+# Larger subtrees first, so a group inside a kept one is covered; groups of one size go in load order.
+function keep_groups(grouped, places)
+    candidates = CloneGroup[]
+    for (digest, sites) in grouped
         length(sites) < 2 && continue
-        seen = length(method_keys(sites))
-        seen < 2 && continue
-        group_covered(sites, kept) && continue
-        push!(kept, CloneGroup(digest.nodes, sites))
+        length(method_keys(sites)) < 2 && continue
+        ranked = sort_sites(sites, places)
+        push!(candidates, CloneGroup(digest.nodes, ranked))
+    end
+    sort!(candidates; by = group -> (-group.nodes, site_key(places, first(group.sites))))
+    kept = CloneGroup[]
+    for group in candidates
+        group_covered(group.sites, kept) && continue
+        push!(kept, group)
     end
     kept
 end
 
-function clone_finding(group, places)
-    ranked = sort_sites(group.sites, places)
+# A kept group's sites are already in load order.
+function clone_finding(group)
+    ranked = group.sites
     keys = method_keys(ranked)
     first_site = first(ranked)
     labels = joined_labels(keys)
@@ -285,10 +290,10 @@ function expression_clone_findings(index, min_nodes)
             walk_sites!(walk, method.body, Int[])
         end
     end
-    kept = keep_groups(grouped)
+    kept = keep_groups(grouped, places)
     found = Finding[]
     for group in kept
-        push!(found, clone_finding(group, places))
+        push!(found, clone_finding(group))
     end
     found
 end

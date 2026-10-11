@@ -181,6 +181,18 @@ end
     @test ev(group, :methods) == "src/keyword.jl:kw_a src/keyword.jl:kw_c"
 end
 
+# Six clone groups of one size, each a pair of methods, written in load order.
+const CLONE_TIED_NODES = expression_nodes("v1 + TIED1 + 1 + 1")
+const CLONE_TIED_OWNERS = ["tied_$(group)_a" for group in 1:6]
+const CLONE_TIED = clone_case("CloneTied", "tied.jl",
+    join(["tied_$(group)_a(p) = p + TIED$(group) + 1 + 1\ntied_$(group)_b(q) = q + TIED$(group) + 1 + 1\n"
+          for group in 1:6]))
+
+@testset "clones of one size are reported in load order" begin
+    found = clone_found(CLONE_TIED, CLONE_TIED_NODES)
+    @test [finding.symbol for finding in found] == CLONE_TIED_OWNERS
+end
+
 @testset "two copies in one method are not a clone group" begin
     found = clone_found(CLONE_ONCE, CLONE_ONCE_NODES)
     @test isempty(found)
