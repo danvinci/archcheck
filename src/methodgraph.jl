@@ -283,17 +283,34 @@ function record_calls!(facts, frame)
     end
 end
 
+# A call stored to a local is one statement, and the call sits on the right of `=`.
+function call_expression(statement::Expr)
+    statement.head === :call && return statement
+    statement.head === :(=) || return nothing
+    stored = statement.args[2]
+    stored isa Expr || return nothing
+    stored.head === :call || return nothing
+    stored
+end
+
+call_expression(@nospecialize(::Any)) = nothing
+
+# A stored value sits in a slot, which `ssavalue_uses` does not track, so only a bare call can go unread.
+function is_read(frame, position)
+    statement = frame.src.code[position]
+    is_bare_call = statement isa Expr && statement.head === :call
+    !is_bare_call || !isempty(frame.ssavalue_uses[position])
+end
+
 # Inference records `NoCallInfo` when more methods match than it considers. That instance proves nothing about the
 # call, so the fact vetoes a failure and a dropped value instead of agreeing by absence.
 function unknown_call(frame, position, ::Core.Compiler.NoCallInfo)
     code = frame.src
     statement = code.code[position]
-    statement isa Expr || return nothing
-    statement.head === :call || return nothing
     named = named_callee(code, statement)
     isnothing(named) && return nothing
     file, line = statement_location(frame.src.debuginfo, frame.linfo, position)
-    is_used = !isempty(frame.ssavalue_uses[position])
+    is_used = is_read(frame, position)
     callee = named[1]
     via = named[2]
     veto_fact(file, line, callee, via, is_used)
@@ -349,13 +366,14 @@ function unknown_apply(frame, position, route)
     name = applied_name(code, statement)
     isnothing(name) && return nothing
     file, line = statement_location(frame.src.debuginfo, frame.linfo, position)
-    is_used = !isempty(frame.ssavalue_uses[position])
+    is_used = is_read(frame, position)
     veto_fact(file, line, name, route, is_used)
 end
 
 function applied_name(code, statement::Expr)
-    statement.head === :call || return nothing
-    args = statement.args
+    call = call_expression(statement)
+    isnothing(call) && return nothing
+    args = call.args
     length(args) < 3 && return nothing
     head = held_type(code, first(args))
     head === typeof(Core._apply_iterate) || return nothing
@@ -369,7 +387,9 @@ end
 applied_name(_code, @nospecialize(::Any)) = nothing
 
 function named_callee(code, statement)
-    args = statement.args
+    call = call_expression(statement)
+    isnothing(call) && return nothing
+    args = call.args
     isempty(args) && return nothing
     head = first(args)
     held = held_type(code, head)
@@ -450,14 +470,11 @@ has_flag(flags::UInt32, flag::UInt32) = flags & flag == flag
 function call_fact(frame, position, branches, route)
     parameters = signature_types(first(branches).atype)
     isempty(parameters) && return nothing
-    code = frame.src
     is_keyword = length(parameters) >= 3 && parameters[1] === typeof(Core.kwcall)
     called = is_keyword ? parameters[3] : parameters[1]
     via = is_keyword ? :kwcall : route
     file, line = statement_location(frame.src.debuginfo, frame.linfo, position)
-    statement = code.code[position]
-    is_bare_call = statement isa Expr && statement.head === :call
-    is_used = !is_bare_call || !isempty(frame.ssavalue_uses[position])
+    is_used = is_read(frame, position)
     is_failing = all(is_unmatched, branches)
     failing = is_failing ? join((type_text(branch.atype) for branch in branches), "; ") : ""
     is_stub = is_failing && has_no_method(called)

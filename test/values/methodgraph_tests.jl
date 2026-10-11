@@ -205,6 +205,11 @@ const CALL_FACTS = load_package("CallFacts", """
         box.value + alpha
     end
     allocate(nbits::Int) = BigInt(; nbits = nbits)
+    # `dest(x)` matches more methods than inference records, so stored to a local it still vetoes the line's failure.
+    function beside(x)
+        y = dest(x); dest(1, 2)
+        y
+    end
     """)
 
 function call_facts_context()
@@ -224,6 +229,7 @@ function call_facts_context()
         (pkg.open_spread, Tuple{Tuple{Integer}}),
         (pkg.open_spread, Tuple{Tuple{String}}),
         (pkg.short_spread, Tuple{Tuple{Int}}),
+        (pkg.beside, Tuple{Any}),
     )
     case_context(CALL_FACTS; entries = rows)
 end
