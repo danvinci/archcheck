@@ -158,6 +158,15 @@ const CALL_FACTS = load_package("CallFacts", """
         x == 3
         x
     end
+    kept(x) = true
+    function abstract_drops(x::Real)
+        kept(x)
+        x
+    end
+    struct Hue end
+    shade(a::Float64, b::Float64, w) = (1.0 - w) * a + w * b
+    any_shade(w) = shade(1.0, 2.0, w)
+    hue_shade(w::Hue) = shade(1.0, 2.0, w)
     checked(x::Int) = x > 0 ? x : throw(ArgumentError("not positive"))
     function guards(x::Int)
         checked(x)
@@ -187,7 +196,10 @@ function call_facts_context()
         (pkg.stubbed, Tuple{Int}),
         (pkg.forwards, Tuple{Int,Any}),
         (pkg.drops, Tuple{Int}),
+        (pkg.abstract_drops, Tuple{Real}),
         (pkg.guards, Tuple{Int}),
+        (pkg.any_shade, Tuple{Any}),
+        (pkg.hue_shade, Tuple{pkg.Hue}),
         (pkg.advances, Tuple{Vector{Int}}),
         (pkg.sums, Tuple{Int}),
     )
@@ -551,13 +563,13 @@ end
     @test owned[on_union] == every_holds
 end
 
-@testset "a call no method takes fails, and a call into a stub or a keyword forward stays quiet" begin
+@testset "a call no method takes fails, and a call left without call info stays quiet" begin
     failing = filter(finding -> finding.kind === :failing_call, CALL_FACTS_FOUND)
     rows = evidence_rows(failing, :callee, :via, :signature)
     @test rows == [(:failing_call, "fails", "pair", "call", "concrete")]
 end
 
-@testset "a dropped pure value is a finding, and a guard kept for its exception stays quiet" begin
+@testset "a dropped pure value is a finding, and an abstract instance alone stays quiet" begin
     dropped = filter(finding -> finding.kind === :dropped_value, CALL_FACTS_FOUND)
     rows = evidence_rows(dropped, :returns)
     @test rows == [(:dropped_value, "drops", "Bool")]

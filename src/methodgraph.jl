@@ -73,17 +73,18 @@ end
 
 function walk_methods(entries, landings::CallLandings)
     edges = Dict{Method,Set{Method}}()
-    calls = Dict{Method,Vector{CallFact}}()
     pending = Core.MethodInstance[]
     walked = Dict{Method,Any}()   # method -> the signature its walks cover
     # A walk only widens what it covers, so a specialization met once stays covered.
     met = Base.IdSet{Core.MethodInstance}()
-    # Instances inference reached from an entry, at types the code passes; call facts are read at these alone.
-    inferred = Base.IdSet{Core.MethodInstance}()
+    recorded = Tuple{Core.MethodInstance,Vector{CallFact}}[]
+    callees = IdDict{Core.MethodInstance,Vector{Core.MethodInstance}}()
+    caused = IdDict{Core.MethodInstance,Core.MethodInstance}()
+    entry_instances = Core.MethodInstance[]
     for entry in entries
         instance = entry_instance(entry)
         push!(pending, instance)
-        push!(inferred, instance)
+        push!(entry_instances, instance)
     end
     # A resolved call is an edge on the inference frame, including one the optimized code drops.
     interp = Core.Compiler.NativeInterpreter()
@@ -93,10 +94,14 @@ function walk_methods(entries, landings::CallLandings)
         push!(met, reached)
         instance = covering_instance(walked, reached)
         isnothing(instance) && continue
-        reached in inferred && push!(inferred, instance)
         walked[instance.def] = instance.specTypes
-        expand_instance!(edges, calls, pending, instance, landings, interp, inferred)
+        expansion = expand_instance!(edges, pending, instance, landings, interp)
+        expansion.has_frame || continue
+        caused[reached] = instance
+        push!(recorded, (instance, expansion.facts))
+        callees[instance] = expansion.targets
     end
+    calls = merge_reached_calls(entry_instances, recorded, caused, callees)
     MethodGraph(edges, calls)
 end
 
@@ -160,35 +165,85 @@ function entry_instance(@nospecialize(entry))
     instance
 end
 
-function expand_instance!(edges, calls, pending, instance, landings::CallLandings, interp, inferred)
+# One expansion of an instance. A keyword wrapper carries its body's edges and no facts of its own.
+struct InstanceExpansion
+    has_frame::Bool                           # inference produced a frame
+    facts::Vector{CallFact}                   # call facts read from that frame
+    targets::Vector{Core.MethodInstance}      # instances the frame's edges name
+end
+
+function without_frame()
+    InstanceExpansion(false, CallFact[], Core.MethodInstance[])
+end
+
+function expand_instance!(edges, pending, instance, landings::CallLandings, interp)
     module_set = landings.module_set
-    is_inferred = instance in inferred
     frame = inference_frame(instance, interp)
-    isnothing(frame) && return
+    isnothing(frame) && return without_frame()
+    targets = called_instances(frame)
     if is_kwcall_method(instance.def)
         body = keyword_body_from(frame)
-        isnothing(body) && return
+        isnothing(body) && return without_frame()
         push!(pending, body)
-        is_inferred && push!(inferred, body)
-        return
+        return InstanceExpansion(true, CallFact[], targets)
     end
     caller = written_method(instance.def)
     get!(edges, caller, Set{Method}())
-    if is_inferred
-        facts = get!(Vector{CallFact}, calls, caller)
-        record_calls!(facts, frame)
-        mark_inferred!(inferred, frame)
-    end
+    facts = CallFact[]
+    record_calls!(facts, frame)
     code = optimized_code(frame, interp)
     record_resolved!(edges, pending, frame, caller, module_set)
     isnothing(code) || record_dispatched!(edges, pending, code, instance, caller, landings)
+    InstanceExpansion(true, facts, targets)
 end
 
-function mark_inferred!(inferred, frame)
+function called_instances(frame)
+    found = Core.MethodInstance[]
     for edge in frame.edges
         target = called_instance(edge)
-        isnothing(target) || push!(inferred, target)
+        isnothing(target) || push!(found, target)
     end
+    found
+end
+
+# Facts are read at every expanded instance. Merged ones are those an entry reaches through resolved calls, so an
+# instance expanded before its caller resolves it still counts, and a landing no resolved call names does not.
+function merge_reached_calls(entries, recorded, caused, callees)
+    counted = reached_expansions(entries, caused, callees)
+    calls = Dict{Method,Vector{CallFact}}()
+    for (instance, facts) in recorded
+        instance in counted || continue
+        is_kwcall_method(instance.def) && continue
+        caller = written_method(instance.def)
+        dest = get!(Vector{CallFact}, calls, caller)
+        for fact in facts
+            merge_fact!(dest, fact)
+        end
+    end
+    calls
+end
+
+function reached_expansions(entries, caused, callees)
+    counted = Base.IdSet{Core.MethodInstance}()
+    seen = Base.IdSet{Core.MethodInstance}()
+    pending = Core.MethodInstance[]
+    for entry in entries
+        push!(pending, entry)
+    end
+    while !isempty(pending)
+        reached = pop!(pending)
+        reached in seen && continue
+        push!(seen, reached)
+        expansion = get(caused, reached, nothing)
+        isnothing(expansion) && continue
+        expansion in counted && continue
+        push!(counted, expansion)
+        targets = callees[expansion]
+        for target in targets
+            push!(pending, target)
+        end
+    end
+    counted
 end
 
 # One inference for every reader: the frame keeps its resolved calls and, per statement, its call info, effect flags
@@ -214,11 +269,88 @@ function record_calls!(facts, frame)
     for position in eachindex(code.code)
         info = frame.stmt_info[position]
         branches = call_branches!(Core.Compiler.MethodMatchInfo[], info)
-        isempty(branches) && continue
+        if isempty(branches)
+            fact = unknown_call(frame, position, info)
+            isnothing(fact) || merge_fact!(facts, fact)
+            continue
+        end
         route = call_route(info)
         fact = call_fact(frame, position, branches, route)
         merge_fact!(facts, fact)
     end
+end
+
+# Inference records `NoCallInfo` when more methods match than it considers. That instance proves nothing about the
+# call, so the fact vetoes a failure and a dropped value instead of agreeing by absence.
+function unknown_call(frame, position, ::Core.Compiler.NoCallInfo)
+    code = frame.src
+    statement = code.code[position]
+    statement isa Expr || return nothing
+    statement.head === :call || return nothing
+    named = named_callee(code, statement)
+    isnothing(named) && return nothing
+    file, line = statement_site(frame, position)
+    is_used = !isempty(frame.ssavalue_uses[position])
+    callee = named[1]
+    via = named[2]
+    veto_fact(file, line, callee, via, is_used)
+end
+
+unknown_call(frame, position, @nospecialize(::Any)) = nothing
+
+function named_callee(code, statement)
+    args = statement.args
+    isempty(args) && return nothing
+    head = first(args)
+    held = held_type(code, head)
+    isnothing(held) && return nothing
+    is_builtin_type(held) && return nothing
+    if held === typeof(Core.kwcall)
+        length(args) < 3 && return nothing
+        func = held_type(code, args[3])
+        isnothing(func) && return nothing
+        name = callee_slot_name(func)
+        name === Symbol("") && return nothing
+        return (name, :kwcall)
+    end
+    name = callee_slot_name(held)
+    name === Symbol("") && return nothing
+    (name, :call)
+end
+
+function held_type(code, arg::Core.SSAValue)
+    types = code.ssavaluetypes
+    types isa Vector || return nothing
+    unwrap_held(types[arg.id])
+end
+
+function held_type(code, arg::Core.SlotNumber)
+    unwrap_held(code.slottypes[arg.id])
+end
+
+function held_type(code, arg::GlobalRef)
+    isdefined(arg.mod, arg.name) || return nothing
+    value = getfield(arg.mod, arg.name)
+    value isa Function || return nothing
+    typeof(value)
+end
+
+held_type(code, @nospecialize(::Any)) = nothing
+
+unwrap_held(held::Core.Const) = typeof(held.val)
+function unwrap_held(@nospecialize(held))
+    held isa Type || return nothing
+    held
+end
+
+function is_builtin_type(@nospecialize(held))
+    held isa DataType || return false
+    held <: Core.Builtin
+end
+
+function veto_fact(file, line, callee, via, is_used)
+    CallFact(file, line, callee, via, is_used, false, "", false, false, false, false, false, false, false,
+             false, false, "", Method[])
 end
 
 # The dispatches of one statement's call, each a `MethodMatchInfo` (Compiler/src/stmtinfo.jl): a constant-propagated
