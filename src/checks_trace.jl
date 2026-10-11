@@ -170,7 +170,7 @@ function rebuild_findings(index, records)
     kept = judged_ordered(records)
     slots = repeat_slots(kept)
     grouped = group_repeats(kept, slots)
-    known = Dict{DataType,Union{Nothing,Bool}}()
+    known = IdDict{DataType,Union{Nothing,Bool}}()
     found = Finding[]
     for (key, repeats) in grouped
         is_consistent = is_consistent_repeat(known, repeats)

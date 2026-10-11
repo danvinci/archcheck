@@ -275,9 +275,9 @@ function read_kind(S::DataType, field)
     hasfield(S, field) ? "field" : "property"
 end
 
-# The concrete structs the package's modules define, each once.
+# The concrete structs the package's modules define, each once. A hashed set compiles its insert once per type.
 function package_structs(mods)
-    found = Set{DataType}()
+    found = Base.IdSet{DataType}()
     for mod in mods, name in names(mod; all = true)
         isdefined(mod, name) || continue
         value = getfield(mod, name)

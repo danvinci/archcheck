@@ -283,7 +283,7 @@ end
 # Every concrete subtype of `super` answers each (reader, extra-argument types) pair, including inherited methods.
 function check_reader_set(mods, super::Type, required; sites = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}())
     findings = Finding[]
-    seen = Set{Type}()
+    seen = Base.IdSet{Type}()
     for home in mods, name in names(home; all = true)
         unwrapped = concrete_type_named(home, name)
         isnothing(unwrapped) && continue
