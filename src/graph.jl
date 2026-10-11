@@ -215,28 +215,13 @@ function walk_code!(build::IndexBuild, unit::LoadUnit, code, file)
     end
 end
 
-function is_joinpath_call(node)
-    JS.kind(node) == K"call" || return false
-    children = child_nodes(node)
-    child_count(children) < 2 && return false
-    children[1].val === :joinpath
-end
-
-# The directory literal `joinpath` pieces name: their parent when they fill the call, else the prefix before the
-# first piece computed at load. Nothing for any other argument.
+# The directory a `joinpath` names by the literals before its first piece computed at load. Nothing for any other
+# argument; a `joinpath` of literals only is a literal include.
 function named_include_directory(argument)
     is_joinpath_call(argument) || return nothing
-    pieces = call_args(argument)
-    literals = String[]
-    for piece in pieces
-        text = static_string(piece)
-        isnothing(text) && break
-        push!(literals, text)
-    end
+    literals = joinpath_literals(argument)
     isempty(literals) && return nothing
-    joined = joinpath(literals...)
-    named = length(literals) == length(pieces) ? dirname(joined) : joined
-    isempty(named) ? nothing : named
+    joinpath(literals...)
 end
 
 function nonliteral_include(owner::Symbol, rel::String, line::Int, argument)
@@ -254,7 +239,7 @@ end
 # of a file absent on disk is noted where the walk meets it.
 function place_include!(build::IndexBuild, unit::LoadUnit, call, file)
     argument = first(call_args(call))
-    spec = static_string(argument)
+    spec = include_spec(argument)
     line = source_line(call)
     rel = relpath(file, build.repo)
     if isnothing(spec)
@@ -336,7 +321,7 @@ module_rank(build::IndexBuild, owner::Symbol) = get(build.ranks, owner, Int[])
 # The includes of code no load walk reached: an expression, or a file absent on disk.
 function note_includes!(build::IndexBuild, owner::Symbol, path, rel, tree)
     for (arg, line) in include_calls(tree)
-        spec = static_string(arg)
+        spec = include_spec(arg)
         if isnothing(spec)
             noted = nonliteral_include(owner, rel, line, arg)
             push!(build.nonliteral, noted)

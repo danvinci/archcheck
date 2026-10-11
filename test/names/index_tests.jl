@@ -35,8 +35,10 @@ include(joinpath(@__DIR__, "known.jl"))
 end
 """, ["known.jl" => "a() = 1\n"])
 
+# A joinpath of literals names one file; a joinpath with a computed piece names only the directory its literals start.
 const JOIN_INCLUDE = load_package("JoinInclude", """
 include(joinpath("parts", "a.jl"))
+include(joinpath("pieces", string("b", ".jl")))
 """, [
     "parts/a.jl" => """
     orphan() = 1
@@ -45,6 +47,8 @@ include(joinpath("parts", "a.jl"))
     end
     """,
     "parts/blank.jl" => "const PLACEHOLDER = 1\n",
+    "pieces/b.jl" => "module Tile\ninner() = 2\nend\n",
+    "pieces/spare.jl" => "const SPARE = 1\n",
 ])
 
 const COMMENT_INCLUDE = load_package("CommentInclude", """
@@ -239,14 +243,12 @@ end
     @test !any(finding -> finding.kind === :nonliteral_include, comment)
 end
 
-@testset "a file a joinpath include loads is not an unincluded hole" begin
+@testset "a joinpath of literals includes its one file, and a computed joinpath excuses the directory it names" begin
     found = corpus_of(JOIN_INCLUDE)
-    holes = [finding for finding in found if finding.kind === :unranked_file]
-    modules = [finding for finding in found if finding.kind === :unranked_module]
-    literal = [finding for finding in found if finding.kind === :nonliteral_include]
-    @test isempty(holes)
-    @test isempty(modules)
-    @test length(literal) == 1
+    rows = sort([(finding.kind, finding.file, finding.line) for finding in found])
+    spine = joinpath("src", "JoinInclude.jl")
+    blank = joinpath("src", "parts", "blank.jl")
+    @test rows == [(:nonliteral_include, spine, 3), (:unranked_file, blank, 0)]
 end
 
 @testset "a nested include takes its place in the depth-first load order" begin

@@ -67,6 +67,34 @@ function static_string(node)
     join(parts)
 end
 
+function is_joinpath_call(node)
+    JS.kind(node) == K"call" || return false
+    children = child_nodes(node)
+    child_count(children) < 2 && return false
+    children[1].val === :joinpath
+end
+
+# The string literals a `joinpath` call starts with, up to its first piece computed at load.
+function joinpath_literals(call)
+    literals = String[]
+    for piece in call_args(call)
+        text = static_string(piece)
+        isnothing(text) && break
+        push!(literals, text)
+    end
+    literals
+end
+
+# The path an include argument names before load: a string literal, or a `joinpath` of string literals only.
+# Nothing when the load computes any piece.
+function include_spec(argument)
+    is_joinpath_call(argument) || return static_string(argument)
+    literals = joinpath_literals(argument)
+    pieces = call_args(argument)
+    length(literals) == length(pieces) || return nothing
+    joinpath(literals...)
+end
+
 # A wrapper holds its module as the one module block at its top level; its code is that block's body.
 function entry_code(tree)
     blocks = module_blocks(tree)
@@ -82,7 +110,7 @@ function entry_includes(parses::Parses, path::AbstractString)
     isnothing(tree) && return specs
     code = entry_code(tree)
     for (arg, _) in include_calls(code)
-        spec = static_string(arg)
+        spec = include_spec(arg)
         isnothing(spec) || push!(specs, spec)
     end
     specs
@@ -118,7 +146,7 @@ function spine_modules(parses::Parses, path::AbstractString)
             included = statements[index]
             is_include_call(included) || continue
             argument = first(call_args(included))
-            spec = static_string(argument)
+            spec = include_spec(argument)
             isnothing(spec) && continue
             dir = dirname(spec)
             isempty(dir) && continue

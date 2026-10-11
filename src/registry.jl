@@ -104,7 +104,7 @@ function run_checks(ctx, checks)
     findings
 end
 
-"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or a non-string, or a file the spine leaves unranked that no loaded method records and that sits outside every directory a nonliteral include names. A loaded module the spine leaves unranked whose `module` line or a method of it Julia records in the repository, when no loaded method records that file. A module another package's macro fills with its own code holds no package source."""
+"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or of a path computed at load, or a file the spine leaves unranked that no loaded method records and that sits outside every directory a nonliteral include names. A loaded module the spine leaves unranked whose `module` line or a method of it Julia records in the repository, when no loaded method records that file. A module another package's macro fills with its own code holds no package source."""
 struct Corpus <: Check end
 """Runs in `CHECKS`. A module references another that finishes loading at the same rank or later. A reference to an enclosing module counts only with `strict`, which holds every module to the layering."""
 struct ModuleBackEdges <: Check

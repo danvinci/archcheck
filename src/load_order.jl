@@ -395,7 +395,7 @@ end
 function include_target(walk::LoadWalk, position::Int, call)
     file = walk.index.files[position]
     argument = first(call_args(call))
-    spec = static_string(argument)
+    spec = include_spec(argument)
     isnothing(spec) && return nothing
     absolute = joinpath(walk.index.repo, file.path)
     joined = joinpath(dirname(absolute), spec)
