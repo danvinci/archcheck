@@ -29,6 +29,7 @@ a call left to runtime dispatch, each package method the call's inferred types m
 struct MethodGraph
     edges::Dict{Method,Set{Method}}         # caller -> methods its calls can land on; every walked method is a key
     calls::Dict{Method,Vector{CallFact}}    # caller -> what the walk's inference proved about each call it writes
+    typed::Dict{Method,Vector{Core.CodeInfo}}   # caller -> the code inference typed at each instance walked, unoptimized
 end
 
 # Inference reads a callee it already holds more precisely than one it meets mid-walk, so a first walk in a cold
@@ -71,6 +72,7 @@ end
 
 function walk_methods(entries, landings::CallLandings)
     edges = Dict{Method,Set{Method}}()
+    typed = Dict{Method,Vector{Core.CodeInfo}}()
     pending = Core.MethodInstance[]
     walked = Dict{Method,Any}()   # method -> the signature its walks cover
     # A walk only widens what it covers, so a specialization met once stays covered.
@@ -93,14 +95,14 @@ function walk_methods(entries, landings::CallLandings)
         instance = covering_instance(walked, reached)
         isnothing(instance) && continue
         walked[instance.def] = instance.specTypes
-        expansion = expand_instance!(edges, pending, instance, landings, interp)
+        expansion = expand_instance!(edges, typed, pending, instance, landings, interp)
         expansion.has_frame || continue
         caused[reached] = instance
         push!(recorded, (instance, expansion.facts))
         callees[instance] = expansion.targets
     end
     calls = merge_reached_calls(entry_instances, recorded, caused, callees)
-    MethodGraph(edges, calls)
+    MethodGraph(edges, calls, typed)
 end
 
 # Each held method's function as the signature up to its function slot, open after it.
@@ -175,7 +177,7 @@ function without_frame()
     InstanceExpansion(false, CallFact[], Core.MethodInstance[])
 end
 
-function expand_instance!(edges, pending, instance, landings::CallLandings, interp)
+function expand_instance!(edges, typed, pending, instance, landings::CallLandings, interp)
     module_set = landings.module_set
     frame = inference_frame(instance, interp)
     isnothing(frame) && return without_frame()
@@ -190,6 +192,10 @@ function expand_instance!(edges, pending, instance, landings::CallLandings, inte
     get!(edges, caller, Set{Method}())
     facts = CallFact[]
     record_calls!(facts, frame)
+    # The optimizer rewrites `frame.src` in place (`ir_to_codeinf!`, Compiler/src/optimize.jl).
+    unoptimized = copy(frame.src)
+    kept = get!(Vector{Core.CodeInfo}, typed, caller)
+    push!(kept, unoptimized)
     code = optimized_code(frame, interp)
     record_resolved!(edges, pending, frame, caller, module_set)
     isnothing(code) || record_dispatched!(edges, pending, code, instance, caller, landings)

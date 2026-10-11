@@ -155,9 +155,10 @@ end
 
 # The sites that run inference, each asking a question the others do not answer.
 function inference_sites()
-    callees = (:typeinf, :typeinf_frame, :code_typed, :code_typed_by_type, :return_types, :report_opt)
+    callees = (:typeinf, :typeinf_frame, :inference_frame, :code_typed, :code_typed_by_type, :return_types, :report_opt)
     allowed = (
         ("src/methodgraph.jl", :inference_frame),
+        ("src/methodgraph.jl", :expand_instance!),
         ("src/julia_internals.jl", :inferred_return_types),
         ("src/checks_opt.jl", :analyze_entries),
     )

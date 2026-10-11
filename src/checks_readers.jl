@@ -91,42 +91,22 @@ function derived_item(derived, wrapper)
     DerivedItem(producer, derived.readers, derived.converters, wrapper, home, label, Finding[])
 end
 
-function reached_methods(graph)
-    methods = Set{Method}()
-    for (caller, callees) in graph.edges
-        push!(methods, caller)
-        union!(methods, callees)
-    end
-    methods
-end
-
-# Each reached method's own typed code, at its declared signature: a signature lookup would also return the code of
-# narrower methods it admits.
+# The code the method graph's inference typed at each instance its walk expanded, before the optimizer inlines a call.
 function read_typed!(item, ctx)
     seen = Set{NTuple{4,String}}()
     recorded = ctx.recorded
-    interp = inference_interpreter()
-    for method in reached_methods(ctx.methods)
-        root = Base.moduleroot(method.module)
-        (root === Core || root === Base) && continue
-        instance = declared_instance(method)
-        frame = inference_frame(instance, interp)
-        isnothing(frame) && continue
-        code = frame.src
-        for stmt in code.code
-            scan_expr!(item, code, stmt, seen, method, recorded)
+    for (method, codes) in ctx.methods.typed
+        for code in codes
+            for stmt in code.code
+                scan_expr!(item, code, stmt, seen, method, recorded)
+            end
         end
     end
 end
 
 function scan_expr!(item, code, expr::Expr, seen, method, recorded)
-    head = expr.head
     args = expr.args
-    if head === :invoke && length(args) >= 2
-        read_args!(item, code, args[2:end], seen, method, recorded)
-    elseif head === :call
-        read_args!(item, code, args, seen, method, recorded)
-    end
+    expr.head === :call && read_args!(item, code, args, seen, method, recorded)
     for arg in args
         scan_expr!(item, code, arg, seen, method, recorded)
     end
@@ -134,21 +114,14 @@ end
 
 scan_expr!(_item, _code, @nospecialize(_expr), _seen, _method, _recorded) = nothing
 
-# `kwcall` names its callee in argument 3; `throw_methoderror` names it in argument 2 and its arguments follow.
+# `kwcall` names its callee in argument 3.
 function read_args!(item, code, args, seen, method, recorded)
     isempty(args) && return
     head = resolve_callee(code, args[1])
-    callee_at = 1
-    carry_from = 2
-    if head === Core.kwcall
-        callee_at = 3
-    elseif head isa Function && nameof(head) === :throw_methoderror
-        callee_at = 2
-        carry_from = 3
-    end
-    length(args) < max(callee_at, carry_from) && return
+    callee_at = head === Core.kwcall ? 3 : 1
+    length(args) < callee_at && return
     carried = false
-    for index in carry_from:length(args)
+    for index in 2:length(args)
         kind = value_type_of(code, args[index])
         carried = carried || carries_type(kind, item.wrapper)
     end

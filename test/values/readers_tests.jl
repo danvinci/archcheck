@@ -33,6 +33,11 @@ const WRAPPED_BOUND = load_package("WrappedBound", """
         bound = distance(a, b)
         OtherConsume.consume(bound)
     end
+    relay(x) = other(x)
+    function pass_relay(a::Float64, b::Float64)
+        bound = distance(a, b)
+        relay(bound)
+    end
     module OtherConsume
     using ..WrappedBound: Bound
     consume(x::Bound) = x.meters
@@ -144,6 +149,7 @@ function wrap_entries()
         (pkg.pass_bridge, Tuple{Float64,Float64}),
         (pkg.pass_miss, Tuple{Float64,Float64}),
         (pkg.pass_homonym, Tuple{Float64,Float64}),
+        (pkg.pass_relay, Tuple{Float64,Float64}),
     )
 end
 
@@ -153,7 +159,8 @@ function unlisted_findings(case; entries = (), derived = ())
     ArchCheck.run(check, ctx)
 end
 
-@testset "a wrapper passed to a reader or a converter stays quiet" begin
+# `relay` declares no argument type, so only the type its call passes shows the wrapper reaching `other`.
+@testset "a wrapper passed to a reader or a converter stays quiet, and is read at the types the walk carries" begin
     declared = (wrap_declared(),)
     entries = wrap_entries()
     found = unlisted_findings(WRAPPED_BOUND; entries, derived = declared)
@@ -166,6 +173,9 @@ end
         (:unlisted_reader, "pass_miss", "wants", "parse", "distance"),
         (:unlisted_reader, "pass_other", "other", "code_typed", "distance"),
         (:unlisted_reader, "pass_other", "other", "parse", "distance"),
+        (:unlisted_reader, "pass_relay", "relay", "code_typed", "distance"),
+        (:unlisted_reader, "pass_relay", "relay", "parse", "distance"),
+        (:unlisted_reader, "relay", "other", "code_typed", "distance"),
     ]
 end
 
