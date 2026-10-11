@@ -6,6 +6,8 @@ struct Closed
     xs::Vector{Float64}
     t::Type{Float64}
     u::Union{Float64,Nothing}
+    rows::Vector{Vector{Any}}
+    groups::Dict{Symbol,Vector{Any}}
 end
 struct Open
     xs::Vector
@@ -38,7 +40,8 @@ const OPEN_FIELD_NAMES = Set([
     "AnyParam.x", "AnyParam.zs",
 ])
 
-# An alias repeats its struct's open fields; only an instance opening a field the struct keeps closed adds one.
+# An alias repeats its struct's open fields; only an instance opening a field the struct keeps closed adds one. A
+# container's own element types decide, so a concrete element closes it whatever that element holds.
 @testset "a field whose stored type leaves dispatch open is a finding, once, where it is written" begin
     ctx = case_context(OPEN_FIELDS)
     found = ArchCheck.run(AbstractFields(), ctx)
@@ -49,7 +52,7 @@ const OPEN_FIELD_NAMES = Set([
     @test (:abstract_field, "Open.xs", "Array{T, 1} where T") in rows
     @test (:abstract_field, "AnyParam.zs", "Array{Any, 1}") in rows
     alias_lines = Set(finding.line for finding in found if startswith(finding.symbol, "AnyParam."))
-    @test alias_lines == Set([30])
+    @test alias_lines == Set([32])
     @test all(finding -> finding.line > 0, found)
 end
 

@@ -89,7 +89,7 @@ function run_checks(ctx, checks)
     findings
 end
 
-"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or a non-string, or a file or module the spine leaves unranked."""
+"""Runs in `CHECKS`. A file that fails to parse, an include of a missing file or a non-string, or a file the spine leaves unranked, or a loaded module it leaves unranked whose `module` line or a method of it Julia records in a file of the repository. A module another package's macro fills with its own code holds no package source."""
 struct Corpus <: Check end
 """Runs in `CHECKS`. A module references another that finishes loading at the same rank or later. A reference to an enclosing module counts only with `strict`, which holds every module to the layering."""
 struct ModuleBackEdges <: Check
@@ -103,7 +103,7 @@ end
 ModuleCycles(; strict::Bool = false) = ModuleCycles(strict)
 """Runs in `CHECKS`. A function in the contracts module does more than name a type and its interface."""
 struct ContractsPurity <: Check end
-"""Runs in `CHECKS`. Two modules export one name bound to different objects. A module and one it encloses count only with `strict`."""
+"""Runs in `CHECKS`. Two modules export one name bound to different objects; a name a module only declares `public` is no export. A module and one it encloses count only with `strict`."""
 struct OwnerUniqueness <: Check
     strict::Bool   # a module and one it encloses count as two owners
 end
@@ -128,7 +128,7 @@ end
 DeadCode(; public_is_entry::Bool = true) = DeadCode(public_is_entry)
 """Runs in `CHECKS`. A module wrapper exports its whole namespace with `names` and `all` set."""
 struct BlanketExports <: Check end
-"""Runs in `CHECKS`. An exported name is undefined."""
+"""Runs in `CHECKS`. An exported name is undefined; a name a module only declares `public` is no export."""
 struct StaleExports <: Check end
 """Runs in `CHECKS`. Code reads a name through a module that neither exports it nor declares it public, one of the package's modules or any other: a step of a qualified path, a qualified method or macro name, or a name a `using` or `import` clause binds, in source files and entry scripts alike. `allowed` names the outside modules whose internals the package reads on purpose."""
 struct ReachesInternal{N} <: Check
@@ -139,7 +139,7 @@ ReachesInternal(; allowed::Tuple{Vararg{Module}} = ()) = ReachesInternal(allowed
 struct BoxedCaptures <: Check end
 """Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two, and a name a macro call's arguments write counts as read."""
 struct UnusedBindings <: Check end
-"""Runs in `CHECKS`. A struct field's stored type leaves dispatch open."""
+"""Runs in `CHECKS`. A struct field's stored type leaves dispatch open. A container's own element types decide: a concrete element closes it whatever that element holds, so `Vector{Vector{Any}}` is closed."""
 struct AbstractFields <: Check end
 """Configured through `gate(...; checks)` with a supertype and the readers its concrete subtypes must answer. A subtype with no matching method is a finding."""
 struct ReaderSet{S, R<:Tuple} <: Check
@@ -163,7 +163,7 @@ struct Independent{N} <: Check
         new{length(modules)}(modules)
     end
 end
-"""Runs in `CHECKS`. A reference reaches a module the wrapper's using and import lines omit."""
+"""Runs in `CHECKS`. A module with a wrapper file reaches another module that no `using` or `import` line of its own names, in any of its files."""
 struct DeclaredModules <: Check end
 """Configured through `gate(...; checks)` by a package that holds its modules apart. A method is added to a function another of its modules owns and leaves unmarked public or undocumented."""
 struct DeclaredExtensions <: Check end

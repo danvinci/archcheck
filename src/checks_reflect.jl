@@ -102,14 +102,20 @@ function submodules(mod::Module)
     found
 end
 
-# stale-export: Julia accepts `export foo` with no `foo`, so a deleted definition leaves the name in
-# names(M) forever and no load ever complains.
+# The names a module exports. `names` lists the names it declares public as well.
+function exported_names(mod::Module)
+    listed = names(mod)
+    filter(name -> Base.isexported(mod, name), listed)
+end
+
+# stale-export: Julia accepts `export foo` with no `foo`, so a deleted definition leaves the name exported
+# forever and no load ever complains.
 function check_stale_exports(mods; repo)
     findings = Finding[]
     for M in mods
         owner = module_key(M)
         path, line = module_site(M, repo)
-        for n in names(M)
+        for n in exported_names(M)
             n === nameof(M) && continue
             isdefined(M, n) && continue
             found = Finding(owner, :stale_export, path, string(n), line, "exported name is never defined")
@@ -119,19 +125,50 @@ function check_stale_exports(mods; repo)
     findings
 end
 
-# unranked-module: a loaded submodule no wrapper declares by the spine rule, so the index files it under its
-# parent and no rank rule reaches it.
+# A recorded repo-relative site, when its file lies inside the repository; nothing for another package's file or for
+# code evaluated with no file.
+function site_in_repository(site, repo)
+    path, _ = site
+    full = joinpath(repo, path)
+    is_inside = is_within(full, repo) && isfile(full)
+    is_inside ? site : nothing
+end
+
+# The first site in the repository holding a module's source: its `module` line, else a method it defines. Nothing
+# when Julia records all of it in other files, as for a module another package's macro fills with its own code.
+function source_site(child::Module, defined, repo)
+    module_line = module_site(child, repo)
+    found = site_in_repository(module_line, repo)
+    isnothing(found) || return found
+    for method in defined
+        method.module === child || continue
+        site = method_site(method, repo)
+        found = site_in_repository(site, repo)
+        isnothing(found) || return found
+    end
+    nothing
+end
+
+# unranked-module: a loaded submodule the index does not rank though the repository holds its source, so the index
+# files that source under its parent and no rank rule reaches it.
 function check_module_corpus(mods, rank; repo)
+    unranked = Pair{Module,Module}[]
+    for mod in mods, child in submodules(mod)
+        key = module_key(child)
+        haskey(rank, key) || push!(unranked, mod => child)
+    end
     findings = Finding[]
-    for mod in mods
+    isempty(unranked) && return findings
+    children = [last(pair) for pair in unranked]
+    defined = project_methods(children)
+    for (mod, child) in unranked
+        site = source_site(child, defined, repo)
+        isnothing(site) && continue
+        file, line = site
         owner = module_key(mod)
-        for child in submodules(mod)
-            haskey(rank, module_key(child)) && continue
-            name = string(nameof(child))
-            file, line = module_site(child, repo)
-            detail = "a submodule its wrapper does not declare as an include followed by a using"
-            push!(findings, Finding(owner, :unranked_module, file, name, line, detail))
-        end
+        name = string(nameof(child))
+        detail = "a submodule holding package source that its wrapper does not declare as an include and a using"
+        push!(findings, Finding(owner, :unranked_module, file, name, line, detail))
     end
     findings
 end
@@ -237,7 +274,7 @@ end
 function check_dup_owners(mods, rank; strict::Bool)
     by_name = Dict{Symbol,Vector{Module}}()
     for mod in mods
-        for name in names(mod; all = false)
+        for name in exported_names(mod)
             isdefined(mod, name) || continue
             owners = get!(by_name, name, Module[])
             push!(owners, mod)

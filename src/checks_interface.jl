@@ -213,26 +213,24 @@ function check_declared_extensions(defined, mods; repo)
     findings
 end
 
-# undeclared-module: a reference to a module its source's wrapper does not name in a using or import line.
-# Qualified paths count, so the wrapper's using and import lines list every module the module reaches.
+# undeclared-module: a reference to a module no using or import line of the module names, in any of its files.
+# Qualified paths count, so the module's using and import lines list every module it reaches.
 function check_declared_modules(index::SourceIndex)
-    wrappers = Dict(file.mod => file.path for file in index.files if is_wrapper(file))
+    wrapped = Set(file.mod for file in index.files if is_wrapper(file))
     declared = Dict{Symbol,Set{Symbol}}()
     for ref in index.refs
         is_clause = ref.via === :using || ref.via === :import
         is_clause || continue
-        wrapper_path = get(wrappers, ref.from, "")
-        wrapper_path == ref.file || continue
         listed = get!(Set{Symbol}, declared, ref.from)
         push!(listed, ref.to)
     end
     findings = Finding[]
     for ref in index.refs
-        haskey(wrappers, ref.from) || continue
+        ref.from in wrapped || continue
         named = get(declared, ref.from, Set{Symbol}())
         ref.to in named && continue
         target = string(ref.to)
-        detail = "reaches a module its wrapper does not name in a using or import line"
+        detail = "reaches a module none of its using or import lines names"
         evidence = [:via => string(ref.via)]
         push!(findings, Finding(ref.from, :undeclared_module, ref.file, target, ref.line, detail, evidence))
     end

@@ -75,6 +75,12 @@ is_container_type(::Type{<:AbstractArray}) = true
 is_container_type(::Type{<:AbstractSet}) = true
 is_container_type(@nospecialize(::Any)) = false
 
+# A container's own element type decides: a concrete element closes it whatever that element holds.
+function is_open_element(@nospecialize(element))
+    isconcretetype(element) && return false
+    is_open_field(element)
+end
+
 # A Dict element type is Pair, so its key and value are read apart.
 # An array or a set is open when its element type is open.
 function container_field_open(@nospecialize(declared))
@@ -83,12 +89,12 @@ function container_field_open(@nospecialize(declared))
     isconcretetype(unwrapped) || return true
     if unwrapped <: AbstractDict && length(unwrapped.parameters) >= 2
         key_type = unwrapped.parameters[1]
-        is_open_field(key_type) && return true
+        is_open_element(key_type) && return true
         value_type = unwrapped.parameters[2]
-        return is_open_field(value_type)
+        return is_open_element(value_type)
     end
     element = eltype(declared)
-    is_open_field(element)
+    is_open_element(element)
 end
 
 is_open_field(@nospecialize(declared::TypeVar), vars) = !(declared in vars)

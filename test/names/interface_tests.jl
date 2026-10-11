@@ -14,6 +14,7 @@ include("body.jl")
 
 const MISSING_EXPORT = load_package("MissingExport", """
 export present, vanished
+public planned
 present() = 1
 hidden() = 2
 """)
@@ -99,6 +100,19 @@ using .Cc
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 """)
 
+# A using clause outside the wrapper, in a file the module includes.
+const SPLIT_USING = load_package("SplitUsing", """
+include("parts.jl")
+""", [
+    "parts.jl" => """
+    module Inner
+    f() = 1
+    end
+    using .Inner: f
+    g() = f()
+    """,
+])
+
 function reached_from(script; repeat_dir = false)
     scripts = mktempdir()
     write(joinpath(scripts, "use.jl"), script)
@@ -125,7 +139,7 @@ end
     @test isempty(found)
 end
 
-@testset "an exported name with no definition is stale" begin
+@testset "an exported name with no definition is stale, and an undefined public name is no export" begin
     stale_ctx = case_context(MISSING_EXPORT)
     stale = ArchCheck.run(StaleExports(), stale_ctx)
     @test only(stale).symbol == "vanished"
@@ -250,7 +264,7 @@ end
     @test all(severity -> severity == "error", severities)
 end
 
-@testset "a module reaches only the modules its wrapper names" begin
+@testset "a module reaches only the modules its using and import lines name, in any of its files" begin
     ctx = Context(Nested)
     found = ArchCheck.run(DeclaredModules(), ctx)
     reached = Tuple{String,String,String}[]
@@ -270,6 +284,9 @@ end
     symbols = Set(finding.symbol for finding in path_found)
     @test "Aa" in symbols
     @test !("PackagePath" in symbols)
+
+    split_ctx = case_context(SPLIT_USING)
+    @test isempty(ArchCheck.run(DeclaredModules(), split_ctx))
 end
 
 @testset "a path through an import alias reaches the module the alias names, and an import list keeps its macros" begin

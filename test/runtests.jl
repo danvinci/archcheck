@@ -3,11 +3,12 @@ using Test, JSON, Random
 using ArchCheck
 
 # Fixture packages, so `gate` finds their `src/`: Nested is a module tree, Probed the methods the probe tests arm,
-# SpineNamed a spine importing its child by the package name.
+# SpineNamed a spine importing its child by the package name, Made modules its dependency Maker's macros make.
 pushfirst!(LOAD_PATH, joinpath(@__DIR__, "fixtures"))
 using Nested
 using Probed
 using SpineNamed
+using Made
 popfirst!(LOAD_PATH)
 
 # A synthetic tree has no parsed def index, so these tests declare its absence rather than omit it.

@@ -1,0 +1,6 @@
+name = "Made"
+uuid = "0aa70d7f-bb4f-447b-b4c8-3e0803d3ebc0"
+version = "0.1.0"
+
+[deps]
+Maker = "20c09f05-6328-406e-a748-39bafef327c0"

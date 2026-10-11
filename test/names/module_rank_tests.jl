@@ -308,11 +308,19 @@ end
     @test isempty(ArchCheck.run(ModulePiracy(), ctx))
 end
 
-@testset "a loaded submodule no file places is unranked" begin
+# Another package's macro makes two modules here: one holds only the macro's code, one wraps code this package wrote.
+@testset "a loaded submodule holding source no file places is unranked" begin
     ctx = case_context(STRAY_CHILD)
     found = ArchCheck.run(Corpus(), ctx)
     stray = only(finding for finding in found if finding.kind === :unranked_module)
     @test stray.mod === :Inner
     @test stray.symbol == "Stray"
     @test !any(finding -> finding.symbol == "Deep", found)
+
+    made_ctx = Context(Made)
+    made = ArchCheck.run(Corpus(), made_ctx)
+    wrapped = only(made)
+    @test wrapped.kind === :unranked_module
+    @test wrapped.symbol == "Wrapped"
+    @test wrapped.file == joinpath("src", "Made.jl")
 end
