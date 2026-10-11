@@ -275,9 +275,37 @@ function read_kind(S::DataType, field)
     hasfield(S, field) ? "field" : "property"
 end
 
+# The concrete structs the package's modules define, each once.
+function package_structs(mods)
+    found = Set{DataType}()
+    for mod in mods, name in names(mod; all = true)
+        isdefined(mod, name) || continue
+        value = getfield(mod, name)
+        body = declared_datatype(value)
+        isnothing(body) && continue
+        isabstracttype(body) && continue
+        parentmodule(body) === mod && push!(found, body)
+    end
+    found
+end
+
+# An abstract annotation declares no field, so the structs below it that do decide whose field the read is: another
+# module's when every one is, and unjudged when none in the package declares it.
+function is_foreign_abstract_read(structs, @nospecialize(annotation), field, reader::Symbol, key_of)
+    declarers = 0
+    for body in structs
+        body <: annotation || continue
+        hasfield(body, field) || continue
+        key_of[parentmodule(body)] == reader && return false
+        declarers += 1
+    end
+    declarers > 0
+end
+
 function check_foreign_fields(index::SourceIndex, mods)
     by_key = Dict(module_key(M) => M for M in mods)
     key_of = Dict(M => module_key(M) for M in mods)
+    structs = package_structs(mods)
     findings = Finding[]
     inferred = InferredTypes()
     steps = IterateSteps()
@@ -288,6 +316,10 @@ function check_foreign_fields(index::SourceIndex, mods)
         for access in field_reads(file.tree, M, inferred, steps).reads, member in union_members(access.type)
             S = declared_datatype(member)
             isnothing(S) && continue
+            is_abstract_read = isabstracttype(S)
+            if is_abstract_read && !is_foreign_abstract_read(structs, member, access.field, file.mod, key_of)
+                continue
+            end
             owner = get(key_of, parentmodule(S), nothing)
             (isnothing(owner) || owner == file.mod || is_open_read(owner, S, access.field)) && continue
             symbol = "$owner.$(nameof(S)).$(access.field)"

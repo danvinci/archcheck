@@ -71,4 +71,39 @@ end
         ("Hi", "Low.Pin.depth"),
         ("Hi", "Geo.Cuts.Kerf.depth"),
     ])
+
+    # The abstract type lives in the root. Low's structs declare the field, and Low reads it. Side reads it and
+    # declares none. A name no struct declares has no declarer to judge.
+    abstract_read = load_package("AbstractRead", """
+    abstract type Plate end
+    public Plate
+    include("low/Low.jl")
+    using .Low
+    include("side/Side.jl")
+    using .Side
+    """, [
+        "low/Low.jl" => """
+        module Low
+        import ..Plate
+        struct Sheet <: Plate
+            gauge::Float64
+        end
+        struct Strip{T} <: Plate
+            gauge::T
+        end
+        sheet_gauge(plate::Plate) = plate.gauge
+        end
+        """,
+        "side/Side.jl" => """
+        module Side
+        import ..Plate
+        plate_gauge(plate::Plate) = plate.gauge
+        blank_plate(plate::Plate) = plate.absent
+        end
+        """,
+    ])
+    abstract_ctx = case_context(abstract_read)
+    abstract_found = ArchCheck.run(ForeignFields(), abstract_ctx)
+    abstract_rows = [(string(finding.mod), finding.symbol, ev(finding, :declared)) for finding in abstract_found]
+    @test abstract_rows == [("Side", "AbstractRead.Plate.gauge", "abstract")]
 end
