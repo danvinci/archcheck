@@ -1,7 +1,5 @@
 # Content hashes, and the object identities a value reaches.
 
-using CRC32c: crc32c
-
 const CONTENT_DEPTH_MAX = 24
 const READ_DEPTH_MAX = 3
 const READ_WIDTH_MAX = 256
@@ -40,21 +38,6 @@ function hash_content(@nospecialize(value::Union{Module,Function,Type,Task,Chann
     hash(identity, seed)
 end
 
-function hash_content(@nospecialize(value::Array), seed::UInt, memo, depth::Int)
-    element = eltype(value)
-    bits = isbitstype(element)
-    bits || return hash_items(value, seed, memo, depth)
-    padded = has_padding(element)
-    padded && return hash_items(value, seed, memo, depth)
-    flat = vec(value)
-    bytes = reinterpret(UInt8, flat)
-    digest = crc32c(bytes)
-    width = length(bytes)
-    kind = typeof(value)
-    mixed = (digest, width, kind)
-    hash(mixed, seed)
-end
-
 function hash_content(@nospecialize(value::Union{AbstractArray,AbstractSet}), seed::UInt, memo, depth::Int)
     hash_items(value, seed, memo, depth)
 end
@@ -63,18 +46,12 @@ function hash_content(@nospecialize(value::AbstractDict), seed::UInt, memo, dept
     hash_pairs(value, seed, memo, depth)
 end
 
+# `objectid` hashes an immutable's type and defined bytes, so a bits value compiles no method.
 function hash_content(@nospecialize(value), seed::UInt, memo, depth::Int)
     bits = isbits(value)
     bits || return hash_fields(value, seed, memo, depth)
-    kind = typeof(value)
-    padded = has_padding(kind)
-    if padded
-        return hash_fields(value, seed, memo, depth)
-    end
-    width = sizeof(kind)
-    bytes = reinterpret(NTuple{width,UInt8}, value)
-    typed_bytes = (kind, bytes)
-    hash(typed_bytes, seed)
+    identity = objectid(value)
+    hash(identity, seed)
 end
 
 # An unassigned array slot holds no element.

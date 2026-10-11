@@ -31,6 +31,10 @@ const SHARED_REF = load_package("SharedRef", """
         value = left(x)
         passed(value)
     end
+
+    struct Sample
+        amount::Float64
+    end
     """)
 
 const NESTED_REPEAT = load_package("NestedRepeat", """
@@ -232,4 +236,40 @@ end
     synced = gate_findings(mod; checks, probes, workload = mod.drops_sync)
     synced_rows = evidence_rows(synced, :consumer, :waited)
     @test synced_rows == [(:wait, "produced", "drops_sync", "produced")]
+end
+
+@testset "a bits value repeats when its bytes match, so signed zeros and NaN payloads stay apart" begin
+    mod = SHARED_REF.pkg
+    checks = (Rebuilds(),)
+    probes = Probes(; functions = (mod.twin, mod.call_both), slow_s = 0.0)
+    same = mod.Sample(1.0)
+    repeated = () -> mod.call_both(mod.twin, mod.twin, same, same)
+    fired = gate_findings(mod; checks, probes, workload = repeated)
+    rows = evidence_rows(fired, :function, :caller, :repeats)
+    @test rows == [(:rebuild, "twin", "twin", "call_both", "1")]
+
+    negative = mod.Sample(-0.0)
+    positive = mod.Sample(0.0)
+    signed = () -> mod.call_both(mod.twin, mod.twin, negative, positive)
+    signed_quiet = gate_findings(mod; checks, probes, workload = signed)
+    @test isempty(signed_quiet)
+
+    low_payload = reinterpret(Float64, 0x7ff8000000000001)
+    high_payload = reinterpret(Float64, 0x7ff8000000000002)
+    low = mod.Sample(low_payload)
+    high = mod.Sample(high_payload)
+    payloads = () -> mod.call_both(mod.twin, mod.twin, low, high)
+    payload_quiet = gate_findings(mod; checks, probes, workload = payloads)
+    @test isempty(payload_quiet)
+
+    held = [same, negative]
+    copied = [mod.Sample(1.0), mod.Sample(-0.0)]
+    swapped = [negative, same]
+    matched = () -> mod.call_both(mod.twin, mod.twin, held, copied)
+    matched_fired = gate_findings(mod; checks, probes, workload = matched)
+    matched_rows = evidence_rows(matched_fired, :function, :caller, :repeats)
+    @test matched_rows == [(:rebuild, "twin", "twin", "call_both", "1")]
+    reordered = () -> mod.call_both(mod.twin, mod.twin, held, swapped)
+    reordered_quiet = gate_findings(mod; checks, probes, workload = reordered)
+    @test isempty(reordered_quiet)
 end

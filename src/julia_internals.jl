@@ -321,9 +321,6 @@ function project_dependencies(repo)
     dependencies
 end
 
-# A bits type whose layout leaves bytes no field covers, from `Base.datatype_haspadding`; those bytes hold no value.
-has_padding(type::DataType) = Base.datatype_haspadding(type)
-
 # The local `@sync` binds its task list to, `Base.sync_varname`; an `@async` inside the block pushes its task there.
 sync_binding() = Base.sync_varname
 
