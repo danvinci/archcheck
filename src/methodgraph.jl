@@ -296,7 +296,7 @@ function unknown_call(frame, position, ::Core.Compiler.NoCallInfo)
     veto_fact(file, line, callee, via, is_used)
 end
 
-unknown_call(frame, position, @nospecialize(::Any)) = nothing
+unknown_call(_frame, _position, @nospecialize(::Any)) = nothing
 
 function named_callee(code, statement)
     args = statement.args
@@ -328,14 +328,14 @@ function held_type(code, arg::Core.SlotNumber)
     unwrap_held(code.slottypes[arg.id])
 end
 
-function held_type(code, arg::GlobalRef)
+function held_type(_code, arg::GlobalRef)
     isdefined(arg.mod, arg.name) || return nothing
     value = getfield(arg.mod, arg.name)
     value isa Function || return nothing
     typeof(value)
 end
 
-held_type(code, @nospecialize(::Any)) = nothing
+held_type(_code, @nospecialize(::Any)) = nothing
 
 unwrap_held(held::Core.Const) = typeof(held.val)
 function unwrap_held(@nospecialize(held))
