@@ -90,6 +90,11 @@ function triple(x::Int)
     (x, x + 1, x + 2)
 end
 
+# tuple_iteration: a flatten over a NamedTuple argument
+function flat_parts(group::NamedTuple)
+    Iterators.flatten(values(group))
+end
+
 # reader_set: a concrete subtype with no method for the reader
 abstract type Item end
 

@@ -37,6 +37,7 @@ include("checks_project.jl")
 include("checks_inferred.jl")
 include("checks_overloads.jl")
 include("checks_clones.jl")
+include("checks_tuple_iterations.jl")
 include("checks_reach.jl")
 include("checks_opt.jl")
 include("checks_derived.jl")
@@ -49,7 +50,7 @@ include("gate.jl")
 export Finding, emit_jsonl, print_findings, print_architecture, render_evidence
 export Check, Context
 export Corpus, ModuleBackEdges, ModuleCycles, OwnerUniqueness, ModulePiracy
-export FileBackEdges, FileSinkable, Sinkable, TupleReturns, DeadCode, BlanketExports, StaleExports
+export FileBackEdges, FileSinkable, Sinkable, TupleReturns, TupleIterations, DeadCode, BlanketExports, StaleExports
 export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders

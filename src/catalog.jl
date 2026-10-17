@@ -9,6 +9,7 @@ const CHECKS = (
     FileSinkable(),
     Sinkable(),
     TupleReturns(),
+    TupleIterations(),
     DeadCode(),
     BlanketExports(),
     StaleExports(),
