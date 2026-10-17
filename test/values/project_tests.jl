@@ -61,7 +61,7 @@ const ABSENT_ROOT = load_package("AbsentRoot", "x() = 1\n")
     callees = (:root_find, :other_find, :isodd, :iseven)
     exempt = ("src/calls/owner",)
     check = CallerAllowlist(callees, allowed, exempt)
-    @test ArchCheck.kinds(check) == (:unlisted_caller => :error,)
+    @test ArchCheck.kinds(check) == (:unlisted_caller => :error, :stale_allowance => :error)
     found = ArchCheck.run(check, ctx)
     load_time = [(finding.file, finding.line) for finding in found if isempty(finding.symbol)]
     @test sort!(load_time) == [("src/calls/bound.jl", 6), ("src/calls/loaded.jl", 1)]
@@ -138,6 +138,16 @@ caller(x::String) = x
     cited = [checkbounds(Bool, lines, f.line) && occursin("guarded", lines[f.line]) for f in found]
     @test length(found) == 2
     @test all(cited)
+end
+
+@testset "an allowed definition that references no guarded name is a stale allowance" begin
+    ctx = case_context(CALLER_ROOT)
+    allowed = (("src/calls/readers.jl", :allowed_reader), ("src/calls/outside.jl", :clean),
+               ("src/calls/gone.jl", :anything))
+    check = CallerAllowlist((:root_find,), allowed, ("src/calls/owner",))
+    found = ArchCheck.run(check, ctx)
+    stale = sort!([(f.file, f.symbol) for f in found if f.kind === :stale_allowance])
+    @test stale == [("src/calls/gone.jl", "anything"), ("src/calls/outside.jl", "clean")]
 end
 
 @testset "a configured directory with no indexed file is refused" begin

@@ -1,6 +1,6 @@
 # A parameterized check a package configures: who may reference a name.
 
-"""Configured through `gate(...; checks)` with the names, the definitions allowed to reference them, and directories to skip. A reference from any other definition is a finding, cited at its first such reference, and so is one in load-time code outside every definition. A macro is a definition named with its `@`."""
+"""Configured through `gate(...; checks)` with the names, the definitions allowed to reference them, and directories to skip. A reference from any other definition is a finding, cited at its first such reference, and so is one in load-time code outside every definition; an allowed definition that references none of the names is a stale allowance. A macro is a definition named with its `@`."""
 struct CallerAllowlist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
     callees::C       # function names a body may reference only from an allowed def
     allowed::A       # (repo-relative path, def name) pairs that may reference them
@@ -14,7 +14,7 @@ function CallerAllowlist(callees, allowed, exempt_dirs = ())
     CallerAllowlist(names, pairs, prefixes)
 end
 
-kinds(::CallerAllowlist) = (:unlisted_caller => :error,)
+kinds(::CallerAllowlist) = (:unlisted_caller => :error, :stale_allowance => :error)
 
 # A path sits in a directory when it is that directory or a file inside it.
 function is_under(path, directory)
@@ -73,6 +73,19 @@ function unlisted_finding(file, symbol, line, referenced)
     Finding(file.mod, :unlisted_caller, file.path, symbol, line, detail, evidence)
 end
 
+# An allowed pair whose definition references none of the names: its file is gone or skipped, or the definition no
+# longer reads them. A file the index lacks is cited under the package's own module.
+function stale_finding(index, root, pair, callees)
+    path, def = pair
+    held = findfirst(file -> file.path == path, index.files)
+    mod = isnothing(held) ? nameof(root) : index.files[held].mod
+    names = sort!([string(name) for name in callees])
+    symbol = string(def)
+    detail = symbol * " is allowed to reference " * join(names, ", ") * " and references none"
+    evidence = [:callees => join(names, " ")]
+    Finding(mod, :stale_allowance, path, symbol, 0, detail, evidence)
+end
+
 function run(check::CallerAllowlist, ctx)
     findings = Finding[]
     for prefix in check.exempt_dirs
@@ -80,11 +93,15 @@ function run(check::CallerAllowlist, ctx)
     end
     names = Set(check.callees)
     allowed = Set(check.allowed)
+    referencing = Set{Tuple{String,Symbol}}()
     for file in ctx.index.files
         any(prefix -> is_under(file.path, prefix), check.exempt_dirs) && continue
         for (def, lines) in definition_reads(file.scan, names)
             pair = (file.path, def)
-            pair in allowed && continue
+            if pair in allowed
+                push!(referencing, pair)
+                continue
+            end
             first_line = minimum(values(lines))
             finding = unlisted_finding(file, string(def), first_line, keys(lines))
             push!(findings, finding)
@@ -94,6 +111,10 @@ function run(check::CallerAllowlist, ctx)
         first_line = minimum(values(loaded))
         finding = unlisted_finding(file, "", first_line, keys(loaded))
         push!(findings, finding)
+    end
+    for pair in check.allowed
+        pair in referencing && continue
+        push!(findings, stale_finding(ctx.index, ctx.root, pair, check.callees))
     end
     findings
 end

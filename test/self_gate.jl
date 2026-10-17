@@ -140,7 +140,6 @@ function inference_sites()
         ("src/methodgraph.jl", :expand_instance!),
         ("src/methodgraph.jl", :merge_declared_calls!),
         ("src/julia_internals.jl", :inferred_return_types),
-        ("src/checks_opt.jl", :analyze_entries),
     )
     CallerAllowlist(callees, allowed)
 end
