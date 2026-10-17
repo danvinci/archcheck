@@ -39,7 +39,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 
 | Check | A finding |
 |---|---|
-| `CallerWhitelist` | a reference to a listed function from a definition outside its allowed list, or from load-time code, cited at its first reference |
+| `CallerAllowlist` | a reference to a listed function from a definition outside its allowed list, or from load-time code, cited at its first reference |
 | `Independent` | a reference between modules declared independent |
 | `DeclaredExtensions` | a method on another module's function that its owner leaves unmarked public, or undocumented in every module |
 | `ReaderSet` | a concrete subtype no method of a required reader matches |

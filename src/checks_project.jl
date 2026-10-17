@@ -1,20 +1,20 @@
 # A parameterized check a package configures: who may reference a name.
 
 """Configured through `gate(...; checks)` with the names, the definitions allowed to reference them, and directories to skip. A reference from any other definition is a finding, cited at its first such reference, and so is one in load-time code outside every definition. A macro is a definition named with its `@`."""
-struct CallerWhitelist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
+struct CallerAllowlist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Symbol}} where M, E<:NTuple{K,String} where K} <: Check
     callees::C       # function names a body may reference only from an allowed def
     allowed::A       # (repo-relative path, def name) pairs that may reference them
     exempt_dirs::E   # path prefixes skipped entirely
 end
 
-function CallerWhitelist(callees, allowed, exempt_dirs = ())
+function CallerAllowlist(callees, allowed, exempt_dirs = ())
     names = Tuple(Symbol(name) for name in callees)
     pairs = Tuple((String(pair[1]), Symbol(pair[2])) for pair in allowed)
     prefixes = Tuple(String(prefix) for prefix in exempt_dirs)
-    CallerWhitelist(names, pairs, prefixes)
+    CallerAllowlist(names, pairs, prefixes)
 end
 
-kinds(::CallerWhitelist) = (:unlisted_caller => :error,)
+kinds(::CallerAllowlist) = (:unlisted_caller => :error,)
 
 # A path sits in a directory when it is that directory or a file inside it.
 function is_under(path, directory)
@@ -73,7 +73,7 @@ function unlisted_finding(file, symbol, line, referenced)
     Finding(file.mod, :unlisted_caller, file.path, symbol, line, detail, evidence)
 end
 
-function run(check::CallerWhitelist, ctx)
+function run(check::CallerAllowlist, ctx)
     findings = Finding[]
     for prefix in check.exempt_dirs
         require_covered(ctx.index, prefix)

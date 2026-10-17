@@ -54,7 +54,7 @@ export FileBackEdges, FileSinkable, Sinkable, TupleReturns, TupleIterations, Dea
 export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
-export CallerWhitelist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
+export CallerAllowlist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
 export UnreachedMethods, UnreadWaits
 export Derived, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph

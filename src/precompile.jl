@@ -6,7 +6,7 @@ function precompile_checks()
     configured = (
         UnreadWaits(),
         ReaderSet(Check, readers),
-        CallerWhitelist((:precompile_checks,), (), named_here),
+        CallerAllowlist((:precompile_checks,), (), named_here),
         DeclaredExtensions(),
         UnreachedMethods(),
         ReachesInternal(allowed = (Base, Core, Base.Compiler, Base.Docs)),

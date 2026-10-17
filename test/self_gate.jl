@@ -65,8 +65,8 @@ function exhibit_checks()
         push!(active, rule(strict = true))
     end
     allowed = (("src/shape/plants.jl", :allowed_call),)
-    whitelist = CallerWhitelist((:guarded,), allowed)
-    push!(active, whitelist)
+    allowlist = CallerAllowlist((:guarded,), allowed)
+    push!(active, allowlist)
     push!(active, UnreadWaits())
     push!(active, Independent(:Low, :Shape))
     push!(active, DeclaredExtensions())
@@ -129,7 +129,7 @@ end
 function parse_sites()
     callees = (:parseall, :parse_file)
     allowed = (("src/syntax.jl", :parse_file), ("src/syntax.jl", :parsed_tree))
-    CallerWhitelist(callees, allowed)
+    CallerAllowlist(callees, allowed)
 end
 
 # The sites that run inference, each asking a question the others do not answer.
@@ -142,7 +142,7 @@ function inference_sites()
         ("src/julia_internals.jl", :inferred_return_types),
         ("src/checks_opt.jl", :analyze_entries),
     )
-    CallerWhitelist(callees, allowed)
+    CallerAllowlist(callees, allowed)
 end
 
 # Julia internals with no public form in 1.13.1, each read only in the boundary file, whose every operation states
@@ -156,7 +156,7 @@ function internal_sites()
                :method_instance, :hasgenerator, :isvarargtype, :get_world_counter,
                :ForwardToBackedgeIterator, :argextype, :widenconst, :pkgorigins, :parse_cache_header, :_crc32c)
     boundary = ("src/julia_internals.jl",)
-    CallerWhitelist(callees, (), boundary)
+    CallerAllowlist(callees, (), boundary)
 end
 
 # The internals ArchCheck reads on purpose: Base's reflection, loading and parser, Core's method types, inference and

@@ -1,4 +1,4 @@
-# The caller whitelist, over written sources.
+# The caller allowlist, over written sources.
 
 const CALLER_ROOT = load_package("CallerRoot", """
 include("calls/readers.jl")
@@ -60,7 +60,7 @@ const ABSENT_ROOT = load_package("AbsentRoot", "x() = 1\n")
     allowed = (("src/calls/readers.jl", :allowed_reader),)
     callees = (:root_find, :other_find, :isodd, :iseven)
     exempt = ("src/calls/owner",)
-    check = CallerWhitelist(callees, allowed, exempt)
+    check = CallerAllowlist(callees, allowed, exempt)
     @test ArchCheck.kinds(check) == (:unlisted_caller => :error,)
     found = ArchCheck.run(check, ctx)
     load_time = [(finding.file, finding.line) for finding in found if isempty(finding.symbol)]
@@ -95,8 +95,8 @@ guarded(x::String), Inner.guarded
 caller(x) = guarded(x)
 """)
 
-# A whitelist that lets no definition reference the fixtures' one protected function.
-const NO_GUARDED_CALLER = CallerWhitelist((:guarded,), ())
+# An allowlist that lets no definition reference the fixtures' one protected function.
+const NO_GUARDED_CALLER = CallerAllowlist((:guarded,), ())
 
 @testset "a docstring's subject is no load-time reference" begin
     ctx = case_context(DOC_SUBJECT)
@@ -142,6 +142,6 @@ end
 
 @testset "a configured directory with no indexed file is refused" begin
     ctx = case_context(ABSENT_ROOT)
-    check = CallerWhitelist((:f,), (), ("src/absent",))
+    check = CallerAllowlist((:f,), (), ("src/absent",))
     @test_throws ArgumentError ArchCheck.run(check, ctx)
 end
