@@ -14,6 +14,15 @@ function read_brick(brick::Low.Brick)
     brick.width
 end
 
+# foreign_field: a loop's element read, the element another module's abstract type
+function read_blocks(blocks::Vector{Low.Block})
+    total = 0
+    for block in blocks
+        total += block.width
+    end
+    total
+end
+
 # module_piracy: a method on a foreign function whose arguments this module does not own
 function Base.identity(text::String, count::Int)
     count

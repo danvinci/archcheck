@@ -24,6 +24,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("file_backedge", "src/shape/rank.jl", "src/shape/later.jl"),
     ("file_sinkable", "src/shape/plants.jl", "sink_home"),
     ("implicit_import", "src/shape/Shape.jl", "shuffle"),
+    ("foreign_field", "src/shape/plants.jl", "Low.Block.width"),
     ("foreign_field", "src/shape/plants.jl", "Low.Brick.width"),
     ("inferred_box", "src/shape/plants.jl", "boxed_total(::Int64)"),
     ("missing_include", "src/shape/Shape.jl", "absent_piece.jl"),

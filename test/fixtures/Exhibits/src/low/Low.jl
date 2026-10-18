@@ -2,10 +2,12 @@
 
 module Low
 
-export Brick, pull_shape, twin_name
+export Block, Brick, pull_shape, twin_name
 public helper
 
-struct Brick
+abstract type Block end
+
+struct Brick <: Block
     width::Int   # edge length, millimetres
 end
 

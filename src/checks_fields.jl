@@ -1,5 +1,6 @@
 # foreign-field: a field read on another module's struct, unless a public type documents the field. Receivers are
-# typed by annotations, aliases, field chains, and inference when it gives one concrete type.
+# typed by annotations, aliases, field chains, loops over a typed collection, and inference when it gives one concrete
+# type.
 
 # Annotations from the signature, on a fresh type dict. The signature's default values stay unread.
 function method_types(state, node, outer)

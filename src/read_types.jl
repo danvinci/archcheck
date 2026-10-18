@@ -414,7 +414,8 @@ function call_type(state, scope, node)
     inferred_result(state, scope, fn, operands)
 end
 
-# The element a loop over a collection binds, when every step of `iterate` yields one concrete type.
+# The element a loop over a collection binds, when every step of `iterate` yields one type: the collection's declared
+# element, abstract as a field's declared type may be. Any declares nothing.
 function iterated_element(state, @nospecialize(collection))
     collection_type = resolved(state, collection)
     (isnothing(collection_type) || has_free_variables(collection_type)) && return nothing
@@ -427,7 +428,7 @@ function iterated_element(state, @nospecialize(collection))
     next_step = iterate_step(steps, next_signature)
     next_step == first_step || return nothing
     element = fieldtype(first_step, 1)
-    concrete_type(element)
+    element === Any ? nothing : element
 end
 
 # The (element, state) tuple type an `iterate` call infers when the call does not end the loop.
