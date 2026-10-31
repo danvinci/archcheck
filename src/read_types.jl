@@ -138,7 +138,7 @@ const ScopeTypes = IdDict{TypeKey,Union{Type,Deferred}}
 # identity, so a callee's own `hash` stays uncalled.
 const InferredTypes = IdDict{Tuple{Any,Any},Union{Nothing,DataType}}
 
-# One run's iterate steps, keyed by signature. Identity on `Any` keeps each signature as itself.
+# One file's iterate steps, keyed by signature. Identity on `Any` keeps each signature as itself
 const IterateSteps = IdDict{Any,Union{Nothing,DataType}}
 
 # One file's reads, walked in the namespace of the module that owns the file.
@@ -146,8 +146,8 @@ struct ReadState{E,C,S}
     mod::Module                      # the file's module, where annotations and callees resolve
     scan::FileScan                   # the index record naming the local each identifier names
     reads::Vector{E}                 # reads on typed receivers
-    inferred::C                      # InferredTypes shared by every file of one run, whose world stays fixed
-    steps::S                         # iterate signature -> the (element, state) type, or nothing; one run, one world
+    inferred::C                      # InferredTypes of this file's read, whose world stays fixed
+    steps::S                         # iterate signature -> the (element, state) type, or nothing; one file, one world
 end
 
 # The key an identifier's binding is typed under: its local's declaring identifier, or its name when it is free.
@@ -323,7 +323,7 @@ Base.@nospecializeinfer function inferred_type(@nospecialize(f), @nospecialize(s
     concrete_type(result)
 end
 
-# The inferred concrete type, asked of inference once per callee and signature in a run.
+# The inferred concrete type, asked of inference once per callee and signature in a file's read
 Base.@nospecializeinfer function known_inferred_type(state, @nospecialize(f), @nospecialize(signature))
     key = (f, signature)
     haskey(state.inferred, key) && return state.inferred[key]

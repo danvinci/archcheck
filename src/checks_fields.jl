@@ -265,31 +265,40 @@ function is_foreign_abstract_read(structs, @nospecialize(annotation), field, rea
     declarers > 0
 end
 
+# One file's foreign reads. Its inference queries go through caches of its own, so files read on tasks of their own
+# share nothing they write; `owners` holds the package's modules by key, their keys by module and its concrete structs
+function file_foreign_fields(file::FileNode, owners)
+    (; by_key, key_of, structs) = owners
+    found = Finding[]
+    M = get(by_key, file.mod, nothing)
+    isnothing(M) && return found
+    inferred = InferredTypes()
+    steps = IterateSteps()
+    reads = field_reads(file, M, inferred, steps).reads
+    # a read through a Union reads the field on each member
+    for access in reads, member in union_members(access.type)
+        S = declared_datatype(member)
+        isnothing(S) && continue
+        is_abstract_read = isabstracttype(S)
+        if is_abstract_read && !is_foreign_abstract_read(structs, member, access.field, file.mod, key_of)
+            continue
+        end
+        owner = get(key_of, parentmodule(S), nothing)
+        (isnothing(owner) || owner == file.mod || is_open_read(S, access.field)) && continue
+        symbol = "$owner.$(nameof(S)).$(access.field)"
+        detail = "reads a field of a struct another module owns"
+        evidence = [:receiver => access.receiver, :declared => read_kind(S, access.field)]
+        push!(found, Finding(file.mod, :foreign_field, file.path, symbol, access.line, detail, evidence))
+    end
+    found
+end
+
+# Each file read on its own task: inference, which types most receivers, runs side by side
 function check_foreign_fields(index::SourceIndex, mods)
     by_key = Dict(module_key(M) => M for M in mods)
     key_of = Dict(M => module_key(M) for M in mods)
     structs = package_structs(mods)
-    findings = Finding[]
-    inferred = InferredTypes()
-    steps = IterateSteps()
-    for file in index.files
-        M = get(by_key, file.mod, nothing)
-        isnothing(M) && continue
-        # a read through a Union reads the field on each member
-        for access in field_reads(file, M, inferred, steps).reads, member in union_members(access.type)
-            S = declared_datatype(member)
-            isnothing(S) && continue
-            is_abstract_read = isabstracttype(S)
-            if is_abstract_read && !is_foreign_abstract_read(structs, member, access.field, file.mod, key_of)
-                continue
-            end
-            owner = get(key_of, parentmodule(S), nothing)
-            (isnothing(owner) || owner == file.mod || is_open_read(S, access.field)) && continue
-            symbol = "$owner.$(nameof(S)).$(access.field)"
-            detail = "reads a field of a struct another module owns"
-            evidence = [:receiver => access.receiver, :declared => read_kind(S, access.field)]
-            push!(findings, Finding(file.mod, :foreign_field, file.path, symbol, access.line, detail, evidence))
-        end
-    end
-    findings
+    owners = (; by_key, key_of, structs)
+    per_file = ordered_results(file_foreign_fields, Vector{Finding}, index.files, owners)
+    reduce(vcat, per_file; init = Finding[])
 end
