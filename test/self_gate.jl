@@ -139,6 +139,7 @@ function inference_sites()
         ("src/methodgraph.jl", :inference_frame),
         ("src/methodgraph.jl", :expand_instance!),
         ("src/methodgraph.jl", :merge_declared_calls!),
+        ("src/checks_opt.jl", :opt_counts),
         ("src/julia_internals.jl", :inferred_return_types),
     )
     CallerAllowlist(callees, allowed)
@@ -153,7 +154,8 @@ function internal_sites()
                :unwrap_unionall, :rewrap_unionall, :has_free_typevars, :uniontypes, :isType, :NativeInterpreter,
                :InferenceParams, :infer_return_type, :return_types, :generating_output, :specializations,
                :method_instance, :hasgenerator, :isvarargtype, :get_world_counter,
-               :ForwardToBackedgeIterator, :argextype, :widenconst, :pkgorigins, :parse_cache_header, :_crc32c)
+               :ForwardToBackedgeIterator, :argextype, :widenconst, :pkgorigins, :parse_cache_header, :_crc32c,
+               :get_compileable_sig, :ignorelimited)
     boundary = ("src/julia_internals.jl",)
     CallerAllowlist(callees, (), boundary)
 end

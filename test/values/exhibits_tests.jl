@@ -1,7 +1,5 @@
 # One real package, every shipped finding kind, nothing else.
 
-using JET
-
 gate_file = joinpath(@__DIR__, "..", "self_gate.jl")
 if !isdefined(@__MODULE__, :exhibit_gate)
     include(gate_file)

@@ -131,6 +131,19 @@ function widened_argument_type(code, sptypes, @nospecialize(arg))
     Core.Compiler.widenconst(inferred)
 end
 
+"""Whether an instance is the one Julia compiles for its own signature: `Core.Compiler.get_compileable_sig` gives the
+signature Julia compiles a call at, which differs from an instance it would not compile as it stands"""
+function is_compileable_instance(instance::Core.MethodInstance)
+    method = instance.def
+    method isa Method || return false
+    compiled = Core.Compiler.get_compileable_sig(method, instance.specTypes, instance.sparam_vals)
+    compiled === instance.specTypes
+end
+
+"""Whether a statement's inferred type is a box, past a constant and inference's mark of limited accuracy:
+`Core.Compiler.ignorelimited` drops the mark and `widenconst` the constant"""
+is_box_type(@nospecialize(inferred)) = Core.Compiler.widenconst(Core.Compiler.ignorelimited(inferred)) === Core.Box
+
 """Every method the current world matches for `signature`, however many there are. `Base._methods_by_ftype` lists
 them at `Base.get_world_counter`, and a negative limit asks for every match."""
 function matching_methods(@nospecialize(signature))

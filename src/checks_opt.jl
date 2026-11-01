@@ -1,4 +1,5 @@
-# Opt-analysis port: a corpus of concrete calls run through JET.report_opt. No-op until JET is loaded.
+# Opt analysis: a corpus of concrete calls, each judged on Julia's own inference by the rules of JET's `report_opt`
+# (JET src/analyzers/optanalyzer.jl)
 
 """One concrete call in the opt-analysis corpus: a callable and its argument types as a `Tuple` type."""
 struct OptEntry{F, A<:Tuple}
@@ -23,8 +24,6 @@ struct OptAnalysis{E} <: Check
 end
 OptAnalysis() = OptAnalysis(OptEntry[])
 
-jet_loaded() = loaded_package("JET")
-
 function entry_location(entry::OptEntry, recorded::RecordedPaths)
     m = which(entry.f, entry.argtypes)
     mod = module_key(m.module)
@@ -32,44 +31,81 @@ function entry_location(entry::OptEntry, recorded::RecordedPaths)
     (mod = mod, file = file, line = line)
 end
 
-function analyze_entries(jet::Module, entries, recorded, target_modules)
+# Each frame inference reaches from the entry, inferred again as its own frame. A judged frame counts each live call its
+# optimized code leaves to runtime dispatch and each local its typed code boxes; a constant result counts neither
+function opt_counts(entry::OptEntry, modules, interp)
+    root = method_instance_at(entry.f, entry.argtypes)
+    pending = Core.MethodInstance[root]
+    seen = Base.IdSet{Core.MethodInstance}()
+    dispatches = 0
+    boxes = 0
+    while !isempty(pending)   # bounded: each instance is judged once, and inference reaches finitely many
+        instance = pop!(pending)
+        instance in seen && continue
+        push!(seen, instance)
+        frame = inference_frame(instance, interp)
+        isnothing(frame) && continue
+        append!(pending, called_instances(frame))
+        is_judged(instance, root, modules) || continue
+        # The optimizer rewrites `frame.src` in place
+        unoptimized = copy(frame.src)
+        code = optimized_code(frame, interp)
+        isnothing(code) && continue
+        boxes += count_boxes(unoptimized)
+        dispatches += count_dispatches(code, instance)
+    end
+    (; dispatches, boxes)
+end
+
+# A frame of a package module whose instance is the one Julia compiles for its signature, or the entry's own
+function is_judged(instance::Core.MethodInstance, root::Core.MethodInstance, modules)
+    method = instance.def
+    method isa Method && method.module in modules || return false
+    instance === root || is_compileable_instance(instance)
+end
+
+function count_boxes(code::Core.CodeInfo)
+    count(eachindex(code.code)) do position
+        statement = code.code[position]
+        statement isa Expr && statement.head === :(=) || return false
+        is_box_type(code.ssavaluetypes[position])
+    end
+end
+
+# A call left to dispatch on a callee no builtin; one inlining copied in is the inlined frame's to count
+function count_dispatches(code::Core.CodeInfo, instance::Core.MethodInstance)
+    sptypes = Core.Compiler.sptypes_from_meth_instance(instance)
+    count(eachindex(code.code)) do position
+        statement = code.code[position]
+        statement isa Expr && statement.head === :call || return false
+        callee = widened_argument_type(code, sptypes, first(statement.args))
+        is_builtin_type(callee) && return false
+        isnothing(inlined_instance(code.debuginfo, position))
+    end
+end
+
+function check_opt_entries(entries; recorded, modules)
     findings = Finding[]
-    mods = Tuple(target_modules)
-    RuntimeDispatchReport = jet.RuntimeDispatchReport
-    CapturedVariableReport = jet.CapturedVariableReport
+    module_set = Set{Module}(modules)
+    interp = inference_interpreter()
     for entry in entries
-        result = Base.invokelatest(jet.report_opt, entry.f, entry.argtypes; target_modules = mods)
-        reports = Base.invokelatest(jet.get_reports, result)
-        n_dispatch = count(r -> r isa RuntimeDispatchReport, reports)
-        n_box = count(r -> r isa CapturedVariableReport, reports)
-        (n_dispatch == 0 && n_box == 0) && continue
+        counts = opt_counts(entry, module_set, interp)
+        counts.dispatches == 0 && counts.boxes == 0 && continue
         mod, file, line = entry_location(entry, recorded)
-        if n_dispatch > 0
+        if counts.dispatches > 0
             push!(findings, Finding(mod, :runtime_dispatch, file, entry.symbol, line,
                   "runtime dispatch in the inferred graph of this entry",
-                  [:dispatches => string(n_dispatch)]))
+                  [:dispatches => string(counts.dispatches)]))
         end
-        if n_box > 0
+        if counts.boxes > 0
             push!(findings, Finding(mod, :inferred_box, file, entry.symbol, line,
                   "a captured local is boxed in the inferred graph of this entry",
-                  [:boxes => string(n_box)]))
+                  [:boxes => string(counts.boxes)]))
         end
     end
     findings
 end
 
-function check_opt_entries(entries; recorded, target_modules)
-    isempty(entries) && return Finding[]
-    jet = jet_loaded()
-    isnothing(jet) && return Finding[]
-    analyze_entries(jet, entries, recorded, target_modules)
-end
+run(check::OptAnalysis, ctx) = check_opt_entries(check.entries; recorded = ctx.recorded, modules = package_modules(ctx))
 
-run(check::OptAnalysis, ctx) =
-    check_opt_entries(check.entries; recorded = ctx.recorded, target_modules = package_modules(ctx))
-
-# Without JET the analysis cannot run, so it declares no kinds and a JET-less run claims none of them clean.
-function kinds(::OptAnalysis)
-    isnothing(jet_loaded()) && return ()
-    (:runtime_dispatch => :advisory, :inferred_box => :advisory)
-end
+kinds(::OptAnalysis) = (:runtime_dispatch => :advisory, :inferred_box => :advisory)
