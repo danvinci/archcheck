@@ -195,24 +195,39 @@ function alias_findings!(findings, owner, @nospecialize(declared_type), name, fa
     push_fields!(findings, owner, name, site, detail, opened)
 end
 
+# Each name a module binds to a struct type or an instance of one, with the struct's datatype
+function struct_bindings(mod::Module)
+    found = Pair{Symbol,DataType}[]
+    for name in names(mod; all = true)
+        is_self = name === nameof(mod)
+        is_internal = is_generated_name(name)
+        (is_self || is_internal) && continue
+        isdefined(mod, name) || continue
+        declared_type = getproperty(mod, name)
+        body = declared_datatype(declared_type)
+        isnothing(body) && continue
+        isstructtype(body) && push!(found, name => body)
+    end
+    found
+end
+
+# Whether `mod` binds `name` to the struct it defines under that name, rather than an alias or an instance
+function is_own_struct_name(mod::Module, name::Symbol, body::DataType)
+    declared_type = getproperty(mod, name)
+    family = body.name.wrapper
+    declared_type === family && name === nameof(family) && parentmodule(body) === mod
+end
+
 function check_abstract_fields(mods, sites, index::SourceIndex)
     package = Set(mods)
     findings = Finding[]
     for mod in mods
         owner = module_key(mod)
-        for name in names(mod; all = true)
-            is_self = name === nameof(mod)
-            is_internal = is_generated_name(name)
-            (is_self || is_internal) && continue
-            isdefined(mod, name) || continue
+        for (name, body) in struct_bindings(mod)
             declared_type = getproperty(mod, name)
-            body = declared_datatype(declared_type)
-            isnothing(body) && continue
-            isstructtype(body) || continue
             parentmodule(body) in package || continue
             family = body.name.wrapper
-            is_own_name = declared_type === family && name === nameof(family) && parentmodule(body) === mod
-            if is_own_name
+            if is_own_struct_name(mod, name, body)
                 struct_findings!(findings, owner, declared_type, name, sites)
             else
                 alias_findings!(findings, owner, declared_type, name, family, index)

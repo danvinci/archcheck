@@ -10,6 +10,7 @@ struct Span
     degree::Int   # polynomial degree
 end
 
+# unlisted_holder: the holder allowlist lets no struct hold a span
 mutable struct Shelf
     held::Span   # cached span
 end

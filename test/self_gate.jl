@@ -16,6 +16,7 @@ const NOT_APPLICABLE = (
     (OwnTypeMethods, "the package is one module, whose functions take Base and Core types by design"),
     (ImportAllowlist, "the package is one module, so it reaches no other package module"),
     (TakerAllowlist, "no type of the package is closed to a list of definitions"),
+    (HolderAllowlist, "no type of the package is closed to a list of holders"),
 )
 
 function exhibit_workload()
@@ -89,6 +90,7 @@ function exhibit_checks()
     push!(active, ImportAllowlist(Exhibits.Contracts => ()))
     takers = (("src/contracts/Contracts.jl", :scaled), ("src/contracts/Contracts.jl", :run_logic))
     push!(active, TakerAllowlist(Exhibits.Contracts.Seam => takers))
+    push!(active, HolderAllowlist(Exhibits.Shape.Span => ()))
     Tuple(active)
 end
 

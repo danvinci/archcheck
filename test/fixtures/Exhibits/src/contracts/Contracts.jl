@@ -8,8 +8,8 @@ struct Seam
     n::Int   # sample count the seam carries
 end
 
-# undeclared_module: the wrapper has no using or import for this module
-# unlisted_import: the import allowlist lets this module reach no other
+# undeclared_module, unlisted_import: the wrapper names no other module, and the allowlist lets it reach none
+# unlisted_taker: this definition takes the type the taker allowlist closes to two others
 function borrow_low(seam::Seam)
     Low.helper()
     seam.n

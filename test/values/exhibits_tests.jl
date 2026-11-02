@@ -63,6 +63,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("undeclared_module", "src/contracts/Contracts.jl", "Low"),
     ("undeclared_module", "src/low/Low.jl", "Shape"),
     ("unlisted_caller", "src/shape/plants.jl", "stray_call"),
+    ("unlisted_holder", "src/shape/derived.jl", "Shelf.held"),
     ("unlisted_import", "src/contracts/Contracts.jl", "Low"),
     ("unlisted_taker", "src/contracts/Contracts.jl", "borrow_low"),
     ("unlisted_reader", "src/shape/derived.jl", "store_span"),
