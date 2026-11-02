@@ -49,6 +49,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `OpenAssertions` | a type assertion in a method body to a parametric concrete type written without its parameters, `fetch(task)::Wrapper` for `struct Wrapper{M}` or `::Vector`, which leaves the value abstract; an abstract type such as `::AbstractVector` is no finding |
 | `UnreadWaits` | a discarded `fetch`, a `wait` the method graph's inference resolves to the wait on a task (needs `entries`), a `fetch` or `wait` passed to `foreach` or to a call whose value goes unread, or an `@sync` block |
 | `UntypedTaskResults` | a read value of Base's `fetch(t)`, `fetch.(ts)`, `map(fetch, ts)` or `asyncmap(...)` that no type assertion on the call or typed comprehension around it gives an element type |
+| `UntypedParses` | a call of JSON.jl's `parse` or `parsefile`, bare or qualified, given no target type, so every read of the value by key dispatches at run time |
 | `UntypedValues` | an empty `[]`, `Dict()`, `Set()` or `IdDict()` with no element type, in `src/` and the directories `dirs` names |
 | `GeneratorTuples` | a `Tuple(x)` call where `x` is a generator or comprehension, so inference cannot know the tuple's length (`ntuple(f, n)` builds it at a known length) |
 | `GeneratorReturns` | a top-level function whose returned value, its body's tail or a `return`, is a generator, which a caller iterating it nests in its own, reported once at the definition |

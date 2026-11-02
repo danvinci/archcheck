@@ -114,6 +114,11 @@ function open_list()
     []
 end
 
+# untyped_parse: a parse with no target type builds its value on Any
+function read_report(text::String)
+    JSON.parse(text)
+end
+
 # generator_tuple: a Tuple whose length only the run knows
 function counted_steps(n::Int)
     Tuple(step for step in 1:n)

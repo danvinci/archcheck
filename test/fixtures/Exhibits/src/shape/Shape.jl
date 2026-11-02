@@ -6,6 +6,7 @@ import ..Low
 import ..Low: _secret
 # implicit_import: `shuffle` below comes in through this bare using alone
 using Random
+import JSON
 
 include("sink_target.jl")
 include("rank.jl")

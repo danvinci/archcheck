@@ -74,6 +74,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("ignored_parameter", "src/shape/sinks.jl", "sink_a:1"),
     ("ignored_parameter", "src/shape/sinks.jl", "sink_b:1"),
     ("ignored_parameter", "src/shape/sinks.jl", "sink_c:1"),
+    ("untyped_parse", "src/shape/plants.jl", "read_report"),
     ("untyped_task_result", "src/shape/joins.jl", "joined"),
     ("untyped_value", "src/shape/plants.jl", "open_list"),
     ("unused_argument", "src/shape/plants.jl", "Base.identity:choice"),

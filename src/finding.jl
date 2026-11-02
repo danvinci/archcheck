@@ -37,6 +37,9 @@ fingerprint(f::Finding) = FindingKey(string(f.mod), string(f.kind), f.file, f.sy
 
 const REPORT_FIELDS = (:module, :kind, :severity, :file, :line, :symbol, :detail, :evidence)
 
+# The fields of a report line that identify its finding across runs; parsing a line into it skips the others
+const ReportKey = NamedTuple{(:module, :kind, :file, :symbol), NTuple{4,String}}
+
 # One JSON object per line, greppable per module. `severity` is the one the gate applied, promotions included. Every
 # field has a concrete type, so one compiled writer serves every finding.
 function emit_jsonl(io::IO, findings::Vector{Finding}, severity::Dict{Symbol,Symbol})
@@ -60,11 +63,11 @@ function previous_fingerprints(path)
     seen = Set{FindingKey}()
     for line in eachline(path)
         rec = try
-            JSON.parse(line)
+            JSON.parse(line, ReportKey)
         catch
             return nothing
         end
-        push!(seen, FindingKey(rec["module"], rec["kind"], rec["file"], rec["symbol"]))
+        push!(seen, FindingKey(rec[:module], rec.kind, rec.file, rec.symbol))
     end
     seen
 end
