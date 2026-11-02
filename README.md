@@ -46,6 +46,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `OptAnalysis` | a listed call whose inferred code dispatches at runtime or boxes a local |
 | `InferredCalls` | a call no method matches at any argument type inference allows (`failing_call`), or a discarded call that writes nothing, cannot throw and returns a value at every argument its method accepts (`dropped_value`) |
 | `UnreadWaits` | a discarded `fetch`, a `wait` the method graph's inference resolves to the wait on a task (needs `entries`), a `fetch` or `wait` passed to `foreach` or to a call whose value goes unread, or an `@sync` block |
+| `UntypedValues` | an empty `[]`, `Dict()`, `Set()` or `IdDict()`, or `Any` written as a type, in `src/` and the directories `dirs` names |
 
 ## Declared values
 

@@ -38,6 +38,8 @@ include("checks_inferred.jl")
 include("checks_overloads.jl")
 include("checks_clones.jl")
 include("checks_tuple_iterations.jl")
+include("checked_roots.jl")
+include("checks_untyped_values.jl")
 include("checks_reach.jl")
 include("checks_opt.jl")
 include("checks_derived.jl")
@@ -55,7 +57,7 @@ export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerAllowlist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
-export UnreachedMethods, UnreadWaits
+export UnreachedMethods, UnreadWaits, UntypedValues
 export Derived, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation

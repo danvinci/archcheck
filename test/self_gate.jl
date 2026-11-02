@@ -13,6 +13,7 @@ end
 const NOT_APPLICABLE = (
     (Independent, "the package is one module, so no pair of modules is independent"),
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
+    (UntypedValues, "the package reads method signatures and types as values, so its reflection writes Any as a type"),
 )
 
 function exhibit_workload()
@@ -77,6 +78,7 @@ function exhibit_checks()
     corpus = OptEntry[runtime, boxed]
     push!(active, OptAnalysis(corpus))
     push!(active, UnreachedMethods())
+    push!(active, UntypedValues())
     Tuple(active)
 end
 

@@ -104,6 +104,11 @@ function flat_parts(group::NamedTuple)
     Iterators.flatten(values(group))
 end
 
+# untyped_value: an empty literal builds its vector on Any
+function open_list()
+    []
+end
+
 # reader_set: a concrete subtype with no method for the reader
 abstract type Item end
 
