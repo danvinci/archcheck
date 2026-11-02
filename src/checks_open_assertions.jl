@@ -1,7 +1,7 @@
-# Open assertions: a type assertion that names a parametric type without its parameters leaves the asserted value
-# abstract, so every read of it dispatches at run time
+# Open assertions: a type assertion that names a parametric concrete type without its parameters leaves the asserted
+# value abstract, so every read of it dispatches at run time
 
-"""Configured through `gate(...; checks)`. A type assertion `x::T` in a method body where `T` names, in the module the code sits in, a parametric type written without its parameters (a `UnionAll`), as `fetch(task)::Wrapper` does for `struct Wrapper{M}`: the asserted value stays abstract. An argument, a field, a `local` or `global` line and an assignment's typed target declare a type rather than assert one, and a name that resolves to no type, or to a local, is no finding"""
+"""Configured through `gate(...; checks)`. A type assertion `x::T` in a method body where `T` names, in the module the code sits in, a parametric concrete type written without its parameters (a `UnionAll` over a type that is not abstract), as `fetch(task)::Wrapper` does for `struct Wrapper{M}`, or `::Vector`: the asserted value stays abstract though a concrete type was meant. An abstract type, `::AbstractVector` or `::Type`, is a deliberate choice and no finding. An argument, a field, a `local` or `global` line and an assignment's typed target declare a type rather than assert one, and a name that resolves to no type, or to a local, is no finding"""
 struct OpenAssertions <: Check end
 
 kinds(::OpenAssertions) = (:open_assertion => :advisory,)
@@ -45,6 +45,14 @@ function asserted_type(scan::FileScan, node)
     written
 end
 
+# A parametric concrete type with its parameters left open: a `UnionAll` whose datatype is no abstract type
+function is_open_concrete(@nospecialize(resolved))
+    resolved isa UnionAll || return false
+    body = declared_datatype(resolved)
+    isnothing(body) && return false
+    !isabstracttype(body)
+end
+
 function check_open_assertions(index::SourceIndex, root::Module)
     findings = Finding[]
     for file in index.files
@@ -54,7 +62,7 @@ function check_open_assertions(index::SourceIndex, root::Module)
             written = asserted_type(file.scan, node)
             isnothing(written) && continue
             resolved = written_type(home, written)
-            resolved isa UnionAll || continue
+            is_open_concrete(resolved) || continue
             form = enclosing_form(node)
             owner = owner_name(form, "")
             line = source_line(node)

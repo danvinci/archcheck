@@ -1,5 +1,6 @@
-# A type assertion in a method body naming a parametric type without its parameters leaves the value abstract, so it
-# is a finding; a concrete or parameterized assertion, a declaration and a name that resolves to no type are none
+# A type assertion in a method body naming a parametric concrete type without its parameters leaves the value
+# abstract, so it is a finding; an abstract type, a concrete or parameterized assertion, a declaration and a name that
+# resolves to no type are none
 
 const ASSERTIONS = load_package("Assertions", """
 include("types.jl")
@@ -13,6 +14,7 @@ include("asserts.jl")
         value::Int
     end
     const Alias = Wrapper
+    abstract type Outline{M} end
     """,
     "asserts.jl" => """
     opened(task) = fetch(task)::Wrapper
@@ -40,6 +42,9 @@ include("asserts.jl")
     end
     loaded = Wrapper(1)::Wrapper
     each(xs) = [x::Vector for x in xs]
+    widened(xs) = first(xs)::AbstractVector
+    typed(task) = fetch(task)::Type
+    outlined(task) = fetch(task)::Outline
     """,
 ])
 
