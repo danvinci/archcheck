@@ -81,6 +81,7 @@ function exhibit_checks()
     push!(active, UnreachedMethods())
     push!(active, UntypedValues())
     push!(active, StringPayloads())
+    push!(active, GeneratorTuples())
     Tuple(active)
 end
 
@@ -184,6 +185,7 @@ function static_checks()
     readers = ((ArchCheck.run, Tuple{Any}), (ArchCheck.kinds, Tuple{}))
     push!(active, ReaderSet(Check, readers))
     push!(active, self_opt())
+    push!(active, GeneratorTuples())
     Tuple(active)
 end
 

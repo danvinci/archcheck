@@ -114,6 +114,11 @@ function scores()
     Dict{String,Int}("a" => 1)
 end
 
+# generator_tuple: a Tuple whose length only the run knows
+function counted_steps(n::Int)
+    Tuple(step for step in 1:n)
+end
+
 # reader_set: a concrete subtype with no method for the reader
 abstract type Item end
 

@@ -5,7 +5,10 @@ struct UnreadWaits{A<:NTuple{N,Symbol} where N} <: Check
     allowed::A   # function names whose joins wait on a file or a device queue
 end
 
-UnreadWaits(; allowed = ()) = UnreadWaits(Tuple(Symbol(name) for name in allowed))
+function UnreadWaits(; allowed = ())
+    names = ntuple(position -> Symbol(allowed[position]), length(allowed))
+    UnreadWaits(names)
+end
 
 kinds(::UnreadWaits) = (:unread_wait => :advisory,)
 

@@ -8,9 +8,12 @@ struct CallerAllowlist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Sym
 end
 
 function CallerAllowlist(callees, allowed, exempt_dirs = ())
-    names = Tuple(Symbol(name) for name in callees)
-    pairs = Tuple((String(pair[1]), Symbol(pair[2])) for pair in allowed)
-    prefixes = Tuple(String(prefix) for prefix in exempt_dirs)
+    names = ntuple(position -> Symbol(callees[position]), length(callees))
+    pairs = ntuple(length(allowed)) do position
+        pair = allowed[position]
+        (String(pair[1]), Symbol(pair[2]))
+    end
+    prefixes = ntuple(position -> String(exempt_dirs[position]), length(exempt_dirs))
     CallerAllowlist(names, pairs, prefixes)
 end
 
