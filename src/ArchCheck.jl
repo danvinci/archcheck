@@ -66,8 +66,8 @@ export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranche
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerAllowlist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
 export UnreachedMethods, UnreadWaits
-export UntypedValues, GeneratorTuples, GeneratorReturns, NamedTupleCrossings, OpenAssertions, OwnTypeMethods
-export ImportAllowlist, TakerAllowlist, HolderAllowlist
+export UntypedValues, GeneratorTuples, GeneratorReturns, NamedTupleCrossings, OpenAssertions
+export OwnTypeMethods, ImportAllowlist, TakerAllowlist, HolderAllowlist
 export Derived, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation
