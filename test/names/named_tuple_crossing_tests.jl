@@ -76,10 +76,20 @@ include("other.jl")
     @test (:named_tuple_crossing => :advisory) in ArchCheck.kinds(NamedTupleCrossings())
 end
 
-@testset "a producer the package publishes as a named tuple on purpose is no finding" begin
+@testset "a producer the package publishes as a named tuple on purpose is no finding, and an allowance naming none is stale" begin
     ctx = case_context(RECORDS)
-    allowed = ((joinpath("src", "make.jl"), :make_published),)
+    make_path = joinpath("src", "make.jl")
+    gone_path = joinpath("src", "gone.jl")
+    allowed = ((make_path, :make_published), (make_path, :make_tuple), (gone_path, :vanished))
     found = ArchCheck.run(NamedTupleCrossings(; allowed), ctx)
-    symbols = sort!([finding.symbol for finding in found])
-    @test symbols == ["make_branch", "make_held", "make_looped", "make_pair"]
+    rows = sort!([(finding.kind, finding.file, finding.symbol) for finding in found])
+    @test rows == [(:named_tuple_crossing, make_path, "make_branch"),
+                   (:named_tuple_crossing, make_path, "make_held"),
+                   (:named_tuple_crossing, make_path, "make_looped"),
+                   (:named_tuple_crossing, make_path, "make_pair"),
+                   (:stale_allowance, gone_path, "vanished"),
+                   (:stale_allowance, make_path, "make_tuple")]
+    stale = only(finding for finding in found if finding.symbol == "vanished")
+    @test stale.mod === :Records
+    @test (:stale_allowance => :error) in ArchCheck.kinds(NamedTupleCrossings())
 end

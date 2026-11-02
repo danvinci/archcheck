@@ -1,7 +1,7 @@
 # Named tuple crossings: a function hands back a named tuple literal, and another file keeps the result as a record
 # whose fields no type declares
 
-"""Configured through `gate(...; checks)`. A top-level function hands back a named tuple literal, as a `return` value or as its body's last expression, and another file keeps the result: a file of another module that reads the function, or a file of its own module with a call that does not destructure the result by name where it lands (`(; a, b) = f(x)` or `for (; a, b) in f(x)`). `allowed` lists the (repo-relative path, function name) pairs the package hands back as named tuples on purpose"""
+"""Configured through `gate(...; checks)`. A top-level function hands back a named tuple literal, as a `return` value or as its body's last expression, and another file keeps the result: a file of another module that reads the function, or a file of its own module with a call that does not destructure the result by name where it lands (`(; a, b) = f(x)` or `for (; a, b) in f(x)`). `allowed` lists the (repo-relative path, function name) pairs the package hands back as named tuples on purpose; a pair naming no such function is a stale allowance, an error as `CallerAllowlist`'s is"""
 struct NamedTupleCrossings{A<:NTuple{N,Tuple{String,Symbol}} where N} <: Check
     allowed::A   # (repo-relative path, function name) pairs that hand back named tuples on purpose
 end
@@ -11,15 +11,16 @@ function NamedTupleCrossings(; allowed = ())
     NamedTupleCrossings(pairs)
 end
 
-kinds(::NamedTupleCrossings) = (:named_tuple_crossing => :advisory,)
+# `CallerAllowlist` declares `stale_allowance` an error too, so either check running leaves it one severity
+kinds(::NamedTupleCrossings) = (:named_tuple_crossing => :advisory, :stale_allowance => :error)
 
 # One compiled run for every length of `allowed`
 function run(@nospecialize(check::NamedTupleCrossings), ctx)
-    allowed = Set{Tuple{String,Symbol}}(check.allowed)
+    allowed = collect(Tuple{String,Symbol}, check.allowed)
     check_named_tuple_crossings(ctx.index, ctx.root, allowed)
 end
 
-# One top-level function that hands back a named tuple literal, at its first such method
+# One method of a top-level function that hands back a named tuple literal
 struct NamedTupleProducer
     owner::Symbol    # key of the module the function's file belongs to
     name::Symbol     # the function's name
@@ -115,17 +116,13 @@ function field_names(literal)
     fields
 end
 
-# Each top-level function with a method handing back a named tuple literal, at its first such method in file order
-function named_tuple_producers(index::SourceIndex, allowed)
+# Each method of a top-level function that hands back a named tuple literal, in file order
+function named_tuple_producers(index::SourceIndex)
     producers = NamedTupleProducer[]
-    seen = Set{Tuple{Symbol,Symbol}}()
     for file in index.files
         sites = sort!(collect(keys(file.scan.forms)); by = site -> site.line)
         for site in sites
             site.name in file.scan.funcs || continue
-            (file.path, site.name) in allowed && continue
-            key = (file.mod, site.name)
-            key in seen && continue
             form = file.scan.forms[site]
             isnothing(enclosing_form(form)) || continue
             body = method_body(form)
@@ -133,7 +130,6 @@ function named_tuple_producers(index::SourceIndex, allowed)
             handed = handed_back(body)
             literal = findfirst(is_named_tuple, handed)
             isnothing(literal) && continue
-            push!(seen, key)
             fields = field_names(handed[literal])
             joined = join(fields, ",")
             producer = NamedTupleProducer(file.mod, site.name, file.path, site.line, joined)
@@ -242,11 +238,33 @@ function qualified_reads(index::SourceIndex)
     reads
 end
 
-function check_named_tuple_crossings(index::SourceIndex, root::Module, allowed)
-    producers = named_tuple_producers(index, allowed)
-    qualified = qualified_reads(index)
+# An allowed pair at which no method hands back a named tuple literal; a file the index lacks is cited under the
+# package's own module
+function stale_crossing_allowance(index::SourceIndex, root::Module, pair)
+    path, name = pair
+    held = findfirst(file -> file.path == path, index.files)
+    mod = isnothing(held) ? nameof(root) : index.files[held].mod
+    symbol = string(name)
+    detail = symbol * " is allowed to hand back a named tuple and hands back none"
+    Finding(mod, :stale_allowance, path, symbol, 0, detail)
+end
+
+function check_named_tuple_crossings(index::SourceIndex, root::Module, allowed::Vector{Tuple{String,Symbol}})
+    producers = named_tuple_producers(index)
+    handing = Set((producer.path, producer.name) for producer in producers)
     findings = Finding[]
+    for pair in allowed
+        pair in handing && continue
+        stale = stale_crossing_allowance(index, root, pair)
+        push!(findings, stale)
+    end
+    qualified = qualified_reads(index)
+    seen = Set{Tuple{Symbol,Symbol}}()
     for producer in producers
+        key =(producer.owner, producer.name)
+        key in seen && continue
+        push!(seen, key)
+        (producer.path, producer.name) in allowed && continue
         kept = keeping_files(index, root, producer, qualified)
         isempty(kept) && continue
         evidence = [:fields => producer.fields, :called_in => join(kept, ",")]
