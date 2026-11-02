@@ -81,32 +81,34 @@ function read_typed!(item, ctx)
     recorded = ctx.recorded
     for (method, codes) in ctx.methods.typed
         for code in codes
+            # The code's `parent` is the instance inference typed it at
+            sptypes = static_parameter_types(code.parent)
             for stmt in code.code
-                scan_expr!(item, code, stmt, seen, method, recorded)
+                scan_expr!(item, code, sptypes, stmt, seen, method, recorded)
             end
         end
     end
 end
 
-function scan_expr!(item, code, expr::Expr, seen, method, recorded)
+function scan_expr!(item, code, sptypes, expr::Expr, seen, method, recorded)
     args = expr.args
-    expr.head === :call && read_args!(item, code, args, seen, method, recorded)
+    expr.head === :call && read_args!(item, code, sptypes, args, seen, method, recorded)
     for arg in args
-        scan_expr!(item, code, arg, seen, method, recorded)
+        scan_expr!(item, code, sptypes, arg, seen, method, recorded)
     end
 end
 
-scan_expr!(_item, _code, @nospecialize(_expr), _seen, _method, _recorded) = nothing
+scan_expr!(_item, _code, _sptypes, @nospecialize(_expr), _seen, _method, _recorded) = nothing
 
-# `kwcall` names its callee in argument 3.
-function read_args!(item, code, args, seen, method, recorded)
+# `kwcall` names its callee in argument 3. An argument inference folded to a constant carries its value's type
+function read_args!(item, code, sptypes, args, seen, method, recorded)
     isempty(args) && return
     head = resolve_callee(code, args[1])
     callee_at = head === Core.kwcall ? 3 : 1
     length(args) < callee_at && return
     carried = false
     for index in 2:length(args)
-        kind = value_type_of(code, args[index])
+        kind = widened_argument_type(code, sptypes, args[index])
         carried = carried || carries_type(kind, item.wrapper)
     end
     carried || return
@@ -159,11 +161,6 @@ end
 
 listed_type(types::Vector, index) = index in eachindex(types) ? types[index] : Any
 listed_type(@nospecialize(_types), _index) = Any
-slot_type(code, index) = isdefined(code, :slottypes) ? listed_type(code.slottypes, index) : Any
-value_type_of(code, value::Core.SSAValue) = listed_type(code.ssavaluetypes, value.id)
-value_type_of(code, value::Core.SlotNumber) = slot_type(code, value.id)
-value_type_of(_code, value::QuoteNode) = typeof(value.value)
-value_type_of(_code, @nospecialize(value)) = typeof(value)
 
 function resolve_callee(code, head::Core.SSAValue)
     kind = listed_type(code.ssavaluetypes, head.id)

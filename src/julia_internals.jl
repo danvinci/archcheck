@@ -126,6 +126,10 @@ function can_read_argument(@nospecialize(arg))
     head === :copyast
 end
 
+"""The types inference holds for an instance's static parameters, as `argextype` reads them:
+`Core.Compiler.sptypes_from_meth_instance` derives them from the instance (Compiler/src/inferencestate.jl)"""
+static_parameter_types(instance::Core.MethodInstance) = Core.Compiler.sptypes_from_meth_instance(instance)
+
 """The widened type of an argument `Core.Compiler.argextype` reads, with `widenconst` dropping a constant
 (Compiler/src/optimize.jl). Nothing for an expression that function rejects, such as a nested call."""
 function widened_argument_type(code, sptypes, @nospecialize(arg))

@@ -74,7 +74,7 @@ end
 
 # A call left to dispatch on a callee no builtin; one inlining copied in is the inlined frame's to count
 function count_dispatches(code::Core.CodeInfo, instance::Core.MethodInstance)
-    sptypes = Core.Compiler.sptypes_from_meth_instance(instance)
+    sptypes = static_parameter_types(instance)
     count(eachindex(code.code)) do position
         statement = code.code[position]
         statement isa Expr && statement.head === :call || return false

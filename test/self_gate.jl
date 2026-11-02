@@ -156,7 +156,7 @@ function internal_sites()
                :InferenceParams, :infer_return_type, :return_types, :generating_output, :specializations,
                :method_instance, :hasgenerator, :isvarargtype, :get_world_counter,
                :ForwardToBackedgeIterator, :argextype, :widenconst, :pkgorigins, :parse_cache_header, :_crc32c,
-               :get_compileable_sig, :ignorelimited)
+               :get_compileable_sig, :ignorelimited, :sptypes_from_meth_instance)
     boundary = ("src/julia_internals.jl",)
     CallerAllowlist(callees, (), boundary)
 end

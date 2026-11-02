@@ -628,7 +628,7 @@ end
 # at the types the call holds, so a method reached only through such a call keeps its own calls in the graph.
 function record_dispatched!(edges, pending, code, instance, caller, landings::CallLandings)
     module_set = landings.module_set
-    sptypes = Core.Compiler.sptypes_from_meth_instance(instance)
+    sptypes = static_parameter_types(instance)
     for (position, stmt) in pairs(code.code)
         stmt isa Expr || continue
         stmt.head === :call || continue
