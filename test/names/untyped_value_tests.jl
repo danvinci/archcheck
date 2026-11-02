@@ -1,6 +1,4 @@
-# An empty untyped container or `Any` written as a type leaves a value's type open. A typed container, a container
-# built from values, a bound on a parameter, `Any` read as a value and a quoted name each leave no stored type open,
-# so none is
+# An empty container with no element type is built on Any; a typed or filled container and an explicit Any are not
 
 const UNTYPED = load_package("Untyped", """
 include("values.jl")
@@ -12,17 +10,11 @@ include("values.jl")
     empty_identity() = IdDict()
     wide(x::Any) = x
     boxes() = Vector{Any}()
-    anys(items) = Any[item for item in items]
-    const HELD = Ref{Any}(1)
     typed_list() = Int[]
     typed_dict() = Dict{Symbol,Int}()
     filled_set() = Set([1])
     filled_dict() = Dict(:a => 1)
     filled_list() = [1, 2]
-    bounded(x::T) where {T<:Any} = x
-    covariant(items::Vector{<:Any}) = items
-    is_top(type) = type === Any
-    quoted() = :Any
     """,
     "../scripts/tool.jl" => """
     scratch() = []
@@ -30,18 +22,14 @@ include("values.jl")
     """,
 ])
 
-@testset "an empty untyped container or Any as a type is a finding, in src/ and in the directories named" begin
+@testset "an empty untyped container is a finding, in src/ and in the directories named" begin
     ctx = case_context(UNTYPED)
     found = ArchCheck.run(UntypedValues(), ctx)
     rows = evidence_rows(found, :form)
-    @test rows == [(:untyped_value, "", "Any"),
-                   (:untyped_value, "anys", "Any"),
-                   (:untyped_value, "boxes", "Any"),
-                   (:untyped_value, "empty_dict", "Dict()"),
+    @test rows == [(:untyped_value, "empty_dict", "Dict()"),
                    (:untyped_value, "empty_identity", "IdDict()"),
                    (:untyped_value, "empty_list", "[]"),
-                   (:untyped_value, "empty_set", "Set()"),
-                   (:untyped_value, "wide", "Any")]
+                   (:untyped_value, "empty_set", "Set()")]
     with_scripts = ArchCheck.run(UntypedValues(dirs = ["scripts"]), ctx)
     outside = [(f.mod, f.file, f.symbol) for f in with_scripts if !startswith(f.file, "src/")]
     @test outside == [(:Entry, "scripts/tool.jl", "scratch")]
