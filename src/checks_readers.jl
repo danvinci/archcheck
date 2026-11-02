@@ -138,6 +138,9 @@ function skipped_callee(@nospecialize(value::Type))
     !isnothing(body) && body.name.name === :NamedTuple
 end
 
+# A callable object is a callee like a function
+skipped_callee(@nospecialize(_value)) = false
+
 carries_type(@nospecialize(type), wrapper) = type === wrapper
 carries_type(type::Union, wrapper) = carries_type(type.a, wrapper) || carries_type(type.b, wrapper)
 
