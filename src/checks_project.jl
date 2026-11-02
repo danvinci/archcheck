@@ -81,17 +81,22 @@ function unlisted_finding(file, symbol, line, referenced)
     Finding(file.mod, :unlisted_caller, file.path, symbol, line, detail, evidence)
 end
 
-# An allowed pair whose definition references none of the names: its file is gone or skipped, or the definition no
-# longer reads them. A file the index lacks is cited under the package's own module.
-function stale_finding(index, root, pair, callees)
+# An allowed (path, definition) pair the code does not use: its file is missing or skipped, or the definition does
+# none of what the pair allows. A file the index lacks is cited under the package's own module
+function stale_finding(index, root, pair, detail, evidence)
     path, def = pair
     held = findfirst(file -> file.path == path, index.files)
     mod = isnothing(held) ? nameof(root) : index.files[held].mod
-    names = sort!([string(name) for name in callees])
     symbol = string(def)
+    Finding(mod, :stale_allowance, path, symbol, 0, detail, evidence)
+end
+
+function stale_caller_finding(index, root, pair, callees)
+    names = sort!([string(name) for name in callees])
+    symbol = string(pair[2])
     detail = symbol * " is allowed to reference " * join(names, ", ") * " and references none"
     evidence = [:callees => join(names, " ")]
-    Finding(mod, :stale_allowance, path, symbol, 0, detail, evidence)
+    stale_finding(index, root, pair, detail, evidence)
 end
 
 function run(check::CallerAllowlist, ctx)
@@ -122,7 +127,7 @@ function run(check::CallerAllowlist, ctx)
     end
     for pair in check.allowed
         pair in referencing && continue
-        push!(findings, stale_finding(ctx.index, ctx.root, pair, check.callees))
+        push!(findings, stale_caller_finding(ctx.index, ctx.root, pair, check.callees))
     end
     findings
 end

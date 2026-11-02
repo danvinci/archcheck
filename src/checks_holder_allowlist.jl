@@ -1,6 +1,6 @@
 # Holder allowlist: the struct types whose fields may hold a listed type
 
-"""Configured through `gate(...; checks)` with pairs of a type and the struct types allowed to hold it. A field of a concrete struct the package defines is a finding when its stored type holds the type and the struct is not listed. A stored type holds it when it is the type, a subtype or an instance of it, a type variable bounded by one, a union with such a member, a Vararg of one, or a datatype with such a parameter at any depth, so `Vector{T}` and `Dict{Symbol,Vector{T}}` hold `T`. A listed holder stands for every instance of its struct, and a struct is judged once, under its own name"""
+"""Configured through `gate(...; checks)` with pairs of a type and the struct types allowed to hold it. A field of a concrete struct the package defines is a finding when its stored type holds the type and the struct is not listed. A stored type holds it when it is the type, a subtype or an instance of it, a type variable bounded by one, a union with such a member, a Vararg of one, or a datatype with such a parameter at any depth, so `Vector{T}` and `Dict{Symbol,Vector{T}}` hold `T`. A listed holder stands for every instance of its struct, and a struct is judged once, under its own name. A listed holder with no field holding the type is a stale allowance"""
 struct HolderAllowlist <: Check
     allowed::Vector{Pair{Type,Vector{Core.TypeName}}}   # each held type -> the structs whose fields may hold it
     function HolderAllowlist(pairs::Pair...)
@@ -21,7 +21,7 @@ function holder_name(@nospecialize(holder))
     body.name
 end
 
-kinds(::HolderAllowlist) = (:unlisted_holder => :advisory,)
+kinds(::HolderAllowlist) = (:unlisted_holder => :advisory, :stale_allowance => :error)
 
 holds_type(@nospecialize(stored::TypeVar), @nospecialize(held)) = holds_type(stored.ub, held)
 
@@ -61,21 +61,40 @@ function unlisted_holder_finding(owner::Symbol, name::Symbol, field::Symbol, @no
     Finding(owner, :unlisted_holder, file, symbol, line, detail, evidence)
 end
 
+# An allowed holder cited at its struct's definition; a struct outside the package has no site there
+function stale_holder_finding(holder::Core.TypeName, @nospecialize(held), sites)
+    owner = module_key(holder.module)
+    file, line = site_of(sites, owner, holder.name, ("", 0))
+    symbol = string(holder.name)
+    held_text = type_text(held)
+    evidence = [:holds => held_text]
+    detail = "$symbol is allowed to hold $held_text and no field of it does"
+    Finding(owner, :stale_allowance, file, symbol, line, detail, evidence)
+end
+
 function check_holders(mods, @nospecialize(held), allowed::Vector{Core.TypeName}, sites)
+    holding = Set{Core.TypeName}()
     findings = Finding[]
     for mod in mods
         owner = module_key(mod)
         for (name, body) in own_structs(mod)
-            body.name in allowed && continue
+            is_allowed = body.name in allowed
             # By position: a zip over `fieldnames` and `fieldtypes` compiles once per struct shape
             for position in 1:fieldcount(body)
                 stored = fieldtype(body, position)
                 holds_type(stored, held) || continue
+                push!(holding, body.name)
+                is_allowed && continue
                 field = fieldname(body, position)
                 finding = unlisted_holder_finding(owner, name, field, stored, held, sites)
                 push!(findings, finding)
             end
         end
+    end
+    for holder in allowed
+        holder in holding && continue
+        stale = stale_holder_finding(holder, held, sites)
+        push!(findings, stale)
     end
     findings
 end

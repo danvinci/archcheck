@@ -1,6 +1,6 @@
 # Taker allowlist: the definitions that may take a value of a closed type
 
-"""Configured through `gate(...; checks)` with pairs of a type and the definitions allowed to take it, each a (repo-relative path, definition name) pair as `CallerAllowlist` names them. A method the package defines with an argument that can hold a value of the type is a finding when its definition is not listed, cited at its first such method. An argument holds the type when its declared type is the type, a subtype or an instance of it, a type variable bounded by one, a union with such a member, or a Vararg of one; a container of the type, a `Type{T}` and an untyped argument hold none. Constructors count as definitions named by their type, and a method on another module's function, `Base.show` included, by its own name. Keyword sorters, keyword bodies and closures stay unjudged, as their written method carries the same arguments"""
+"""Configured through `gate(...; checks)` with pairs of a type and the definitions allowed to take it, each a (repo-relative path, definition name) pair as `CallerAllowlist` names them. A method the package defines with an argument that can hold a value of the type is a finding when its definition is not listed, cited at its first such method. An argument holds the type when its declared type is the type, a subtype or an instance of it, a type variable bounded by one, a union with such a member, or a Vararg of one; a container of the type, a `Type{T}` and an untyped argument hold none. Constructors count as definitions named by their type, and a method on another module's function, `Base.show` included, by its own name. Keyword sorters, keyword bodies and closures stay unjudged, as their written method carries the same arguments. An allowed definition that takes no argument of its type is a stale allowance"""
 struct TakerAllowlist <: Check
     allowed::Vector{Pair{Type,Vector{Tuple{String,Symbol}}}}   # each closed type -> (repo-relative path, def name) pairs that may take it
     function TakerAllowlist(pairs::Pair...)
@@ -15,7 +15,7 @@ struct TakerAllowlist <: Check
     end
 end
 
-kinds(::TakerAllowlist) = (:unlisted_taker => :advisory,)
+kinds(::TakerAllowlist) = (:unlisted_taker => :advisory, :stale_allowance => :error)
 
 takes_type(@nospecialize(argument::TypeVar), @nospecialize(closed)) = takes_type(argument.ub, closed)
 
@@ -55,22 +55,31 @@ function unlisted_taker_finding(method::Method, @nospecialize(closed), recorded:
     Finding(owner, :unlisted_taker, file, name, line, detail, evidence)
 end
 
-# The first method of each unlisted definition that takes the closed type, in source order
-function check_takers(defined, @nospecialize(closed), allowed::Vector{Tuple{String,Symbol}}, recorded::RecordedPaths)
+# The first method of each unlisted definition that takes the closed type, in source order, then each allowed
+# definition that takes none
+function check_takers(ctx, @nospecialize(closed), allowed::Vector{Tuple{String,Symbol}})
     listed = Set(allowed)
-    cited = Set{Tuple{String,Symbol}}()
+    taking = Set{Tuple{String,Symbol}}()
     findings = Finding[]
-    for method in defined
+    for method in ctx.defined
         is_written_method(method) || continue
         _, arguments = split_signature(method.sig)
         takes_any(arguments, closed) || continue
-        path, _ = method_site(method, recorded)
+        path, _ = method_site(method, ctx.recorded)
         definition = (path, method.name)
+        definition in taking && continue
+        push!(taking, definition)
         definition in listed && continue
-        definition in cited && continue
-        push!(cited, definition)
-        finding = unlisted_taker_finding(method, closed, recorded)
+        finding = unlisted_taker_finding(method, closed, ctx.recorded)
         push!(findings, finding)
+    end
+    taken = type_text(closed)
+    evidence = [:takes => taken]
+    for pair in allowed
+        pair in taking && continue
+        detail = string(pair[2], " is allowed to take ", taken, " and takes none")
+        stale = stale_finding(ctx.index, ctx.root, pair, detail, evidence)
+        push!(findings, stale)
     end
     findings
 end
@@ -78,7 +87,7 @@ end
 function run(check::TakerAllowlist, ctx)
     findings = Finding[]
     for (closed, allowed) in check.allowed
-        found = check_takers(ctx.defined, closed, allowed, ctx.recorded)
+        found = check_takers(ctx, closed, allowed)
         append!(findings, found)
     end
     findings

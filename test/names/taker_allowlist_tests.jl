@@ -61,5 +61,9 @@ include("read.jl")
     area = only(finding for finding in found if finding.symbol == "area")
     @test area.line == 10
     @test (:unlisted_taker => :advisory) in ArchCheck.kinds(check)
+    unused = TakerAllowlist(package.Spec => (allowed, ("src/read.jl", :untyped)))
+    stale = only(finding for finding in ArchCheck.run(unused, ctx) if finding.kind === :stale_allowance)
+    @test (stale.file, stale.symbol, ev(stale, :takes)) == ("src/read.jl", "untyped", "Takers.Spec")
+    @test (:stale_allowance => :error) in ArchCheck.kinds(unused)
     @test_throws ArgumentError TakerAllowlist()
 end
