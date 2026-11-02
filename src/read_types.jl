@@ -408,6 +408,16 @@ function path_root(node)
     current
 end
 
+# The constant a name or dotted path binds in `mod`, as the code reads it there; nothing when its first name is a
+# local the scan opened, or when a binding along it is not constant
+function global_value(scan::FileScan, mod::Module, node)
+    path = dotted_names(node)
+    isnothing(path) && return nothing
+    root = path_root(node)
+    isnothing(local_binding(scan, root)) || return nothing
+    constant_value(mod, path)
+end
+
 # A call through a global function no local binding shadows, typed by inference.
 function call_type(state, scope, node)
     children = child_nodes(node)
@@ -423,11 +433,7 @@ function call_type(state, scope, node)
         front = last_index - 1
         operands = children[1:front]
     end
-    path = dotted_names(head)
-    isnothing(path) && return nothing
-    root = path_root(head)
-    is_local(state, root) && return nothing
-    fn = constant_value(state.mod, path)
+    fn = global_value(state.scan, state.mod, head)
     isnothing(fn) && return nothing
     inferred_result(state, scope, fn, operands)
 end

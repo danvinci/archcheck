@@ -120,12 +120,12 @@ function call_usage(scan)
 end
 
 # Whether the scan proves a call's value unread: every call written alike on its line drops its value.
-function is_dropped_call(walk::JoinWalk, node, naming)
+function is_dropped_call(usage::Dict{CallKey,Vector{Bool}}, node, naming)
     arguments = arguments_text(node)
     keywords = keywords_text(node)
     line = source_line(node)
     key = (line, naming.callee, naming.qualifier, arguments, keywords)
-    flags = get(walk.usage, key, nothing)
+    flags = get(usage, key, nothing)
     isnothing(flags) && return false
     !any(flags)
 end
@@ -146,7 +146,7 @@ function drops_passed(walk::JoinWalk, call)
     naming = called_name(call)
     isnothing(naming) && return false
     naming.callee === :foreach && return true
-    is_dropped_call(walk, call, naming)
+    is_dropped_call(walk.usage, call, naming)
 end
 
 function emit_node!(findings, file, site, form, node)

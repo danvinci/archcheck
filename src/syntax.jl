@@ -148,10 +148,10 @@ end
 # One file's parse on a task of its own, through a cache of its own, which the shared cache takes in after.
 fresh_parse(path::String, repo::String) = parsed_tree(Parses(repo), path)
 
-# A task's value; a task that threw throws its own exception here, as the same call on the caller's task would.
-function task_result(task::Task)
+# A task's value of type T; a task that threw throws its own exception here, as the same call on the caller's task would
+function task_result(task::Task, ::Type{T}) where {T}
     try
-        fetch(task)
+        fetch(task)::T
     catch failure
         failure isa TaskFailedException || rethrow()
         throw(failure.task.exception)
@@ -173,7 +173,7 @@ function ordered_results(f::F, ::Type{T}, items::AbstractVector, shared) where {
         tasks[position] = Threads.@spawn f(items[$position], shared)
     end
     for (position, task) in enumerate(tasks)
-        results[position] = task_result(task)::T
+        results[position] = task_result(task, T)
     end
     results
 end

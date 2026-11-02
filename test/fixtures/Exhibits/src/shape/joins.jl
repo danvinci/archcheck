@@ -9,3 +9,9 @@ function drops()
     fetch(task)
     0
 end
+
+# untyped_task_result: a join whose result the method reads with no element type
+function joined()
+    task = Threads.@spawn produced()
+    fetch(task)
+end

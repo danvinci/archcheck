@@ -48,6 +48,7 @@ include("checks_reach.jl")
 include("checks_opt.jl")
 include("checks_derived.jl")
 include("checks_waits.jl")
+include("checks_untyped_task_results.jl")
 include("checks_readers.jl")
 include("checks_own_types.jl")
 include("checks_import_allowlist.jl")
@@ -65,7 +66,7 @@ export ReachesInternal, DeclaredModules, DeclaredExtensions, ImportedNames
 export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranches, StorageOverloads, ExpressionClones
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerAllowlist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
-export UnreachedMethods, UnreadWaits
+export UnreachedMethods, UnreadWaits, UntypedTaskResults
 export UntypedValues, GeneratorTuples, GeneratorReturns, NamedTupleCrossings, OpenAssertions
 export OwnTypeMethods, ImportAllowlist, TakerAllowlist, HolderAllowlist
 export Derived, PriorRun
