@@ -117,7 +117,9 @@ function reach_finding(modules::ReachModules, unit::ReachUnit, home, through::Mo
     symbol = "$reached.$name"
     detail = "reads a name through a module that neither exports it nor declares it public"
     evidence = [:via => string(via), :owner => owner]
-    Finding(unit.from, :reaches_internal, unit.path, symbol, line, detail, evidence)
+    is_own = labelled in modules.tracked
+    kind = is_own ? :reaches_own_internal : :reaches_internal
+    Finding(unit.from, kind, unit.path, symbol, line, detail, evidence)
 end
 
 # Each name one clause reads, with the module it reads it through: its path's names after the opening, and each

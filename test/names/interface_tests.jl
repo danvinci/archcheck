@@ -272,7 +272,7 @@ end
     @test reached_from(script) == [("InternalNames.hidden", 1), ("InternalNames.hidden", 3), ("InternalNames.other", 2)]
 end
 
-@testset "a source reference reaches only what the module it is written through declares" begin
+@testset "a source reference reaches only what the module it is written through declares, its own module's kind" begin
     ctx = Context(Nested)
     found = ArchCheck.run(ReachesInternal(), ctx)
     reached = Tuple{String,String,String,String}[]
@@ -295,6 +295,10 @@ end
         ("Hi", "Geo.gauge", "qualified", "Low"),
         ("Hi", "Nested.root_measure", "import", "Nested"),
     ])
+    @test all(finding -> finding.kind === :reaches_own_internal, found)
+    declared = ArchCheck.kinds(ReachesInternal())
+    @test (:reaches_own_internal => :advisory) in declared
+    @test (:reaches_internal => :advisory) in declared
 end
 
 @testset "a module extends only another module's documented public verb" begin
@@ -377,8 +381,8 @@ end
     ctx = case_context(PACKAGE_PATH)
     foreign_path = joinpath("src", "bb", "foreign.jl")
     found = ArchCheck.run(ReachesInternal(), ctx)
-    rows = Set((finding.symbol, ev(finding, :via), ev(finding, :owner), finding.line)
-               for finding in found if finding.file == foreign_path)
+    foreign = [finding for finding in found if finding.file == foreign_path]
+    rows = Set((finding.symbol, ev(finding, :via), ev(finding, :owner), finding.line) for finding in foreign)
     @test rows == Set([
         ("Base.unwrap_unionall", "using", "Base", 1),
         ("Base.isType", "import", "Base", 2),
@@ -390,6 +394,7 @@ end
         ("Base.Compiler.widenconst", "qualified", "Base.Compiler", 8),
         ("Base.@_inline_meta", "qualified", "Base", 9),
     ])
+    @test all(finding -> finding.kind === :reaches_internal, foreign)
     allowed = ArchCheck.run(ReachesInternal(allowed = (Base, Random)), ctx)
     kept = Set(finding.symbol for finding in allowed if finding.file == foreign_path)
     @test kept == Set(["Base.Docs.meta", "Core.Compiler", "Base.Compiler.widenconst"])

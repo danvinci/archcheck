@@ -19,7 +19,7 @@ function helper()
     Low._secret()
 end
 
-# reaches_internal: Shape imports this name, which Low neither exports nor declares public
+# reaches_own_internal: Shape imports this name, which Low neither exports nor declares public
 function _secret()
     1
 end

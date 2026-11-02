@@ -163,7 +163,7 @@ DeadCode(; public_is_entry::Bool = true) = DeadCode(public_is_entry)
 struct BlanketExports <: Check end
 """Runs in `CHECKS`. An exported name is undefined; a name a module only declares `public` is no export."""
 struct StaleExports <: Check end
-"""Runs in `CHECKS`. Code reads a name through a module that neither exports it nor declares it public, one of the package's modules or any other: a step of a qualified path, a qualified method or macro name, or a name a `using` or `import` clause binds, in source files and entry scripts alike. `allowed` names the outside modules whose internals the package reads on purpose."""
+"""Runs in `CHECKS`. Code reads a name through a module that neither exports it nor declares it public, one of the package's modules or any other: a step of a qualified path, a qualified method or macro name, or a name a `using` or `import` clause binds, in source files and entry scripts alike. A name one of the package's own modules owns, an extension's included, is a `reaches_own_internal`; any other owner's is a `reaches_internal`. `allowed` names the outside modules whose internals the package reads on purpose"""
 struct ReachesInternal{N} <: Check
     allowed::NTuple{N,Module}   # outside modules whose internal names the package reads on purpose
 end
@@ -242,7 +242,7 @@ function run(@nospecialize(check::ReachesInternal), ctx)
     allowed = collect(Module, check.allowed)
     check_reaches_internal(ctx.index, ctx.mods, ctx.root; allowed)
 end
-kinds(::ReachesInternal) = (:reaches_internal => :advisory,)
+kinds(::ReachesInternal) = (:reaches_internal => :advisory, :reaches_own_internal => :advisory)
 
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; recorded = ctx.recorded)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)

@@ -333,6 +333,7 @@ end
     expected = Set([(:HostedRandomExt, "Hosted._inner"), (:HostedTestExt, "Hosted._inner"),
                     (:HostedAbsentExt, "Hosted._inner"), (:HostedAbsentExt, "Hosted._absent_only")])
     @test imports == expected
+    @test all(finding -> finding.kind === :reaches_own_internal, found)
     @test isempty(ArchCheck.run(ModulePiracy(), ctx))
 end
 
