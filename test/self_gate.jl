@@ -15,6 +15,7 @@ const NOT_APPLICABLE = (
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
     (OwnTypeMethods, "the package is one module, whose functions take Base and Core types by design"),
     (ImportAllowlist, "the package is one module, so it reaches no other package module"),
+    (TakerAllowlist, "no type of the package is closed to a list of definitions"),
 )
 
 function exhibit_workload()
@@ -86,6 +87,8 @@ function exhibit_checks()
     push!(active, OpenAssertions())
     push!(active, OwnTypeMethods(Exhibits.Contracts))
     push!(active, ImportAllowlist(Exhibits.Contracts => ()))
+    takers = (("src/contracts/Contracts.jl", :scaled), ("src/contracts/Contracts.jl", :run_logic))
+    push!(active, TakerAllowlist(Exhibits.Contracts.Seam => takers))
     Tuple(active)
 end
 

@@ -51,6 +51,7 @@ include("checks_waits.jl")
 include("checks_readers.jl")
 include("checks_own_types.jl")
 include("checks_import_allowlist.jl")
+include("checks_taker_allowlist.jl")
 include("catalog.jl")
 include("gate.jl")
 
@@ -65,7 +66,7 @@ export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerAllowlist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
 export UnreachedMethods, UnreadWaits
 export UntypedValues, GeneratorTuples, GeneratorReturns, NamedTupleCrossings, OpenAssertions, OwnTypeMethods
-export ImportAllowlist
+export ImportAllowlist, TakerAllowlist
 export Derived, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation

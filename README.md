@@ -52,6 +52,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `GeneratorTuples` | a `Tuple(x)` call where `x` is a generator or comprehension, so inference cannot know the tuple's length (`ntuple(f, n)` builds it at a known length) |
 | `GeneratorReturns` | a top-level function whose returned value, its body's tail or a `return`, is a generator, which a caller iterating it nests in its own, reported once at the definition |
 | `ImportAllowlist` | a reference from a listed module's code, nested modules included, to a package module outside its own tree and the trees of the modules listed for it |
+| `TakerAllowlist` | a method whose argument can hold a value of a listed type, a subtype or an instance of it, in a definition outside the type's allowed list |
 | `OwnTypeMethods` | a method a listed module defines on its own function that takes no argument, or an argument type the module does not define |
 
 ## Declared values
