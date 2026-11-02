@@ -14,6 +14,7 @@ const NOT_APPLICABLE = (
     (Independent, "the package is one module, so no pair of modules is independent"),
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
     (OwnTypeMethods, "the package is one module, whose functions take Base and Core types by design"),
+    (ImportAllowlist, "the package is one module, so it reaches no other package module"),
 )
 
 function exhibit_workload()
@@ -84,6 +85,7 @@ function exhibit_checks()
     push!(active, NamedTupleCrossings())
     push!(active, OpenAssertions())
     push!(active, OwnTypeMethods(Exhibits.Contracts))
+    push!(active, ImportAllowlist(Exhibits.Contracts => ()))
     Tuple(active)
 end
 

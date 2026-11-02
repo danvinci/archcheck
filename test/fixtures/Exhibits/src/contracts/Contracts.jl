@@ -9,6 +9,7 @@ struct Seam
 end
 
 # undeclared_module: the wrapper has no using or import for this module
+# unlisted_import: the import allowlist lets this module reach no other
 function borrow_low(seam::Seam)
     Low.helper()
     seam.n
