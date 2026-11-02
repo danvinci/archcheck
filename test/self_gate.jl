@@ -13,7 +13,6 @@ end
 const NOT_APPLICABLE = (
     (Independent, "the package is one module, so no pair of modules is independent"),
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
-    (StringPayloads, "the package keys its parse, line and include tables by file path, a String"),
 )
 
 function exhibit_workload()
@@ -79,7 +78,6 @@ function exhibit_checks()
     push!(active, OptAnalysis(corpus))
     push!(active, UnreachedMethods())
     push!(active, UntypedValues())
-    push!(active, StringPayloads())
     push!(active, GeneratorTuples())
     push!(active, GeneratorReturns())
     Tuple(active)
