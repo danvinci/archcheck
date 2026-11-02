@@ -24,6 +24,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("implicit_import", "src/shape/Shape.jl", "shuffle"),
     ("generator_return", "src/shape/plants.jl", "lazy_steps"),
     ("generator_tuple", "src/shape/plants.jl", "counted_steps"),
+    ("foreign_argument", "src/contracts/Contracts.jl", "scaled"),
     ("foreign_field", "src/shape/plants.jl", "Low.Block.width"),
     ("foreign_field", "src/shape/plants.jl", "Low.Brick.width"),
     ("inferred_box", "src/shape/plants.jl", "boxed_total(::Int64)"),

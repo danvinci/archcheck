@@ -14,9 +14,12 @@ function borrow_low(seam::Seam)
     seam.n
 end
 
+# foreign_argument: a function of this module taking a type it does not own
+scaled(seam::Seam, factor::Int) = seam.n * factor
+
 function run_logic(seam::Seam)
     borrow_low(seam)
-    seam.n
+    scaled(seam, 1)
 end
 
 end

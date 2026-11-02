@@ -51,6 +51,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `UntypedValues` | an empty `[]`, `Dict()`, `Set()` or `IdDict()` with no element type, in `src/` and the directories `dirs` names |
 | `GeneratorTuples` | a `Tuple(x)` call where `x` is a generator or comprehension, so inference cannot know the tuple's length (`ntuple(f, n)` builds it at a known length) |
 | `GeneratorReturns` | a top-level function whose returned value, its body's tail or a `return`, is a generator, which a caller iterating it nests in its own, reported once at the definition |
+| `OwnTypeMethods` | a method a listed module defines on its own function that takes no argument, or an argument type the module does not define |
 
 ## Declared values
 
