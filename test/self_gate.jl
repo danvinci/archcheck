@@ -13,7 +13,6 @@ end
 const NOT_APPLICABLE = (
     (Independent, "the package is one module, so no pair of modules is independent"),
     (DeclaredExtensions, "the package is one module, so no module extends another's function"),
-    (UntypedValues, "the package reads method signatures and types as values, so its reflection writes Any as a type"),
     (StringPayloads, "the package keys its parse, line and include tables by file path, a String"),
 )
 
@@ -186,6 +185,7 @@ function static_checks()
     readers = ((ArchCheck.run, Tuple{Any}), (ArchCheck.kinds, Tuple{}))
     push!(active, ReaderSet(Check, readers))
     push!(active, self_opt())
+    push!(active, UntypedValues())
     push!(active, GeneratorTuples())
     push!(active, GeneratorReturns())
     Tuple(active)
