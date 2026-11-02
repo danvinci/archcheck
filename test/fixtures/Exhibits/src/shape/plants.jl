@@ -119,6 +119,11 @@ function lazy_steps(n::Int)
     (step for step in 1:n)
 end
 
+# named_tuple_crossing: the workload's file keeps this record
+function make_record(x::Int)
+    (; count = x)
+end
+
 # reader_set: a concrete subtype with no method for the reader
 abstract type Item end
 

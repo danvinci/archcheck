@@ -33,9 +33,11 @@ function Context(index::SourceIndex, root::Module, mods; methods = nothing, deri
     callgraphs = Dict(m => build_call_graph(index, m) for m in keys(index.rank))
     sites = def_sites(index)
     modules = package_modules(root, mods)
-    defined, added, nested = read_methods(modules)
-    recorded = recorded_paths(index.repo, (defined, added, nested))
-    Context(index, root, mods, sites, callgraphs, defined, added, nested, recorded, methods, nothing, derived)
+    census = read_methods(modules)
+    lists = (census.defined, census.added, census.nested)
+    recorded = recorded_paths(index.repo, lists)
+    Context(index, root, mods, sites, callgraphs, census.defined, census.added, census.nested, recorded, methods,
+            nothing, derived)
 end
 
 """What `gate` builds for `pkg`, so `run(check, Context(pkg))` runs one check without the gate. `entries` seed the method graph."""
@@ -56,7 +58,7 @@ end
 
 # The same context once the workload has run, with the method lists `observe` read after it: methods the workload
 # defines are in that walk.
-function Context(ctx::Context; observed::Observation, census)
+function Context(ctx::Context; observed::Observation, census::MethodCensus)
     lists = (census.defined, census.added, census.nested)
     recorded = recorded_paths(ctx.index.repo, lists)
     Context(ctx.index, ctx.root, ctx.mods, ctx.sites, ctx.callgraphs, census.defined, census.added, census.nested,

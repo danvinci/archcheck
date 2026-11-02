@@ -34,8 +34,6 @@ function run(::CachedCalls, ctx)
     found
 end
 
-const LocatedForm = NamedTuple{(:file, :site, :form), Tuple{FileNode, MethodSite, JS.SyntaxNode}}
-
 const IDENTITY_CALLS = Set{Symbol}([:IdDict, :objectid])
 
 const CACHE_DETAIL = Dict{String,String}(
@@ -45,10 +43,10 @@ const CACHE_DETAIL = Dict{String,String}(
 )
 
 function index_forms(index)
-    found = LocatedForm[]
+    found = PlacedForm[]
     for file in index.files
         for (site, form) in file.scan.forms
-            placed = (file = file, site = site, form = form)
+            placed = PlacedForm(file, site, form)
             push!(found, placed)
         end
     end
@@ -56,7 +54,7 @@ function index_forms(index)
 end
 
 function function_forms(index, recorded, fn)
-    found = LocatedForm[]
+    found = PlacedForm[]
     for method in methods(fn)
         located = method_form(index, recorded, method)
         isnothing(located) && continue

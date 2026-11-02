@@ -29,6 +29,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("inferred_box", "src/shape/plants.jl", "boxed_total(::Int64)"),
     ("missing_include", "src/shape/Shape.jl", "absent_piece.jl"),
     ("module_piracy", "src/shape/plants.jl", "identity"),
+    ("named_tuple_crossing", "src/shape/plants.jl", "make_record"),
     ("nonliteral_include", "src/shape/Shape.jl", ""),
     ("private_extension", "src/shape/plants.jl", "Low.extend_me"),
     ("reaches_internal", "src/low/Low.jl", "Core.eval"),

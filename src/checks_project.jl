@@ -7,12 +7,17 @@ struct CallerAllowlist{C<:NTuple{N,Symbol} where N, A<:NTuple{M,Tuple{String,Sym
     exempt_dirs::E   # path prefixes skipped entirely
 end
 
-function CallerAllowlist(callees, allowed, exempt_dirs = ())
-    names = ntuple(position -> Symbol(callees[position]), length(callees))
-    pairs = ntuple(length(allowed)) do position
-        pair = allowed[position]
+# The (repo-relative path, definition name) pairs a check is configured with, as it stores them
+function definition_pairs(written)
+    ntuple(length(written)) do position
+        pair = written[position]
         (String(pair[1]), Symbol(pair[2]))
     end
+end
+
+function CallerAllowlist(callees, allowed, exempt_dirs = ())
+    names = ntuple(position -> Symbol(callees[position]), length(callees))
+    pairs = definition_pairs(allowed)
     prefixes = ntuple(position -> String(exempt_dirs[position]), length(exempt_dirs))
     CallerAllowlist(names, pairs, prefixes)
 end

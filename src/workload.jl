@@ -148,12 +148,19 @@ function methods_on(foreign, owned)
     added
 end
 
+"""The live methods one walk of the method table reads for the package, each list in source order"""
+struct MethodCensus
+    defined::Vector{Method}   # methods the package's modules define
+    added::Vector{Method}     # methods other modules add on functions the package owns
+    nested::Vector{Method}    # methods an unranked direct child defines
+end
+
 function finish_methods(defined, foreign, nested, project)
     sort!(defined, by = method_place)
     sort!(nested, by = method_place)
     owned = owned_functions(defined, project)
     added = methods_on(foreign, owned)
-    (defined = defined, added = added, nested = nested)
+    MethodCensus(defined, added, nested)
 end
 
 # What the package defines and what it has compiled, from one walk. Read before the method graph's walk, whose

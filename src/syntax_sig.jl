@@ -86,8 +86,14 @@ function signature_call(signature)
     node
 end
 
+"""The head and the arguments of a signature's call"""
+struct CallParts
+    head::JS.SyntaxNode                # the name, dotted name, curly head or callable receiver the call is written to
+    arguments::Vector{JS.SyntaxNode}   # the arguments in source order, keyword block included
+end
+
 # The head and the arguments of a signature's call; nothing past a `where`, a return type, or a bare binding. An infix
-# call keeps its children in source order, so `f ≀ x` holds its operator second.
+# call keeps its children in source order, so `f ≀ x` holds its operator second
 function call_parts(signature::JS.SyntaxNode)
     call = signature_call(signature)
     isnothing(call) && return nothing
@@ -95,9 +101,9 @@ function call_parts(signature::JS.SyntaxNode)
     child_count(children) == 0 && return nothing
     if JS.is_infix_op_call(call)
         operands = vcat(children[1:1], children[3:end])
-        return (head = children[2], arguments = operands)
+        return CallParts(children[2], operands)
     end
-    (head = children[1], arguments = children[2:end])
+    CallParts(children[1], children[2:end])
 end
 
 # A type name, unwrapping `<:` and `{}` to the bare identifier.

@@ -9,16 +9,16 @@ run(::GeneratorReturns, ctx) = check_generator_returns(ctx.index)
 
 # The expressions a body's value can be, followed through a block's or a `let`'s last statement, a `return`'s value,
 # and each arm of an `if`, `elseif` or ternary
-function tail_values!(found, node)
+function value_tails!(found, node)
     kind = JS.kind(node)
     children = child_nodes(node)
     child_count(children) == 0 && return push!(found, node)
     if kind == K"block" || kind == K"let" || kind == K"return"
-        return tail_values!(found, last(children))
+        return value_tails!(found, last(children))
     end
     is_branch_kind(kind) || return push!(found, node)
     for arm in children[2:end]
-        tail_values!(found, arm)
+        value_tails!(found, arm)
     end
     found
 end
@@ -28,11 +28,11 @@ end
 function returned_values(form)
     body = method_body(form)
     isnothing(body) && return JS.SyntaxNode[]
-    found = tail_values!(JS.SyntaxNode[], body)
+    found = value_tails!(JS.SyntaxNode[], body)
     for node in walk_nodes(body)
         JS.kind(node) == K"return" || continue
         enclosing_form(node) === form || continue
-        tail_values!(found, node)
+        value_tails!(found, node)
     end
     found
 end

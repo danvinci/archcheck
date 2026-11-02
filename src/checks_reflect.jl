@@ -205,7 +205,7 @@ function method_form(index::SourceIndex, recorded::RecordedPaths, method::Method
     for placed in held
         placed.file === file || continue
         site_names_method(placed.site, method) || continue
-        return (file = file, site = placed.site, form = placed.form)
+        return placed
     end
     nothing
 end
