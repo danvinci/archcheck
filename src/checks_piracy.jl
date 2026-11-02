@@ -34,9 +34,12 @@ union_foreign(members, owns, rule::ValueUnion) = any_foreign(members, owns, rule
 union_foreign(members, owns, rule::TypeObjectUnion) = all_foreign(members, owns, rule)
 
 # Type{T} belongs where T does, and names one type. Any other type is foreign when its module and its parameters are.
+function is_foreign(@nospecialize(type_object::TypeObject), owns, _rule)
+    held = type_object_held(type_object)
+    is_foreign(held, owns, TypeObjectUnion())
+end
+
 function is_foreign(@nospecialize(datatype::DataType), owns, rule)
-    held = type_object_held(datatype)
-    isnothing(held) || return is_foreign(held, owns, TypeObjectUnion())
     owns(parentmodule(datatype)) && return false
     all_foreign(datatype.parameters, owns, rule)
 end

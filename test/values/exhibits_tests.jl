@@ -59,6 +59,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("undeclared_module", "src/low/Low.jl", "Shape"),
     ("unlisted_caller", "src/shape/plants.jl", "stray_call"),
     ("unlisted_reader", "src/shape/derived.jl", "store_span"),
+    ("unlisted_reader", "src/shape/workload.jl", "exercise"),
     ("unparsed", "scripts/broken.jl", ""),
     ("unranked_file", "src/low/forgotten.jl", ""),
     ("unranked_module", "src/low/Low.jl", "Hidden"),

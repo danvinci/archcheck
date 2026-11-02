@@ -34,6 +34,11 @@ function uses_struct_params(@nospecialize(param::DataType), vars)
     false
 end
 
+function uses_struct_params(@nospecialize(param::TypeObject), vars)
+    held = type_object_held(param)
+    uses_struct_params(held, vars)
+end
+
 uses_struct_params(@nospecialize(::Any), ::Any) = false
 
 # Type{Float64} names one type object. Type{<:T} names every subtype, so dispatch stays open.
@@ -59,9 +64,12 @@ is_open_position(@nospecialize(::UnionAll), ::Any) = true
 is_open_position(@nospecialize(::Union), ::Any) = false
 is_open_position(@nospecialize(position::TypeVar), vars) = !(position in vars)
 
-function is_open_position(@nospecialize(position::DataType), vars)
+function is_open_position(@nospecialize(position::TypeObject), vars)
     held = type_object_held(position)
-    isnothing(held) || return is_open_position(held, vars)
+    is_open_position(held, vars)
+end
+
+function is_open_position(@nospecialize(position::DataType), vars)
     for param in position.parameters
         is_open_position(param, vars) && return true
     end

@@ -43,6 +43,11 @@ function collect_free_typevars!(found, bound, @nospecialize(receiver_type::DataT
     nothing
 end
 
+function collect_free_typevars!(found, bound, @nospecialize(receiver_type::TypeObject))
+    held = type_object_held(receiver_type)
+    collect_free_typevars!(found, bound, held)
+end
+
 collect_free_typevars!(_found, _bound, @nospecialize(::Any)) = nothing
 
 # A datatype whose parameters are still free is a union-all body. Binding those parameters yields the

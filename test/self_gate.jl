@@ -145,13 +145,14 @@ function inference_sites()
     CallerAllowlist(callees, allowed)
 end
 
-# Julia internals with no public form in 1.13.1, each read only in the boundary file, whose every operation states
+# Julia internals with no public form in 1.14, each read only in the boundary file, whose every operation states
 # its contract.
 function internal_sites()
     callees = (:visit, :kwarg_decl, :bodyfunction, :method_argnames, :fixup_stdlib_path, :moduleloc,
                :meta, :Binding, :datatype_haspadding, :loaded_modules, :env_project_file, :parsed_toml, :PkgId,
                :ccall, :_methods_by_ftype, :getdebugidx, :buildLineInfoNode, :maybe_root_module,
-               :unwrap_unionall, :rewrap_unionall, :has_free_typevars, :uniontypes, :isType, :NativeInterpreter,
+               :unwrap_unionall, :rewrap_unionall, :has_free_typevars, :uniontypes, :isType, :type_parameter,
+               :NativeInterpreter,
                :InferenceParams, :infer_return_type, :return_types, :generating_output, :specializations,
                :method_instance, :hasgenerator, :isvarargtype, :get_world_counter,
                :ForwardToBackedgeIterator, :argextype, :widenconst, :pkgorigins, :parse_cache_header, :_crc32c,

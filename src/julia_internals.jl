@@ -1,4 +1,4 @@
-# The Julia internals ArchCheck reads where 1.13.1 offers no public form. Each operation states the contract it rests
+# The Julia internals ArchCheck reads where 1.14 offers no public form. Each operation states the contract it rests
 # on; the self-gate's `internal_sites` pins every internal call to this file.
 
 # The bit of a method's dispatch status Julia sets while the method is the one `which` returns for its own signature
@@ -71,13 +71,16 @@ function function_type_module(method::Method)
     datatype.name.module
 end
 
-"""The type a `Type{T}` names under any where-clauses, the `T`; nothing for any other type. `Base.isType` tells
-`Type{T}` from a plain DataType."""
+"""The kinds a `Type{T}` takes: equality-keyed `Core.TypeEq`, egality-keyed `Core.TypeEgal`; neither is a DataType"""
+const TypeObject = Union{Core.TypeEq,Core.TypeEgal}
+
+"""The type a `Type{T}` names under any where-clauses, the `T`; nothing for any other type. `Base.isType` tells a
+`TypeObject` from any other type and `Base.type_parameter` reads its `T`"""
 function type_object_held(@nospecialize(type))
-    body = declared_datatype(type)
-    isnothing(body) && return nothing
+    type isa Type || return nothing
+    body = Base.unwrap_unionall(type)
     Base.isType(body) || return nothing
-    only(body.parameters)
+    Base.type_parameter(body)
 end
 
 # Whether a binding's value is a union type under its where-clauses: a union names no single module.
@@ -180,9 +183,9 @@ function statement_location(debuginfo, instance, position)
 end
 
 """The method instance a statement was inlined from; nothing when the statement is the caller's own.
-`Base.IRShow.getdebugidx` gives the statement's edge index into the debug info's `edges`; 0 names none."""
+`Core.Compiler.getdebugidx` gives the statement's edge index into the debug info's `edges`; 0 names none"""
 function inlined_instance(debuginfo, position)
-    location = Base.IRShow.getdebugidx(debuginfo, position)
+    location = Core.Compiler.getdebugidx(debuginfo, position)
     edge_index = Int(location[2])
     edge_index == 0 && return nothing
     inlined = debuginfo.edges[edge_index].def
@@ -200,7 +203,7 @@ function body_function(method::Method)
     Base.bodyfunction(method)
 end
 
-# A keyword body is the function lowering names `#name#N`. Julia 1.13.1 records no flag for it. `bodyfunction`
+# A keyword body is the function lowering names `#name#N`. Julia 1.14 records no flag for it. `bodyfunction`
 # points from the written method to that function, so the body is known by this name.
 const KEYWORD_BODY = r"^#[^#]+#[0-9]+$"
 

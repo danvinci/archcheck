@@ -14,15 +14,16 @@ end
 child_count(::Nothing) = 0
 child_count(children::Vector) = length(children)
 
-# A module block's name and its body: the one way into the code a walk stops at.
+# A module block's name and its body, its last two children after the syntax version it reads: the one way into the
+# code a walk stops at
 function module_name(block)::Union{Nothing,Symbol}
     parts = JS.children(block)
-    node_symbol(parts[1])
+    node_symbol(parts[end - 1])
 end
 
 function module_body(block)
     parts = JS.children(block)
-    parts[2]
+    last(parts)
 end
 
 # The module blocks among a code root's own statements, docstring included: an entry file's module is its one.

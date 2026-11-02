@@ -17,7 +17,7 @@ using ArchCheck, MyPackage
 ArchCheck.gate(MyPackage)
 ```
 
-`gate` parses `src/` once and runs the default checks. It prints the findings new since the last run and writes every finding as a JSON line to `test/out/architecture.jsonl`. A finding of an error kind makes it throw; `error_kinds = (:dead_code,)` makes more kinds blocking. ArchCheck needs Julia 1.13.1 or later.
+`gate` parses `src/` once and runs the default checks. It prints the findings new since the last run and writes every finding as a JSON line to `test/out/architecture.jsonl`. A finding of an error kind makes it throw; `error_kinds = (:dead_code,)` makes more kinds blocking. ArchCheck needs Julia 1.14 or later.
 
 The gate parses files and runs its static checks in parallel when Julia has more than one thread, and its findings are byte-identical at any thread count. `Pkg.test` passes the parent's thread count on, so run `julia --threads=auto --project -e 'using Pkg; Pkg.test()'`.
 

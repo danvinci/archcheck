@@ -142,7 +142,8 @@ function is_held(method::Method, values)
     signature = split_signature(written.sig)
     slot = first(signature)
     slot isa Type || return true
-    holds_type = slot isa DataType && !isnothing(type_object_held(slot))
+    held = type_object_held(slot)
+    holds_type = !isnothing(held)
     holds_type && return written.name in values
     slot <: Function || return true
     can_be_value(written, values)
@@ -355,18 +356,9 @@ function holds_unknown_apply(info::Core.Compiler.UnionSplitApplyCallInfo)
     false
 end
 
-function holds_unknown_apply(info::Core.Compiler.ConstCallInfo)
-    holds_unknown_apply(info.call)
-end
-
 holds_unknown_apply(@nospecialize(::Any)) = false
 
 holds_unknown_call(::Core.Compiler.NoCallInfo) = true
-
-function holds_unknown_call(info::Core.Compiler.ConstCallInfo)
-    holds_unknown_call(info.call)
-end
-
 holds_unknown_call(@nospecialize(::Any)) = false
 
 function record_apply_veto!(facts, frame, position, branches, info)
@@ -466,9 +458,8 @@ function veto_fact(file, line, callee, via, is_used)
     CallFact(file, line, callee, via, is_used, false, "", false, false, false, false, false, false, false, false, "")
 end
 
-# The dispatches of one statement's call, each a `MethodMatchInfo` (Compiler/src/stmtinfo.jl): a constant-propagated
-# call keeps its dispatch in `call`, a splatted one in each `ApplyCallInfo`, a union-split one a branch per member type.
-call_branches!(found, info::Core.Compiler.ConstCallInfo) = call_branches!(found, info.call)
+# The dispatches of one statement's call, each a `MethodMatchInfo` (Compiler/src/stmtinfo.jl): a splatted call keeps
+# its dispatch in each `ApplyCallInfo`, a union-split one a branch per member type
 call_branches!(found, info::Core.Compiler.ApplyCallInfo) = call_branches!(found, info.call)
 call_branches!(found, info::Core.Compiler.UnionSplitInfo) = append!(found, info.split)
 call_branches!(found, info::Core.Compiler.MethodMatchInfo) = push!(found, info)
@@ -557,7 +548,7 @@ end
 function callee_slot_name(@nospecialize(called))
     func = function_instance(called)
     isnothing(func) || return nameof(func)
-    held = called isa DataType ? type_object_held(called) : nothing
+    held = type_object_held(called)
     if isnothing(held)
         called isa DataType || return Symbol("")
         return nameof(called)
@@ -749,7 +740,7 @@ end
 # names one function or type; a `DataType` names none, so a call on it matches what the package holds.
 function package_matches(call, landings::CallLandings)
     callee = called_function(call)
-    held = callee isa DataType ? type_object_held(callee) : nothing
+    held = type_object_held(callee)
     is_type_object = callee <: Type && isnothing(held)
     is_known = !isnothing(held) || (isconcretetype(callee) && !is_type_object)
     is_known && return known_matches(call, landings.module_set)
@@ -834,11 +825,13 @@ function record_passed!(edges, pending, caller, target, module_set)
     end
 end
 
+# A closure family over its captures, as a specialization may hold it, names one function as each member does
 function is_owned_function_type(@nospecialize(argument), module_set)
-    argument isa DataType || return false
-    isconcretetype(argument) || return false
-    argument <: Function || return false
-    parentmodule(argument) in module_set
+    body = declared_datatype(argument)
+    isnothing(body) && return false
+    isabstracttype(body) && return false
+    body <: Function || return false
+    parentmodule(body) in module_set
 end
 
 function connect_compiled!(edges, pending, caller, owned, module_set)
