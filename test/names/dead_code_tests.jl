@@ -385,6 +385,29 @@ infix_helper() = 1
     @test dead == Set(["infix_helper", "≀"])
 end
 
+# A `let` or `try` block at the top opens a local scope: a function it defines is a local, called inside it.
+const SCOPED_LOCAL = load_package("ScopedLocal", """
+include("body.jl")
+""", ["body.jl" => """
+const TABLE = [1.0, 2.0]
+pos_scoped_helper(x) = x > 0
+let
+    neg_let_local(x) = pos_scoped_helper(x)
+    @assert all(neg_let_local, TABLE) "positive"
+end
+try
+    neg_try_local(x) = x
+    neg_try_local(1)
+catch
+end
+dead_top() = 1
+"""])
+
+@testset "a function a top-level let or try block defines is a local, and what it calls stays live" begin
+    dead = dead_symbols(SCOPED_LOCAL)
+    @test dead == Set(["dead_top"])
+end
+
 # The fallback include parses the extension, and this Julia skips that branch. The extension's trigger is absent.
 const FALLBACK_INCLUDE = load_package("FallbackInclude", """
 kept_by_extension() = 1

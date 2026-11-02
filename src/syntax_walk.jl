@@ -344,11 +344,13 @@ function nested_method_scope(walk::CodeWalk, scope, signature, form)
     retarget(scope, receiver, Bindings(), form)
 end
 
-# A method outside any other opens a site under its owner, where its calls and forms are filed.
+# A method outside any other opens a site under its owner, where its calls and forms are filed. One a `let`, `try` or
+# loop body defines binds its name in that local scope, so it is no module function
 function method_scope(walk::CodeWalk, scope, node, children)
     signature = children[1]
     name = sig_name(signature)
-    top = scope.depth == 0 && !isnothing(name)
+    is_scoped_local = !isnothing(name) && haskey(scope.bound.declared, name)
+    top = scope.depth == 0 && !isnothing(name) && !is_scoped_local
     line = source_line(node)
     if top
         record_top_method!(walk.scan, name, line, children)
