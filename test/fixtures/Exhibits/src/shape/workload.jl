@@ -44,6 +44,7 @@ function exercise()
     packed = (1, 1, 1)
     parameter = Union{Tuple{Vararg{Int,3}}, Array{Int,N} where N}
     held = Hold{parameter}(1)
+    open_hold(held)
     opened = OpenBox(empty_cells, held_ref, empty_cells, packed, held)
     read_open(opened)
     plain_label(1)

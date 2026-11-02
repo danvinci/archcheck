@@ -31,6 +31,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("module_piracy", "src/shape/plants.jl", "identity"),
     ("named_tuple_crossing", "src/shape/plants.jl", "make_record"),
     ("nonliteral_include", "src/shape/Shape.jl", ""),
+    ("open_assertion", "src/shape/plants.jl", "open_hold"),
     ("private_extension", "src/shape/plants.jl", "Low.extend_me"),
     ("reaches_internal", "src/low/Low.jl", "Core.eval"),
     ("reaches_own_internal", "src/shape/Shape.jl", "Low._secret"),

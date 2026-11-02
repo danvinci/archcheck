@@ -46,6 +46,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `OptAnalysis` | a listed call whose inferred code dispatches at runtime or boxes a local |
 | `InferredCalls` | a call no method matches at any argument type inference allows (`failing_call`), or a discarded call that writes nothing, cannot throw and returns a value at every argument its method accepts (`dropped_value`) |
 | `NamedTupleCrossings` | a top-level function that hands back a named tuple literal another file keeps: a file of another module, or a file of its own module that does not destructure the result by name where the call lands; `allowed` lists the (file, function) pairs a package hands back as named tuples on purpose |
+| `OpenAssertions` | a type assertion in a method body to a parametric type written without its parameters, `fetch(task)::Wrapper` for `struct Wrapper{M}`, which leaves the value abstract |
 | `UnreadWaits` | a discarded `fetch`, a `wait` the method graph's inference resolves to the wait on a task (needs `entries`), a `fetch` or `wait` passed to `foreach` or to a call whose value goes unread, or an `@sync` block |
 | `UntypedValues` | an empty `[]`, `Dict()`, `Set()` or `IdDict()` with no element type, in `src/` and the directories `dirs` names |
 | `GeneratorTuples` | a `Tuple(x)` call where `x` is a generator or comprehension, so inference cannot know the tuple's length (`ntuple(f, n)` builds it at a known length) |

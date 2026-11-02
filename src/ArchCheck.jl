@@ -43,6 +43,7 @@ include("checks_untyped_values.jl")
 include("checks_generator_tuples.jl")
 include("checks_generator_returns.jl")
 include("checks_named_tuples.jl")
+include("checks_open_assertions.jl")
 include("checks_reach.jl")
 include("checks_opt.jl")
 include("checks_derived.jl")
@@ -61,7 +62,7 @@ export ForeignFields, BoxedCaptures, UnusedBindings, AbstractFields, TypeBranche
 export OneProducer, CacheKeys, CachedCalls, DerivedReaders
 export CallerAllowlist, Independent, ReaderSet, InferredCalls, OptAnalysis, OptEntry
 export UnreachedMethods, UnreadWaits
-export UntypedValues, GeneratorTuples, GeneratorReturns, NamedTupleCrossings
+export UntypedValues, GeneratorTuples, GeneratorReturns, NamedTupleCrossings, OpenAssertions
 export Derived, PriorRun
 export SourceIndex, FileNode, FileScan, MethodSite, CallSite, MethodGraph
 export Observation

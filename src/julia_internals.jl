@@ -155,7 +155,7 @@ is_box_type(@nospecialize(inferred)) = Core.Compiler.widenconst(Core.Compiler.ig
 them at `Base.get_world_counter`, and a negative limit asks for every match."""
 function matching_methods(@nospecialize(signature))
     world = Base.get_world_counter()
-    Base._methods_by_ftype(signature, -1, world)::Vector
+    Base._methods_by_ftype(signature, -1, world)::Vector{Any}
 end
 
 """The method instance of calling `func` with arguments of type `argtypes` in the current world; nothing when no

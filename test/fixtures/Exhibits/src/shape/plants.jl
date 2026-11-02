@@ -76,6 +76,11 @@ struct OpenBox{T}
     held::Hold{Union{Tuple{Vararg{T,3}}, Array{T,N} where N}}  # free union, vararg and union-all
 end
 
+# open_assertion: the assertion names a parametric type without its parameters
+function open_hold(value)
+    value::Hold
+end
+
 function read_open(box::OpenBox)
     box.cells
     box.slot
