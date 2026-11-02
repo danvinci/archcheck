@@ -139,11 +139,11 @@ end
 # Names typed within one scope: each binding's declared type, or its value's type deferred to a read.
 const ScopeTypes = IdDict{TypeKey,Union{Type,Deferred}}
 
-# What inference gave for each (callee, signature) a scan asked about: one concrete type, or nothing. Keyed by
+# What inference gave for each (callee, signature) a run asked about: one concrete type, or nothing. Keyed by
 # identity, so a callee's own `hash` stays uncalled.
 const InferredTypes = IdDict{Tuple{Any,Any},Union{Nothing,DataType}}
 
-# One file's iterate steps, keyed by signature. Identity on `Any` keeps each signature as itself
+# One run's iterate steps, keyed by signature. Identity on `Any` keeps each signature as itself
 const IterateSteps = IdDict{Any,Union{Nothing,DataType}}
 
 # One file's reads, walked in the namespace of the module that owns the file.
@@ -151,9 +151,22 @@ struct ReadState{E,C,S}
     mod::Module                      # the file's module, where annotations and callees resolve
     scan::FileScan                   # the index record naming the local each identifier names
     reads::Vector{E}                 # reads on typed receivers
-    inferred::C                      # InferredTypes of this file's read, whose world stays fixed
-    steps::S                         # iterate signature -> the (element, state) type, or nothing; one file, one world
+    inferred::C                      # the run's InferredTypes behind their lock, whose world stays fixed
+    steps::S                         # the run's IterateSteps behind their lock; one run, one world
 end
+
+# Whether `table` holds an answer for `key`, and that answer. The key stays unspecialized: each callee's key is a
+# type of its own, and one compiled lookup serves them all
+function held_answer(table::Lockable, @nospecialize(key))
+    @lock table begin
+        entries = table[]
+        haskey(entries, key) ? (true, entries[key]) : (false, nothing)
+    end
+end
+
+# The answer `table` keeps for `key`: `found`, or the one another task stored first. Callers infer outside the lock, so
+# tasks infer side by side
+kept_answer!(table::Lockable, @nospecialize(key), found) = @lock table get!(table[], key, found)
 
 # The key an identifier's binding is typed under: its local's declaring identifier, or its name when it is free.
 function type_key(state, node)::TypeKey
@@ -328,13 +341,13 @@ Base.@nospecializeinfer function inferred_type(@nospecialize(f), @nospecialize(s
     concrete_type(result)
 end
 
-# The inferred concrete type, asked of inference once per callee and signature in a file's read
+# The inferred concrete type, asked of inference once per callee and signature in a run
 Base.@nospecializeinfer function known_inferred_type(state, @nospecialize(f), @nospecialize(signature))
     key = (f, signature)
-    haskey(state.inferred, key) && return state.inferred[key]
+    asked, held = held_answer(state.inferred, key)
+    asked && return held
     found = inferred_type(f, signature)
-    state.inferred[key] = found
-    found
+    kept_answer!(state.inferred, key, found)
 end
 
 # The NamedTuple type a call's keyword arguments form; nothing when one is splatted or not named plainly.
@@ -447,12 +460,10 @@ end
 
 # One signature's step, kept for the rest of the run that owns `steps`.
 function iterate_step(steps, signature)
-    if haskey(steps, signature)
-        return steps[signature]
-    end
+    asked, held = held_answer(steps, signature)
+    asked && return held
     step = computed_iterate_step(signature)
-    steps[signature] = step
-    step
+    kept_answer!(steps, signature, step)
 end
 
 # The type of the value at a position of a destructured tuple, when the tuple's type is concrete and that long.

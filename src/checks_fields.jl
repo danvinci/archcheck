@@ -206,7 +206,7 @@ function walk_field_reads!(state, scope, node)
 end
 
 # Every field read in a parsed file on a receiver the scan types, in the module's namespace.
-function field_reads(file::FileNode, mod::Module, inferred::InferredTypes, steps::IterateSteps)
+function field_reads(file::FileNode, mod::Module, inferred::Lockable{InferredTypes}, steps::Lockable{IterateSteps})
     state = ReadState(mod, file.scan, FieldRead[], inferred, steps)
     scope = ScopeTypes()
     walk_field_reads!(state, scope, file.tree)
@@ -265,15 +265,13 @@ function is_foreign_abstract_read(structs, @nospecialize(annotation), field, rea
     declarers > 0
 end
 
-# One file's foreign reads. Its inference queries go through caches of its own, so files read on tasks of their own
-# share nothing they write; `owners` holds the package's modules by key, their keys by module and its concrete structs
-function file_foreign_fields(file::FileNode, owners)
-    (; by_key, key_of, structs) = owners
+# One file's foreign reads. `shared` holds the package's modules by key, their keys by module, its concrete structs,
+# and the run's inference answers, which files read on tasks of their own share behind each table's lock
+function file_foreign_fields(file::FileNode, shared)
+    (; by_key, key_of, structs, inferred, steps) = shared
     found = Finding[]
     M = get(by_key, file.mod, nothing)
     isnothing(M) && return found
-    inferred = InferredTypes()
-    steps = IterateSteps()
     reads = field_reads(file, M, inferred, steps).reads
     # a read through a Union reads the field on each member
     for access in reads, member in union_members(access.type)
@@ -293,12 +291,14 @@ function file_foreign_fields(file::FileNode, owners)
     found
 end
 
-# Each file read on its own task: inference, which types most receivers, runs side by side
+# Each file read on its own task: inference, which types most receivers, runs side by side, each question asked once
 function check_foreign_fields(index::SourceIndex, mods)
     by_key = Dict(module_key(M) => M for M in mods)
     key_of = Dict(M => module_key(M) for M in mods)
     structs = package_structs(mods)
-    owners = (; by_key, key_of, structs)
-    per_file = ordered_results(file_foreign_fields, Vector{Finding}, index.files, owners)
+    inferred = Lockable(InferredTypes())
+    steps = Lockable(IterateSteps())
+    shared = (; by_key, key_of, structs, inferred, steps)
+    per_file = ordered_results(file_foreign_fields, Vector{Finding}, index.files, shared)
     reduce(vcat, per_file; init = Finding[])
 end
