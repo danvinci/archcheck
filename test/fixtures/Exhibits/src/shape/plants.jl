@@ -109,6 +109,11 @@ function open_list()
     []
 end
 
+# string_payload: a record carried under String keys
+function scores()
+    Dict{String,Int}("a" => 1)
+end
+
 # reader_set: a concrete subtype with no method for the reader
 abstract type Item end
 

@@ -51,6 +51,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("stale_import", "src/Exhibits.jl", "run_logic"),
     ("stale_export", "src/shape/Shape.jl", "never_defined"),
     ("storage_overload", "src/shape/plants.jl", "store_copy"),
+    ("string_payload", "src/shape/plants.jl", "scores"),
     ("tuple_iteration", "src/shape/plants.jl", "flat_parts"),
     ("tuple_return", "src/shape/plants.jl", "triple"),
     ("type_branch", "src/shape/plants.jl", "pick_type:value"),

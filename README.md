@@ -47,6 +47,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `InferredCalls` | a call no method matches at any argument type inference allows (`failing_call`), or a discarded call that writes nothing, cannot throw and returns a value at every argument its method accepts (`dropped_value`) |
 | `UnreadWaits` | a discarded `fetch`, a `wait` the method graph's inference resolves to the wait on a task (needs `entries`), a `fetch` or `wait` passed to `foreach` or to a call whose value goes unread, or an `@sync` block |
 | `UntypedValues` | an empty `[]`, `Dict()`, `Set()` or `IdDict()`, or `Any` written as a type, in `src/` and the directories `dirs` names |
+| `StringPayloads` | a `Dict{String,V}` whose value type is other than `String`, written as a type or constructed, in `src/` and the directories `dirs` names |
 
 ## Declared values
 
