@@ -22,6 +22,7 @@ const PLANTED = Set{Tuple{String,String,String}}([
     ("file_backedge", "src/shape/rank.jl", "src/shape/later.jl"),
     ("file_sinkable", "src/shape/plants.jl", "sink_home"),
     ("implicit_import", "src/shape/Shape.jl", "shuffle"),
+    ("generator_return", "src/shape/plants.jl", "lazy_steps"),
     ("generator_tuple", "src/shape/plants.jl", "counted_steps"),
     ("foreign_field", "src/shape/plants.jl", "Low.Block.width"),
     ("foreign_field", "src/shape/plants.jl", "Low.Brick.width"),

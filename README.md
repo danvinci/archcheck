@@ -49,6 +49,7 @@ Rules a package configures join through `checks = (ArchCheck.CHECKS..., ...)`:
 | `UntypedValues` | an empty `[]`, `Dict()`, `Set()` or `IdDict()`, or `Any` written as a type, in `src/` and the directories `dirs` names |
 | `StringPayloads` | a `Dict{String,V}` whose value type is other than `String`, written as a type or constructed, in `src/` and the directories `dirs` names |
 | `GeneratorTuples` | a `Tuple(x)` call where `x` is a generator or comprehension, so inference cannot know the tuple's length (`ntuple(f, n)` builds it at a known length) |
+| `GeneratorReturns` | a top-level function whose returned value, its body's tail or a `return`, is a generator, which a caller iterating it nests in its own, reported once at the definition |
 
 ## Declared values
 

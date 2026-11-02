@@ -82,6 +82,7 @@ function exhibit_checks()
     push!(active, UntypedValues())
     push!(active, StringPayloads())
     push!(active, GeneratorTuples())
+    push!(active, GeneratorReturns())
     Tuple(active)
 end
 
@@ -186,6 +187,7 @@ function static_checks()
     push!(active, ReaderSet(Check, readers))
     push!(active, self_opt())
     push!(active, GeneratorTuples())
+    push!(active, GeneratorReturns())
     Tuple(active)
 end
 

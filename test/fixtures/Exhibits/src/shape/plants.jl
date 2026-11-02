@@ -119,6 +119,11 @@ function counted_steps(n::Int)
     Tuple(step for step in 1:n)
 end
 
+# generator_return: the caller gets a generator to nest in its own
+function lazy_steps(n::Int)
+    (step for step in 1:n)
+end
+
 # reader_set: a concrete subtype with no method for the reader
 abstract type Item end
 
