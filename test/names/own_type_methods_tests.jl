@@ -1,5 +1,5 @@
-# A method a listed module owns takes only the module's own types. A constructor, a method on another module's
-# function and a method another module adds stay unjudged
+# A method a listed module owns takes only the module's own types. A constructor, a local method inside one, a method
+# on another module's function and a method another module adds stay unjudged
 
 const OWN_TYPES = load_package("OwnTypes", """
 include("terms/Terms.jl")
@@ -28,6 +28,14 @@ outside(n::Int) = n
     defaults(seam::Seam, n::Int = 1) = seam.n + n
     listed(seams::Vector{Seam}) = length(seams)
     Base.length(seam::Seam) = seam.n
+    struct Guarded
+        n::Int   # checked count
+        function Guarded(n::Int)
+            is_positive(value) = value > 0
+            is_positive(n) || throw(ArgumentError("a count is positive"))
+            new(n)
+        end
+    end
     end
     """,
 ])

@@ -33,6 +33,8 @@ function own_function_methods(defined, home::Module, recorded::RecordedPaths)
         method.module === home || continue
         owned = package_owned_function(method, project)
         isnothing(owned) && continue
+        # A local method's function is no binding of its module, as a constructor's helper is not
+        defined_callable(method) === owned || continue
         path, line = method_site(method, recorded)
         site = (path, line, method.name)
         held = get(longest, site, nothing)
