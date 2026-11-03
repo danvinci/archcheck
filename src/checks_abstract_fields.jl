@@ -106,9 +106,13 @@ function container_field_open(@nospecialize(declared))
 end
 
 is_open_field(@nospecialize(declared::TypeVar), vars) = !(declared in vars)
-is_open_field(@nospecialize(::Union), ::Any) = false
 
-# A small Union lowers into separate branches, so it stays closed.
+# A small Union lowers into a branch per member, so it is open only where a member is
+function is_open_field(@nospecialize(declared::Union), vars)
+    is_open_field(declared.a, vars) && return true
+    is_open_field(declared.b, vars)
+end
+
 # A struct parameter is fixed per instance; a free or abstract parameter stays open.
 function is_open_field(@nospecialize(declared), vars = TypeVar[])
     is_closed_type_object(declared) && return false
@@ -235,4 +239,30 @@ function check_abstract_fields(mods, sites, index::SourceIndex)
         end
     end
     findings
+end
+
+# The open fields the package does not store open on purpose, and a stale allowance for each allowed field no finding
+# names; a file the index lacks is cited under the package's own module
+function allowed_fields(findings, allowed::Vector{Tuple{String,Symbol,Symbol}}, index::SourceIndex, root::Module)
+    kept = Finding[]
+    matched = Set{Tuple{String,Symbol,Symbol}}()
+    for finding in findings
+        name, field = split(finding.symbol, "."; limit = 2)
+        key = (finding.file, Symbol(name), Symbol(field))
+        if key in allowed
+            push!(matched, key)
+            continue
+        end
+        push!(kept, finding)
+    end
+    for key in allowed
+        key in matched && continue
+        path, name, field = key
+        held = findfirst(file -> file.path == path, index.files)
+        mod = isnothing(held) ? nameof(root) : index.files[held].mod
+        symbol = string(name, ".", field)
+        detail = symbol * " is allowed to store an open type and stores a closed one"
+        push!(kept, Finding(mod, :stale_allowance, path, symbol, 0, detail))
+    end
+    kept
 end

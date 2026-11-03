@@ -172,8 +172,11 @@ ReachesInternal(; allowed::Tuple{Vararg{Module}} = ()) = ReachesInternal(allowed
 struct BoxedCaptures <: Check end
 """Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two. A name a Base or Core macro call writes counts as read, and so does one any other macro's expansion holds, or every name when that expansion throws."""
 struct UnusedBindings <: Check end
-"""Runs in `CHECKS`. A struct field's stored type leaves dispatch open. A container's own element types decide: a concrete element closes it whatever that element holds, so `Vector{Vector{Any}}` is closed."""
-struct AbstractFields <: Check end
+"""Runs in `CHECKS`. A struct field's stored type leaves dispatch open. A container's own element types decide: a concrete element closes it whatever that element holds, so `Vector{Vector{Any}}` is closed. `allowed` lists the (repo-relative path, struct name, field name) triples that store an open type on purpose; a triple naming no open field is a stale allowance, an error as `CallerAllowlist`'s is"""
+struct AbstractFields{A<:NTuple{N,Tuple{String,Symbol,Symbol}} where N} <: Check
+    allowed::A   # (repo-relative path, struct name, field name) triples that store an open type on purpose
+end
+AbstractFields(; allowed = ()) = AbstractFields(Tuple(allowed))
 """Configured through `gate(...; checks)` with a supertype and the readers its concrete subtypes must answer. A subtype with no matching method is a finding."""
 struct ReaderSet{S, R<:Tuple} <: Check
     super::Type{S}  # concrete subtypes of this type must answer each reader
@@ -256,8 +259,13 @@ end
 kinds(::UnusedBindings) = (:unused_argument => :advisory, :unused_local => :advisory,
                            :ignored_parameter => :advisory)
 
-run(::AbstractFields, ctx) = check_abstract_fields(package_modules(ctx), ctx.sites, ctx.index)
-kinds(::AbstractFields) = (:abstract_field => :advisory,)
+# One compiled run for every length of `allowed`
+function run(@nospecialize(check::AbstractFields), ctx)
+    allowed = collect(Tuple{String,Symbol,Symbol}, check.allowed)
+    found = check_abstract_fields(package_modules(ctx), ctx.sites, ctx.index)
+    allowed_fields(found, allowed, ctx.index, ctx.root)
+end
+kinds(::AbstractFields) = (:abstract_field => :advisory, :stale_allowance => :error)
 
 run(check::ReaderSet, ctx) =
     check_reader_set(package_modules(ctx), check.super, check.required; sites = ctx.sites)

@@ -182,12 +182,22 @@ end
 const READ_INTERNALS = (Base, Core, Base.Compiler, Base.IRShow, Base.Docs, Exhibits, Exhibits.Low, Exhibits.Shape,
                         Exhibits.Contracts)
 
+# A type the scan reads off the analysed code can be any type, so the steps that carry one hold it open
+const OPEN_TYPE_FIELDS = (
+    ("src/read_types.jl", :IteratedStep, :source),
+    ("src/read_types.jl", :TupleStep, :source),
+    ("src/read_types.jl", :Deferred, :result),
+)
+
 function static_checks()
     active = Check[]
     for check in ArchCheck.CHECKS
-        check isa ReachesInternal || push!(active, check)
+        check isa ReachesInternal && continue
+        check isa AbstractFields && continue
+        push!(active, check)
     end
     push!(active, ReachesInternal(allowed = READ_INTERNALS))
+    push!(active, AbstractFields(allowed = OPEN_TYPE_FIELDS))
     push!(active, parse_sites())
     push!(active, inference_sites())
     push!(active, internal_sites())

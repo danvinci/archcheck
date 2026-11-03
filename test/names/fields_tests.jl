@@ -20,6 +20,7 @@ struct Open
     map::Type{<:Integer}
     r::Real
     spec::Abs
+    maybe::Union{Abs,Nothing}
 end
 struct Param{T}
     x::T
@@ -27,6 +28,7 @@ struct Param{T}
     zs::Vector{T}
     r::Real
     ws::Vector{Pair{K,T} where K}
+    maybe::Union{T,Nothing}
 end
 const Renamed = Open
 const IntParam = Param{Int}
@@ -36,8 +38,8 @@ const AnyParam = Param{Any}
 
 const OPEN_FIELD_NAMES = Set([
     "Open.xs", "Open.any", "Open.absv", "Open.absf", "Open.d", "Open.s", "Open.da",
-    "Open.map", "Open.r", "Open.spec", "Param.ys", "Param.r", "Param.ws",
-    "AnyParam.x", "AnyParam.zs",
+    "Open.map", "Open.r", "Open.spec", "Open.maybe", "Param.ys", "Param.r", "Param.ws",
+    "AnyParam.x", "AnyParam.zs", "AnyParam.maybe",
 ])
 
 # An alias repeats its struct's open fields; only an instance opening a field the struct keeps closed adds one. A
@@ -52,8 +54,19 @@ const OPEN_FIELD_NAMES = Set([
     @test (:abstract_field, "Open.xs", "Array{T, 1} where T") in rows
     @test (:abstract_field, "AnyParam.zs", "Array{Any, 1}") in rows
     alias_lines = Set(finding.line for finding in found if startswith(finding.symbol, "AnyParam."))
-    @test alias_lines == Set([32])
+    @test alias_lines == Set([34])
     @test all(finding -> finding.line > 0, found)
+end
+
+@testset "an allowed field is no finding, and an allowed field that is closed is a stale allowance" begin
+    ctx = case_context(OPEN_FIELDS)
+    path = "src/OpenFields.jl"
+    check = AbstractFields(allowed = ((path, :Open, :spec), (path, :Closed, :xs)))
+    found = ArchCheck.run(check, ctx)
+    symbols = Set(finding.symbol for finding in found if finding.kind === :abstract_field)
+    @test symbols == setdiff(OPEN_FIELD_NAMES, ["Open.spec"])
+    stale = only(finding for finding in found if finding.kind === :stale_allowance)
+    @test stale.symbol == "Closed.xs"
 end
 
 @testset "a field read on another module's struct is a finding" begin
