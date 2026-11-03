@@ -12,6 +12,7 @@ using .Hi
     module Lo
     struct LowType end
     const LowRun = Union{LowType,Int}
+    const LOW_LIMIT = 0.5
     pure_in_low(x::Int) = x + 1
     end
     """,
@@ -22,10 +23,13 @@ using .Hi
     """,
     "hi/Hi.jl" => """
     module Hi
-    using ..Lo: LowType, LowRun
+    using ..Lo: LowType, LowRun, LOW_LIMIT
     using ..Mid: MidType
     struct OwnType end
+    const HIGH_LIMIT = 0.6
     uses_run() = LowRun
+    uses_low_limit(v::LowType) = LOW_LIMIT
+    uses_high_limit(v::LowType) = HIGH_LIMIT
     sig_own(v::OwnType) = v
     pure_in_high(y::Float64) = y
     body_own() = sig_own(OwnType())
@@ -232,6 +236,9 @@ end
     @test endswith(takes.file, "Hi.jl")
     run_user = only(finding for finding in found if finding.symbol == "uses_run")
     @test ev(run_user, :sinks_to) == "Lo"
+    low_limit_user = only(finding for finding in found if finding.symbol == "uses_low_limit")
+    @test ev(low_limit_user, :sinks_to) == "Lo"
+    @test !("uses_high_limit" in symbols)
     wide = only(finding for finding in found if finding.symbol == "spans_two")
     @test ev(wide, :touches) == "Lo Mid"
     @test !any(pair -> pair.first === :sinks_to, wide.evidence)

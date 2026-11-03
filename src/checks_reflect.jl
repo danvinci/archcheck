@@ -283,20 +283,14 @@ function add_argument_owners!(owners, owned)
     owners
 end
 
-owned_subject(value::Function) = value
-owned_subject(@nospecialize(value::Type)) = value
-owned_subject(@nospecialize(value)) = typeof(value)
-
-# A union names no parent module. The module that owns the alias binding stands for it, and the caller's
-# module stands for an alias imported from more than one module.
-function value_owner(home::Module, name::Symbol, value)
-    if is_union_type(value)
-        owner = binding_owner(home, name)
-        isnothing(owner) && return home
-        return owner
-    end
-    subject = owned_subject(value)
-    parentmodule(subject)
+# A union or a constant belongs to the module that binds its name, and to the caller's module when the name is
+# imported from more than one module
+function value_owner(home::Module, name::Symbol, @nospecialize(value))
+    is_named = value isa Function || (value isa Type && !is_union_type(value))
+    is_named && return parentmodule(value)
+    owner = binding_owner(home, name)
+    isnothing(owner) && return home
+    owner
 end
 
 function add_call_owners!(owners, home, called_names)
