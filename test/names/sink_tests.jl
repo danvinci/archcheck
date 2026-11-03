@@ -96,6 +96,23 @@ include("late.jl")
     "late.jl" => "leaf(x) = x\n",
 ])
 
+const LATE_SINK = load_package("LateSink", """
+include("low.jl")
+struct Spined end
+include("mid.jl")
+include("high.jl")
+""", [
+    "low.jl" => "leaf(x) = x\n",
+    "mid.jl" => "struct Middle end\n",
+    "high.jl" => """
+    const SCALE = 2
+    scaled(x) = leaf(x) * SCALE
+    with_middle(x) = (leaf(x), Middle())
+    with_spined(x::Spined) = leaf(x)
+    plain(x) = leaf(x)
+    """,
+])
+
 const SPREAD_SINK = load_package("SpreadSink", """
 include("ay.jl")
 include("bee.jl")
@@ -294,6 +311,12 @@ end
 
     spread = file_sinkable(SPREAD_SINK)
     @test isempty(spread)
+end
+
+@testset "a definition reading a name bound after the lower file stays" begin
+    found = file_sinkable(LATE_SINK)
+    rows = evidence_rows(found, :callees_in)
+    @test rows == [(:file_sinkable, "plain", "low.jl")]
 end
 
 @testset "a type, a published name or a function two other files use places nothing, and a private function does" begin

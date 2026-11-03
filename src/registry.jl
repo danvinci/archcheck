@@ -148,7 +148,7 @@ end
 ModulePiracy(; strict::Bool = false) = ModulePiracy(strict)
 """Runs in `CHECKS`. A method reads a name the package's load binds only after the method's file is done: in a file it includes later, an import placed later, or a module it opens later."""
 struct FileBackEdges <: Check end
-"""Runs in `CHECKS`. Every function a definition calls lives in one lower-ranked file. The module's types and the package's exported or public names are vocabulary and place nothing."""
+"""Runs in `CHECKS`. Every function a definition calls lives in one lower-ranked file, and every name it reads is bound by the time that file loads. The module's types and the package's exported or public names are vocabulary and place nothing"""
 struct FileSinkable <: Check end
 """Runs in `CHECKS`. A definition touches only modules that rank below its own, and no package its extension alone loads, or one file holds several such definitions."""
 struct Sinkable <: Check end
@@ -286,9 +286,10 @@ kinds(::FileBackEdges) = (:file_backedge => :advisory,)
 
 function run(::FileSinkable, ctx)
     published = published_names(ctx.index)
+    floor = SinkFloor(ctx)
     judge = function (cg::CallGraph)
         vocabulary = union(cg.types, cg.shared, published)
-        check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.recorded, vocabulary)
+        check_file_sinkable(cg, ctx.sites, ctx.methods, ctx.recorded, vocabulary, floor)
     end
     collect_modules(judge, ctx)
 end

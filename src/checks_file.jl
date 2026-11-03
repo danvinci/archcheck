@@ -32,20 +32,83 @@ function sink_finding(cg, home, name, line, target, athome)
             "every callee lives in one lower-ranked file", evidence)
 end
 
-function sink_verdict(cg, home, name, line, targets, callers)
+"""The files a definition could move to and still read every name it reads: the load's bindings, and the free names
+each method form reads, its signature's annotations included"""
+struct SinkFloor
+    judge::LateJudge   # where the load first binds each name
+    "(definition, file) -> each method's line -> the free names it reads, each flagged when its signature reads it"
+    reads::Dict{Tuple{Symbol,String},Dict{Int,Set{Tuple{Symbol,Bool}}}}
+end
+
+function SinkFloor(ctx)
+    judge = LateJudge(ctx.index, ctx.mods, ctx.root)
+    reads = Dict{Tuple{Symbol,String},Dict{Int,Set{Tuple{Symbol,Bool}}}}()
+    for file in ctx.index.files, read in file.scan.reads
+        def = read.def
+        form = read.method
+        (isnothing(def) || isnothing(form)) && continue
+        is_skipped = is_local_read(read) || is_member(read) || read.is_quoted || read.is_naming
+        is_skipped && continue
+        read.name === def && continue
+        site = (def, file.path)
+        by_line = get!(Dict{Int,Set{Tuple{Symbol,Bool}}}, reads, site)
+        line = source_line(form)
+        held = get!(Set{Tuple{Symbol,Bool}}, by_line, line)
+        push!(held, (read.name, read.in_signature))
+    end
+    SinkFloor(judge, reads)
+end
+
+# The free names the definition's method at `line` of `home` reads, or all its methods there for line 0
+function floor_reads(floor::SinkFloor, name, home, line)
+    none = Set{Tuple{Symbol,Bool}}()
+    by_line = get(floor.reads, (name, home), nothing)
+    isnothing(by_line) && return none
+    iszero(line) || return get(by_line, line, none)
+    union(none, values(by_line)...)
+end
+
+# A signature runs where its method is defined, so the load must have made the binding before `target` ends
+function is_bound_after(floor::SinkFloor, key, name, end_tick)
+    bound = get(floor.judge.names, key, nothing)
+    isnothing(bound) && return false
+    binding = get(bound, name, nothing)
+    isnothing(binding) && return false
+    binding.is_import && return false
+    binding.tick > end_tick
+end
+
+# Whether the definition's method at `line` of `home`, moved to the end of `target`, would read a name the load binds
+# only later
+function reads_late(floor::SinkFloor, key, name, home, line, target)
+    files = floor.judge.index.files
+    position = findfirst(file -> file.path == target, files)
+    isnothing(position) && return true
+    load = floor.judge.index.loads[position]
+    target_end = last(load.steps)
+    for (read, is_signature) in floor_reads(floor, name, home, line)
+        binding = late_binding(floor.judge, key, read, target_end.started)
+        isnothing(binding) || return true
+        is_signature && is_bound_after(floor, key, read, target_end.tick) && return true
+    end
+    false
+end
+
+# `form_line` is the judged method's line, or 0 when every method of the name is judged as one
+function sink_verdict(cg, home, name, line, targets, callers, floor, form_line)
     length(targets) == 1 || return nothing
     target = only(targets)
     target == home && return nothing
     is_downrank(cg.rank, home, target) || return nothing
     athome = get(callers, (name, home), 0)
     athome > 0 && return nothing
+    reads_late(floor, cg.mod, name, home, form_line, target) && return nothing
     sink_finding(cg, home, name, line, target, athome)
 end
 
-# file-sinkable: every intra-module function a def calls lives in one lower-ranked file. The vocabulary, the module's
-# types and the names the package exports or marks public, is shared by contract and places nothing. The rank
-# condition keeps this disjoint from file-backedge, which owns the up-rank direction.
-function check_file_sinkable(cg::CallGraph, sites, vocabulary)
+# file-sinkable: every intra-module function a def calls lives in one lower-ranked file, by whose end the load has bound every name it reads.
+# Types and published names place nothing; file-backedge owns the up-rank direction
+function check_file_sinkable(cg::CallGraph, sites, vocabulary, floor::SinkFloor)
     callers = caller_counts(cg)
     findings = Finding[]
     for name in cg.funcs
@@ -59,7 +122,7 @@ function check_file_sinkable(cg::CallGraph, sites, vocabulary)
         home = cg.files[name]
         located = site_of(sites, cg.mod, name, (home, 0))
         line = located[2]
-        finding = sink_verdict(cg, home, name, line, targets, callers)
+        finding = sink_verdict(cg, home, name, line, targets, callers, floor, 0)
         isnothing(finding) || push!(findings, finding)
     end
     findings
@@ -131,7 +194,7 @@ function add_method_targets!(targets, cg, method, methods, recorded, vocabulary)
     add_body_targets!(targets, cg, caller_name, method, walk)
 end
 
-function method_findings(cg, methods, judged, recorded, vocabulary)
+function method_findings(cg, methods, judged, recorded, vocabulary, floor)
     callers = caller_counts(cg)
     findings = Finding[]
     for placed in judged
@@ -140,7 +203,7 @@ function method_findings(cg, methods, judged, recorded, vocabulary)
         line = placed[3]
         targets = Set{String}()
         add_method_targets!(targets, cg, caller, methods, recorded, vocabulary)
-        finding = sink_verdict(cg, home, caller.name, line, targets, callers)
+        finding = sink_verdict(cg, home, caller.name, line, targets, callers, floor, line)
         isnothing(finding) || push!(findings, finding)
     end
     findings
@@ -148,10 +211,10 @@ end
 
 # With a method graph, each method is judged on the methods its calls can land on.
 # A function with no method in the graph keeps the name-level verdict.
-function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, recorded, vocabulary)
+function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, recorded, vocabulary, floor::SinkFloor)
     judged = judged_methods(cg, methods, recorded)
-    named = check_file_sinkable(cg, sites, vocabulary)
-    per_method = method_findings(cg, methods, judged, recorded, vocabulary)
+    named = check_file_sinkable(cg, sites, vocabulary, floor)
+    per_method = method_findings(cg, methods, judged, recorded, vocabulary, floor)
     covered = covered_names(judged)
     kept = Finding[]
     for finding in named
@@ -163,7 +226,8 @@ function check_file_sinkable(cg::CallGraph, sites, methods::MethodGraph, recorde
     kept
 end
 
-check_file_sinkable(cg::CallGraph, sites, ::Nothing, _recorded, vocabulary) = check_file_sinkable(cg, sites, vocabulary)
+check_file_sinkable(cg::CallGraph, sites, ::Nothing, _recorded, vocabulary, floor::SinkFloor) =
+    check_file_sinkable(cg, sites, vocabulary, floor)
 
 # extract-candidate: the density view of sinkable - a file holding several such defs.
 const EXTRACT_DEFS_MIN = 3
