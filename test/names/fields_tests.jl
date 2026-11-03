@@ -69,6 +69,27 @@ end
     @test stale.symbol == "Closed.xs"
 end
 
+@testset "a struct's open field is found where the struct is written, though a later file adds a constructor" begin
+    later_constructor = load_package("LaterConstructor", """
+    include("held.jl")
+    include("build.jl")
+    """, [
+        "held.jl" => """
+        struct Held
+            parts::Vector{Any}
+        end
+        """,
+        "build.jl" => """
+        Held(count::Int) = Held(Any[nothing for _ in 1:count])
+        """,
+    ])
+    ctx = case_context(later_constructor)
+    found = ArchCheck.run(AbstractFields(), ctx)
+    finding = only(found)
+    @test finding.file == "src/held.jl"
+    @test finding.line == 1
+end
+
 @testset "a field read on another module's struct is a finding" begin
     ctx = Context(Nested)
     found = ArchCheck.run(ForeignFields(), ctx)

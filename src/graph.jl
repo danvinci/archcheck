@@ -853,12 +853,17 @@ function indexed_file(index::SourceIndex, path::AbstractString, line::Integer)
     found
 end
 
-# Where each def lives. One owner of a finding's location, so every check reports the same form.
+# Where each def lives. One owner of a finding's location, so every check reports the same form. A type lives where
+# its struct or abstract type is written, though a later file adds methods to it
 function def_sites(index::SourceIndex)
     sites = Dict{Tuple{Symbol,Symbol},Tuple{String,Int}}()
+    typed = Set{Tuple{Symbol,Symbol}}()
     for file in index.files
         for (name, line) in file.scan.line
-            sites[(file.mod, name)] = (file.path, line)
+            key = (file.mod, name)
+            key in typed && continue
+            sites[key] = (file.path, line)
+            name in file.scan.types && push!(typed, key)
         end
     end
     sites
