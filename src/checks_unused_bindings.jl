@@ -196,6 +196,19 @@ function is_written(reads::MacroReads, form, home, name::Symbol)
     EVERY_NAME in hygienic || name in hygienic
 end
 
+# A stub: a method whose whole body is one `throw` call. It declares the arguments a later body will read
+function is_stub_form(form)
+    is_method_form(form) || return false
+    body = method_body(form)
+    isnothing(body) && return false
+    statements = JS.kind(body) == K"block" ? child_nodes(body) : [body]
+    child_count(statements) == 1 || return false
+    statement = only(statements)
+    JS.kind(statement) == K"call" || return false
+    callee = callee_node(statement)
+    !isnothing(callee) && node_symbol(callee) === :throw
+end
+
 # The name a finding gives a binding: the nearest named method, macro or callable around it.
 function owner_name(form, fallback)
     current = form
@@ -243,6 +256,7 @@ function add_unused_findings!(findings, file::FileNode, reads_of, reads::MacroRe
         form = enclosing_form(binding.node)
         is_generated = binding.kind === :argument && is_generated_form(form)
         is_generated && continue
+        binding.kind === :argument && is_stub_form(form) && continue
         finding = unused_finding(file, binding, form)
         push!(findings, finding)
     end
@@ -296,12 +310,13 @@ function site_form(index::SourceIndex, method::Method, recorded::RecordedPaths)
 end
 
 # Each position a method leaves unread, read off its parsed form once; none for a method the parse holds no form
-# for, a `@generated` one, or a vararg tail.
+# for, a `@generated` one, a stub, or a vararg tail
 function unread_positions(method::Method, index::SourceIndex, recorded, reads_of, reads::MacroReads)
     unread = falses(Int(method.nargs) - 1)
     form = site_form(index, method, recorded)
     isnothing(form) && return unread
     is_generated_form(form) && return unread
+    is_stub_form(form) && return unread
     signature = first(child_nodes(form))
     parts = call_parts(signature)
     isnothing(parts) && return unread

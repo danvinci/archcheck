@@ -189,7 +189,7 @@ function add_allowance!(_modules, named, entry::Pair{Module,<:Tuple{Vararg{Symbo
 end
 """Runs in `CHECKS`. A closure assigns a captured local in more than one place, so lowering boxes it."""
 struct BoxedCaptures <: Check end
-"""Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two. A name a Base or Core macro call writes counts as read, and so does one any other macro's expansion holds, or every name when that expansion throws."""
+"""Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two. A name a Base or Core macro call writes counts as read, and so does one any other macro's expansion holds, or every name when that expansion throws. A stub, a method whose whole body is one `throw` call, declares its arguments and leaves none unread"""
 struct UnusedBindings <: Check end
 """Runs in `CHECKS`. A struct field's stored type leaves dispatch open. A container's own element types decide: a concrete element closes it whatever that element holds, so `Vector{Vector{Any}}` is closed. `allowed` lists the (repo-relative path, struct name, field name) triples that store an open type on purpose; a triple naming no open field is a stale allowance, an error as `CallerAllowlist`'s is"""
 struct AbstractFields{A<:NTuple{N,Tuple{String,Symbol,Symbol}} where N} <: Check

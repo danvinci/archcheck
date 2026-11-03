@@ -114,6 +114,21 @@ const UNUSED_REACH = load_package("UnusedReach", """
     @test ev(plain, :runs_at) == "call time"
 end
 
+const UNUSED_STUBS = load_package("UnusedStubs", """
+    planned(config; plan = 1) = throw(ArgumentError("planned: not built yet"))
+    function awaited(config, extra)
+        throw(ArgumentError("awaited: not built yet"))
+    end
+    checked(config, extra) = config > 0 ? config : throw(ArgumentError("negative"))
+    """)
+
+@testset "a stub whose whole body throws declares its arguments, and a body that throws on one path does not" begin
+    ctx = case_context(UNUSED_STUBS)
+    found = ArchCheck.run(UnusedBindings(), ctx)
+    rows = sort([(f.kind, f.symbol) for f in found])
+    @test rows == [(:ignored_parameter, "checked:2"), (:unused_argument, "checked:extra")]
+end
+
 @testset "a position every method leaves unread under one declared type is ignored, its macros expanded where the method is defined; a position whose type dispatches is not" begin
     ctx = case_context(UNUSED_REACH)
     found = ArchCheck.run(UnusedBindings(), ctx)
