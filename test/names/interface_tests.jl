@@ -400,6 +400,17 @@ end
     @test kept == Set(["Base.Docs.meta", "Core.Compiler", "Base.Compiler.widenconst"])
 end
 
+@testset "an allowed name of an outside module is no finding, and an allowed name nothing reads is a stale allowance" begin
+    ctx = case_context(PACKAGE_PATH)
+    foreign_path = joinpath("src", "bb", "foreign.jl")
+    check = ReachesInternal(allowed = (Random, Base => (:unwrap_unionall, :never_read)))
+    found = ArchCheck.run(check, ctx)
+    kept = Set(finding.symbol for finding in found if finding.file == foreign_path && finding.kind === :reaches_internal)
+    @test kept == Set(["Base.isType", "Core.Compiler", "Base.Docs.meta", "Base.Compiler.widenconst", "Base.@_inline_meta"])
+    stale = only(finding for finding in found if finding.kind === :stale_allowance)
+    @test stale.symbol == "Base.never_read"
+end
+
 @testset "a qualifier resolves from the module its code sits in, so two modules of one name stay apart" begin
     scripts = mktempdir()
     script = """

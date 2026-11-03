@@ -163,11 +163,30 @@ DeadCode(; public_is_entry::Bool = true) = DeadCode(public_is_entry)
 struct BlanketExports <: Check end
 """Runs in `CHECKS`. An exported name is undefined; a name a module only declares `public` is no export."""
 struct StaleExports <: Check end
-"""Runs in `CHECKS`. Code reads a name through a module that neither exports it nor declares it public, one of the package's modules or any other: a step of a qualified path, a qualified method or macro name, or a name a `using` or `import` clause binds, in source files and entry scripts alike. A name one of the package's own modules owns, an extension's included, is a `reaches_own_internal`; any other owner's is a `reaches_internal`. `allowed` names the outside modules whose internals the package reads on purpose"""
+"""Runs in `CHECKS`. Code reads a name through a module that neither exports it nor declares it public, one of the package's modules or any other: a step of a qualified path, a qualified method or macro name, or a name a `using` or `import` clause binds, in source files and entry scripts alike. A name one of the package's own modules owns, an extension's included, is a `reaches_own_internal`; any other owner's is a `reaches_internal`. `allowed` names the outside modules whose internals the package reads on purpose, each whole or as `module => (names...)`, and a name so allowed that nothing reads is a stale allowance, an error as `CallerAllowlist`'s is"""
 struct ReachesInternal{N} <: Check
-    allowed::NTuple{N,Module}   # outside modules whose internal names the package reads on purpose
+    allowed::NTuple{N,Module}                   # outside modules whose internal names the package reads on purpose
+    allowed_names::Vector{Tuple{Module,Symbol}} # each outside module's internal names the package reads on purpose
 end
-ReachesInternal(; allowed::Tuple{Vararg{Module}} = ()) = ReachesInternal(allowed)
+
+function ReachesInternal(; allowed::Tuple = ())
+    modules = Module[]
+    named = Tuple{Module,Symbol}[]
+    for entry in allowed
+        add_allowance!(modules, named, entry)
+    end
+    ReachesInternal(Tuple(modules), named)
+end
+
+add_allowance!(modules, _named, entry::Module) = push!(modules, entry)
+
+function add_allowance!(_modules, named, entry::Pair{Module,<:Tuple{Vararg{Symbol}}})
+    holder, names = entry
+    for name in names
+        push!(named, (holder, name))
+    end
+    named
+end
 """Runs in `CHECKS`. A closure assigns a captured local in more than one place, so lowering boxes it."""
 struct BoxedCaptures <: Check end
 """Runs in `CHECKS`. A method names an argument or assigns a local that no read resolves to, or every method of a function the package owns leaves one position unread under one declared type. A name starting with `_` is exempt from the first two. A name a Base or Core macro call writes counts as read, and so does one any other macro's expansion holds, or every name when that expansion throws."""
@@ -243,9 +262,11 @@ kinds(::StaleExports) = (:stale_export => :advisory,)
 # One compiled run for every length of `allowed`.
 function run(@nospecialize(check::ReachesInternal), ctx)
     allowed = collect(Module, check.allowed)
-    check_reaches_internal(ctx.index, ctx.mods, ctx.root; allowed)
+    found = check_reaches_internal(ctx.index, ctx.mods, ctx.root; allowed)
+    allowed_reaches(found, check.allowed_names, ctx.root)
 end
-kinds(::ReachesInternal) = (:reaches_internal => :advisory, :reaches_own_internal => :advisory)
+kinds(::ReachesInternal) = (:reaches_internal => :advisory, :reaches_own_internal => :advisory,
+                            :stale_allowance => :error)
 
 run(::BoxedCaptures, ctx) = check_boxed_captures(ctx.defined; recorded = ctx.recorded)
 kinds(::BoxedCaptures) = (:boxed_capture => :advisory,)

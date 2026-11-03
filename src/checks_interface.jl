@@ -191,6 +191,31 @@ function check_reaches_internal(index::SourceIndex, mods, package::Module; allow
     unique(found -> (found.file, found.line, found.symbol), findings)
 end
 
+# The reaches the package does not make on purpose, and a stale allowance for each allowed name no reach reads
+function allowed_reaches(found, allowed_names::Vector{Tuple{Module,Symbol}}, root::Module)
+    labels = Set{String}()
+    for (holder, name) in allowed_names
+        path = join(fullname(holder), ".")
+        push!(labels, "$path.$name")
+    end
+    kept = Finding[]
+    matched = Set{String}()
+    for finding in found
+        is_allowed = finding.kind === :reaches_internal && finding.symbol in labels
+        if is_allowed
+            push!(matched, finding.symbol)
+            continue
+        end
+        push!(kept, finding)
+    end
+    for label in sort!(collect(labels))
+        label in matched && continue
+        detail = label * " is allowed to be read and nothing reads it"
+        push!(kept, Finding(nameof(root), :stale_allowance, "", label, 0, detail))
+    end
+    kept
+end
+
 # The function a method adds to, when its signature names a singleton function.
 function extended_function(method::Method)
     function_type, _ = split_signature(method.sig)
